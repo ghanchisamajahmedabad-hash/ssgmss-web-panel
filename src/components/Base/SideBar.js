@@ -28,6 +28,8 @@ import {
 import { usePathname, useRouter } from 'next/navigation';
 import { useAuth } from './AuthProvider';
 import { sideBarStyle } from '@/constent/antdTheme';
+import { onSnapshot, collection, query, where, getCountFromServer } from 'firebase/firestore';
+import { db } from '../../../lib/firbase-client';
 
 const { Sider } = Layout;
 
@@ -36,6 +38,7 @@ const SideBar = ({ collapsed, setCollapsed }) => {
   const router = useRouter();
   const [openKeys, setOpenKeys] = useState([]);
   const { user } = useAuth();
+  const [pendingCount, setPendingCount] = useState(0);
 
   // Helper function to check if user has access to a page
   const hasAccess = (pageKey) => {
@@ -166,10 +169,18 @@ const SideBar = ({ collapsed, setCollapsed }) => {
         label: collapsed ? null : 'Members',
         module: 'members'
       },
-            {
+      {
         key: '/requests',
-        icon: <InboxOutlined   />,
-        label: collapsed ? null : 'Requests',
+        icon: <InboxOutlined />,
+        label: collapsed ? null : (
+          <div className='flex items-center gap-2'>
+            Requests {pendingCount > 0 && (
+              <span className='bg-pink-600 font-bold text-[14px] !text-white flex items-center justify-center rounded-full h-[24px] min-h-[24px] min-w-[24px] text-center'>
+                {pendingCount}
+              </span>
+            )}
+          </div> 
+        ),
         module: 'requests'
       },
       {
@@ -212,11 +223,12 @@ const SideBar = ({ collapsed, setCollapsed }) => {
             label: 'District',
             module: 'master'
           },
-              {
+          {
             key: '/master/city',
             label: 'City',
             module: 'master'
-          },    {
+          },    
+          {
             key: '/master/cast',
             label: 'Cast',
             module: 'master'
@@ -234,7 +246,7 @@ const SideBar = ({ collapsed, setCollapsed }) => {
         label: collapsed ? null : 'Rule & Policy',
         module: 'rulePolicy'
       },
-            {
+      {
         key: '/expenses',
         icon: <TagOutlined />,
         label: collapsed ? null : 'Expenses',
@@ -271,14 +283,13 @@ const SideBar = ({ collapsed, setCollapsed }) => {
                 label: 'Sessions',
                 module: 'settings'
               },
-       
             ],
           },
         ],
       },
       {
         key: '/trash',
-        icon: <DeleteOutlined  />,
+        icon: <DeleteOutlined />,
         label: collapsed ? null : 'Trash',
         module: 'trash'
       },
@@ -367,7 +378,6 @@ const SideBar = ({ collapsed, setCollapsed }) => {
         <Tooltip 
           title={item.label || getItemTitle(item.key)} 
           placement="right"
-          
         >
           <span>{item.icon}</span>
         </Tooltip>
@@ -386,8 +396,8 @@ const SideBar = ({ collapsed, setCollapsed }) => {
       '/members': 'Members',
       '/payments': 'Payments',
       '/master': 'Master',
-      '/trash':"Trash",
-      'requests':"Requests",
+      '/trash': "Trash",
+      '/requests': "Requests",
       '/rule-policy': 'Rule & Policy',
       '/settings': 'Settings',
       '/programs/members': 'Members',
@@ -471,17 +481,58 @@ const SideBar = ({ collapsed, setCollapsed }) => {
     }
   }, [pathname, collapsed, user]);
 
-  // Handle submenu open change
-  const handleOpenChange = (keys) => {
-    setOpenKeys(keys);
-  };
+
+
+  // Setup real-time listener for pending count
+  useEffect(() => {
+    if (!user) return;
+
+    let unsubscribe;
+
+    const setupListener = async () => {
+      const membersRef = collection(db, "members");
+      let q;
+      
+      // Create query based on user role
+      if (user.role === 'agent') {
+        q = query(
+          membersRef,
+          where("status", "==", "pending_approval"),
+          where("agentId", "==", user.uid),
+          where("delete_flag", "!=", true)
+        );
+      } else {
+        // For admin/superadmin, get all pending
+        q = query(
+          membersRef,
+          where("status", "==", "pending_approval"),
+          where("delete_flag", "!=", true)
+        );
+      }
+
+      // Set up real-time listener
+      unsubscribe = onSnapshot(q, (snapshot) => {
+        setPendingCount(snapshot.size);
+      }, (error) => {
+        console.error("Error in pending count listener:", error);
+      });
+    };
+
+    setupListener();
+
+    // Cleanup listener on unmount
+    return () => {
+      if (unsubscribe) {
+        unsubscribe();
+      }
+    };
+  }, [user]); // Re-run when user changes
 
   // Get filtered and wrapped menu items
   const menuItems = useMemo(() => {
     const filteredItems = getFilteredMenuItems();
-    console.log('Filtered Menu Items:', filteredItems); // Debug log
     return getWrappedMenuItems(filteredItems);
-  }, [collapsed, user]);
+  }, [collapsed, user, pendingCount]); // Add pendingCount as dependency
 
   // Show loading state if user data is not available
   if (!user) {
@@ -527,11 +578,9 @@ const SideBar = ({ collapsed, setCollapsed }) => {
       </Sider>
     );
   }
-
-  // Debug: Check what pages user has access to
-  console.log('User permissions:', user.permissions);
-  console.log('User pages:', user.permissions?.pages);
-
+ const handleOpenChange = (keys) => {
+    setOpenKeys(keys);
+  };
   return (
     <Sider
       collapsible
@@ -560,9 +609,7 @@ const SideBar = ({ collapsed, setCollapsed }) => {
         <div className={`logo-container ${collapsed ? 'collapsed' : ''}`}>
           {!collapsed ? (
             <div className="logo-content">
-          
-              <img className=' w-[70px] h-[60px] object-fill bg-white p-1 rounded-md' src='/Images/logoT.png'/>
-             
+              <img className='w-[70px] h-[60px] object-fill bg-white p-1 rounded-md' src='/Images/logoT.png' alt="Logo"/>
               <div className="logo-text">
                 <h1 className="logo-title whitespace-nowrap">SSGMSSS TRUST</h1>
                 <p className="logo-subtitle">
@@ -584,8 +631,6 @@ const SideBar = ({ collapsed, setCollapsed }) => {
           )}
         </div>
       </div>
-
-
 
       {/* Menu */}
       <div className="menu-container">
@@ -609,23 +654,7 @@ const SideBar = ({ collapsed, setCollapsed }) => {
         )}
       </div>
 
-      {/* Footer Section */}
-      {/* {!collapsed && (
-        <div className="sidebar-footer">
-          <div className="footer-content" onClick={() => router.push('/settings/contact')}>
-            <div className="footer-icon">
-              <BellOutlined />
-            </div>
-            <div className="footer-text">
-              <p className="footer-title">Need Help?</p>
-              <p className="footer-subtitle">Contact Support</p>
-            </div>
-          </div>
-        </div>
-      )} */}
-
-      <style jsx global>{
-        sideBarStyle}</style>
+      <style jsx global>{sideBarStyle}</style>
     </Sider>
   );
 };

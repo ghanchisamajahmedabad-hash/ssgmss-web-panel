@@ -15,11 +15,11 @@ import {
   Badge,
   Popconfirm,
   Empty,
+  Drawer,
+  Descriptions,
   Row,
   Col,
-  Statistic,
-  Descriptions,
-  Drawer
+  Statistic
 } from 'antd'
 import {
   DeleteOutlined,
@@ -32,16 +32,27 @@ import {
   ExclamationCircleOutlined,
   EyeOutlined,
   ClearOutlined,
+  WarningOutlined,
   FileTextOutlined,
   PhoneOutlined,
   MailOutlined,
   EnvironmentOutlined,
   IdcardOutlined,
-  CalendarOutlined,
-  WarningOutlined
+  CalendarOutlined
 } from '@ant-design/icons'
-import { collection, query, where, getDocs, doc, updateDoc, deleteDoc, orderBy } from 'firebase/firestore'
-import { db } from '../../../lib/firbase-client'
+import { 
+  collection, 
+  query, 
+  where, 
+  getDocs, 
+  doc, 
+  updateDoc, 
+  deleteDoc, 
+  orderBy,
+  writeBatch 
+} from 'firebase/firestore'
+import { ref, deleteObject } from 'firebase/storage'
+import { db, storage } from '../../../lib/firbase-client'
 import { useAuth } from '@/components/Base/AuthProvider'
 import dayjs from 'dayjs'
 
@@ -180,6 +191,139 @@ const TrashManagementPage = () => {
     })
   }
 
+  // Extract storage paths from URLs
+  const extractStoragePathsFromURLs = (item, type) => {
+    const paths = []
+    
+    if (type === 'member') {
+      // Extract from photoURL
+      if (item.photoURL && item.photoURL.includes('firebasestorage.googleapis.com')) {
+        const match = item.photoURL.match(/members%2Fphotos%2F([^?]+)/)
+        if (match) {
+          paths.push(`members/photos/${decodeURIComponent(match[1])}`)
+        }
+      }
+      
+      // Extract from document URLs
+      if (item.documentFrontURL && item.documentFrontURL.includes('firebasestorage.googleapis.com')) {
+        const match = item.documentFrontURL.match(/members%2Fdocuments%2F([^?]+)/)
+        if (match) {
+          paths.push(`members/documents/${decodeURIComponent(match[1])}`)
+        }
+      }
+      
+      if (item.documentBackURL && item.documentBackURL.includes('firebasestorage.googleapis.com')) {
+        const match = item.documentBackURL.match(/members%2Fdocuments%2F([^?]+)/)
+        if (match) {
+          paths.push(`members/documents/${decodeURIComponent(match[1])}`)
+        }
+      }
+      
+      // Extract from guardian URLs
+      if (item.guardianPhotoURL && item.guardianPhotoURL.includes('firebasestorage.googleapis.com')) {
+        const match = item.guardianPhotoURL.match(/members%2Fguardian_photos%2F([^?]+)/)
+        if (match) {
+          paths.push(`members/guardian_photos/${decodeURIComponent(match[1])}`)
+        }
+      }
+      
+      if (item.guardianDocumentURL && item.guardianDocumentURL.includes('firebasestorage.googleapis.com')) {
+        const match = item.guardianDocumentURL.match(/members%2Fguardian_documents%2F([^?]+)/)
+        if (match) {
+          paths.push(`members/guardian_documents/${decodeURIComponent(match[1])}`)
+        }
+      }
+    } else if (type === 'agent') {
+      // Extract agent URLs
+      if (item.photoUrl && item.photoUrl.includes('firebasestorage.googleapis.com')) {
+        const match = item.photoUrl.match(/agents%2F([^?]+)/)
+        if (match) {
+          paths.push(`agents/${decodeURIComponent(match[1])}`)
+        }
+      }
+      
+      if (item.documentUrl && item.documentUrl.includes('firebasestorage.googleapis.com')) {
+        const match = item.documentUrl.match(/agents%2F([^?]+)/)
+        if (match) {
+          paths.push(`agents/${decodeURIComponent(match[1])}`)
+        }
+      }
+    }
+    
+    return [...new Set(paths)] // Remove duplicates
+  }
+
+  // Delete storage files
+  const deleteStorageFiles = async (item, type) => {
+    try {
+      // First check if we have storagePaths field
+      const storagePaths = item.storagePaths || {}
+      
+      // Get all possible file paths
+      let filePaths = []
+      
+      if (type === 'member') {
+        filePaths = [
+          storagePaths.photo,
+          storagePaths.documentFront,
+          storagePaths.documentBack,
+          storagePaths.guardianPhoto,
+          storagePaths.guardianDocument,
+          ...extractStoragePathsFromURLs(item, 'member')
+        ].filter(path => path && (path.startsWith('members/') || path.startsWith('agents/')))
+      } else if (type === 'agent') {
+        filePaths = [
+          storagePaths.photo,
+          storagePaths.document,
+          ...extractStoragePathsFromURLs(item, 'agent')
+        ].filter(path => path && (path.startsWith('members/') || path.startsWith('agents/')))
+      }
+      
+      // Remove duplicates
+      filePaths = [...new Set(filePaths)]
+      
+      // Delete each file
+      const deletePromises = filePaths.map(async (filePath) => {
+        try {
+          const fileRef = ref(storage, filePath)
+          await deleteObject(fileRef)
+          console.log(`✅ Deleted file: ${filePath}`)
+          return { success: true, path: filePath }
+        } catch (error) {
+          // File might not exist, ignore specific errors
+          if (error.code === 'storage/object-not-found') {
+            console.log(`ℹ️ File not found: ${filePath}`)
+            return { success: false, path: filePath, error: 'Not found' }
+          }
+          console.error(`❌ Error deleting file ${filePath}:`, error)
+          return { success: false, path: filePath, error: error.message }
+        }
+      })
+
+      const results = await Promise.all(deletePromises)
+      const successful = results.filter(r => r.success).length
+      const failed = results.filter(r => !r.success).length
+      
+      console.log(`Storage cleanup: ${successful} files deleted, ${failed} failed`)
+      
+      return {
+        success: failed === 0,
+        total: results.length,
+        deleted: successful,
+        failed: failed
+      }
+    } catch (error) {
+      console.error('Error in deleteStorageFiles:', error)
+      return {
+        success: false,
+        total: 0,
+        deleted: 0,
+        failed: 0,
+        error: error.message
+      }
+    }
+  }
+
   // Restore item
   const handleRestore = async (item, type) => {
     Modal.confirm({
@@ -211,7 +355,31 @@ const TrashManagementPage = () => {
     })
   }
 
-  // Permanent delete
+  // Delete related transactions
+  const deleteRelatedTransactions = async (id, type) => {
+    try {
+      const transactionsRef = collection(db, 'transactions')
+      const field = type === 'member' ? 'memberId' : 'agentId'
+      const q = query(transactionsRef, where(field, '==', id))
+      const querySnapshot = await getDocs(q)
+      
+      if (querySnapshot.size > 0) {
+        const batch = writeBatch(db)
+        querySnapshot.forEach((docSnap) => {
+          batch.delete(docSnap.ref)
+        })
+        await batch.commit()
+        console.log(`🗑️ Deleted ${querySnapshot.size} related transactions`)
+        return querySnapshot.size
+      }
+      return 0
+    } catch (error) {
+      console.error('Error deleting related transactions:', error)
+      throw error
+    }
+  }
+
+  // Permanent delete with storage cleanup
   const handlePermanentDelete = async (item, type) => {
     Modal.confirm({
       title: 'Permanent Delete',
@@ -219,12 +387,27 @@ const TrashManagementPage = () => {
       content: (
         <div>
           <p className="text-red-600 font-semibold mb-2">
-            This action is irreversible!
+            ⚠️ This action is irreversible!
           </p>
           <p>
             Are you sure you want to permanently delete this {type}? 
-            All associated data will be lost forever.
+            {type === 'member' && ' All associated photos, documents, and related transactions will also be deleted.'}
+            {type === 'agent' && ' All associated photos, documents, and related transactions will also be deleted.'}
           </p>
+          {type === 'member' && (
+            <div className="mt-2 p-2 bg-red-50 border border-red-200 rounded">
+              <p className="text-sm text-red-700">
+                <strong>Will delete:</strong>
+              </p>
+              <ul className="text-xs text-red-600 list-disc ml-4">
+                <li>Member profile</li>
+                <li>Profile photo</li>
+                <li>Identity documents</li>
+                <li>Guardian photos/documents</li>
+                <li>All related transactions</li>
+              </ul>
+            </div>
+          )}
         </div>
       ),
       okText: 'Yes, Delete Permanently',
@@ -232,30 +415,57 @@ const TrashManagementPage = () => {
       cancelText: 'Cancel',
       onOk: async () => {
         try {
-          const collectionName = type === 'member' ? 'members' : type === 'agent' ? 'agents' : 'transactions'
-          const docRef = doc(db, collectionName, item.id)
+          setLoading(true)
           
+          let storageResult = null
+          let transactionsDeleted = 0
+          
+          // Delete storage files for members and agents
+          if (type === 'member' || type === 'agent') {
+            storageResult = await deleteStorageFiles(item, type)
+            
+            if (!storageResult.success && storageResult.total > 0) {
+              message.warning(`Some files could not be deleted (${storageResult.failed}/${storageResult.total})`)
+            }
+            
+            // Delete related transactions
+            try {
+              transactionsDeleted = await deleteRelatedTransactions(item.id, type)
+            } catch (error) {
+              console.error('Failed to delete related transactions:', error)
+              // Continue with main deletion even if transactions fail
+            }
+          }
+          
+          // Delete from Firestore
+          const collectionName = type === 'member' ? 'members' : 
+                                type === 'agent' ? 'agents' : 
+                                'transactions'
+          const docRef = doc(db, collectionName, item.id)
           await deleteDoc(docRef)
           
-          message.success(`${type.charAt(0).toUpperCase() + type.slice(1)} permanently deleted!`)
+          // Show success message with details
+          let successMsg = `${type.charAt(0).toUpperCase() + type.slice(1)} permanently deleted!`
+          if (storageResult && storageResult.deleted > 0) {
+            successMsg += ` (${storageResult.deleted} files deleted from storage)`
+          }
+          if (transactionsDeleted > 0) {
+            successMsg += ` (${transactionsDeleted} related transactions deleted)`
+          }
+          
+          message.success(successMsg)
           fetchAllDeletedData()
         } catch (error) {
           console.error('Error deleting item:', error)
-          message.error('Failed to delete item permanently')
+          message.error(`Failed to delete ${type}: ${error.message}`)
+        } finally {
+          setLoading(false)
         }
       }
     })
   }
-
-  // View item details
-  const handleView = (item, type) => {
-    setSelectedItem(item)
-    setViewType(type)
-    setViewDrawerVisible(true)
-  }
-
   // Empty trash for specific type
-  const handleEmptyTrash = (type) => {
+  const handleEmptyTrash = async (type) => {
     const items = type === 'members' ? deletedMembers : 
                   type === 'agents' ? deletedAgents : 
                   deletedTransactions
@@ -271,9 +481,13 @@ const TrashManagementPage = () => {
       content: (
         <div>
           <p className="text-red-600 font-semibold mb-2">
-            This will permanently delete all {items.length} items!
+            ⚠️ This will permanently delete all {items.length} {type}!
           </p>
-          <p>This action cannot be undone. Are you sure?</p>
+          <p>
+            {type === 'members' && 'All associated photos, documents, and transactions will also be deleted.'}
+            {type === 'agents' && 'All associated photos, documents, and transactions will also be deleted.'}
+          </p>
+          <p className="mt-2 text-sm text-gray-600">This action cannot be undone. Are you sure?</p>
         </div>
       ),
       okText: 'Yes, Empty Trash',
@@ -282,26 +496,89 @@ const TrashManagementPage = () => {
       onOk: async () => {
         try {
           setLoading(true)
+          
+          // Delete storage files first (for members and agents)
+          if (type === 'members' || type === 'agents') {
+            let totalFilesDeleted = 0
+            let totalFilesFailed = 0
+            
+            for (const item of items) {
+              const result = await deleteStorageFiles(item, type.slice(0, -1)) // Remove 's' from type
+              totalFilesDeleted += result.deleted || 0
+              totalFilesFailed += result.failed || 0
+            }
+            
+            if (totalFilesFailed > 0) {
+              message.warning(`Some files could not be deleted (${totalFilesFailed} failed)`)
+            }
+            
+            if (totalFilesDeleted > 0) {
+              console.log(`🗑️ Deleted ${totalFilesDeleted} files from storage`)
+            }
+            
+            // Delete related transactions in batch
+            if (type === 'members') {
+              await deleteAllRelatedTransactions(items, 'memberId')
+            } else if (type === 'agents') {
+              await deleteAllRelatedTransactions(items, 'agentId')
+            }
+          }
+          
+          // Delete from Firestore in batch
           const collectionName = type === 'members' ? 'members' : 
                                 type === 'agents' ? 'agents' : 
                                 'transactions'
           
-          const deletePromises = items.map(item => 
-            deleteDoc(doc(db, collectionName, item.id))
-          )
+          const batch = writeBatch(db)
+          items.forEach(item => {
+            const docRef = doc(db, collectionName, item.id)
+            batch.delete(docRef)
+          })
           
-          await Promise.all(deletePromises)
+          await batch.commit()
           
-          message.success(`All ${type} permanently deleted!`)
+          message.success(`Successfully deleted all ${items.length} ${type}!`)
           fetchAllDeletedData()
         } catch (error) {
           console.error('Error emptying trash:', error)
-          message.error('Failed to empty trash')
+          message.error(`Failed to empty trash: ${error.message}`)
         } finally {
           setLoading(false)
         }
       }
     })
+  }
+
+  // Delete all related transactions for multiple items
+  const deleteAllRelatedTransactions = async (items, field) => {
+    try {
+      const itemIds = items.map(item => item.id)
+      const transactionsRef = collection(db, 'transactions')
+      const q = query(transactionsRef, where(field, 'in', itemIds))
+      const querySnapshot = await getDocs(q)
+      
+      if (querySnapshot.size > 0) {
+        const batch = writeBatch(db)
+        querySnapshot.forEach((docSnap) => {
+          batch.delete(docSnap.ref)
+        })
+        await batch.commit()
+        console.log(`🗑️ Deleted ${querySnapshot.size} related transactions`)
+        return querySnapshot.size
+      }
+      return 0
+    } catch (error) {
+      console.error('Error deleting all related transactions:', error)
+      // Don't throw, just log the error
+      return 0
+    }
+  }
+
+  // View item details
+  const handleView = (item, type) => {
+    setSelectedItem(item)
+    setViewType(type)
+    setViewDrawerVisible(true)
   }
 
   // Filter data based on search
@@ -319,7 +596,10 @@ const TrashManagementPage = () => {
         item.registrationNumber,
         item.transactionId,
         item.village,
-        item.city
+        item.city,
+        item.fatherName,
+        item.aadhaarNo,
+        item.aadharNo
       ]
       
       return searchableFields.some(field => 
@@ -393,7 +673,12 @@ const TrashManagementPage = () => {
           </Tooltip>
           <Popconfirm
             title="Delete Permanently"
-            description="This action cannot be undone!"
+            description={
+              <div className="max-w-xs">
+                <p className="text-red-600 font-semibold mb-1">This action cannot be undone!</p>
+                <p className="text-sm">All photos, documents, and related transactions will be deleted.</p>
+              </div>
+            }
             onConfirm={() => handlePermanentDelete(record, 'member')}
             okText="Delete"
             cancelText="Cancel"
@@ -478,7 +763,12 @@ const TrashManagementPage = () => {
           </Tooltip>
           <Popconfirm
             title="Delete Permanently"
-            description="This action cannot be undone!"
+            description={
+              <div className="max-w-xs">
+                <p className="text-red-600 font-semibold mb-1">This action cannot be undone!</p>
+                <p className="text-sm">All photos, documents, and related transactions will be deleted.</p>
+              </div>
+            }
             onConfirm={() => handlePermanentDelete(record, 'agent')}
             okText="Delete"
             cancelText="Cancel"
@@ -595,9 +885,9 @@ const TrashManagementPage = () => {
   ]
 
   return (
-    <div className="p-4 bg-gray-50 min-h-screen flex flex-col gap-2">
+    <div className="p-4 bg-gray-50 min-h-screen flex flex-col gap-4">
       {/* Header */}
-      <Card className=" shadow-sm">
+      <Card className="shadow-sm">
         <div className="flex justify-between items-center mb-4">
           <div>
             <h1 className="text-2xl font-bold flex items-center gap-2">
@@ -615,7 +905,49 @@ const TrashManagementPage = () => {
           </Button>
         </div>
 
-   
+        {/* Statistics */}
+        <Row gutter={16} className="mb-2">
+          <Col span={6}>
+            <Card className="bg-gradient-to-r from-blue-50 to-blue-100 border-0">
+              <Statistic
+                title="Total Items"
+                value={stats.totalItems}
+                prefix={<DeleteOutlined />}
+                valueStyle={{ color: '#3f51b5' }}
+              />
+            </Card>
+          </Col>
+          <Col span={6}>
+            <Card className="bg-gradient-to-r from-green-50 to-green-100 border-0">
+              <Statistic
+                title="Deleted Members"
+                value={stats.totalMembers}
+                prefix={<TeamOutlined />}
+                valueStyle={{ color: '#52c41a' }}
+              />
+            </Card>
+          </Col>
+          <Col span={6}>
+            <Card className="bg-gradient-to-r from-purple-50 to-purple-100 border-0">
+              <Statistic
+                title="Deleted Agents"
+                value={stats.totalAgents}
+                prefix={<UserOutlined />}
+                valueStyle={{ color: '#722ed1' }}
+              />
+            </Card>
+          </Col>
+          <Col span={6}>
+            <Card className="bg-gradient-to-r from-orange-50 to-orange-100 border-0">
+              <Statistic
+                title="Deleted Transactions"
+                value={stats.totalTransactions}
+                prefix={<DollarOutlined />}
+                valueStyle={{ color: '#fa8c16' }}
+              />
+            </Card>
+          </Col>
+        </Row>
       </Card>
 
       {/* Main Content */}
@@ -626,7 +958,7 @@ const TrashManagementPage = () => {
           tabBarExtraContent={
             <Space>
               <Search
-                placeholder="Search..."
+                placeholder="Search by name, phone, ID, village..."
                 prefix={<SearchOutlined />}
                 style={{ width: 300 }}
                 onChange={(e) => setSearchText(e.target.value)}
@@ -636,6 +968,11 @@ const TrashManagementPage = () => {
                 danger
                 icon={<ClearOutlined />}
                 onClick={() => handleEmptyTrash(activeTab)}
+                disabled={(
+                  (activeTab === 'members' && deletedMembers.length === 0) ||
+                  (activeTab === 'agents' && deletedAgents.length === 0) ||
+                  (activeTab === 'transactions' && deletedTransactions.length === 0)
+                )}
               >
                 Empty Trash
               </Button>
@@ -665,6 +1002,7 @@ const TrashManagementPage = () => {
               pagination={{
                 pageSize: 10,
                 showSizeChanger: true,
+                pageSizeOptions: ['10', '20', '50', '100'],
                 showTotal: (total) => `Total ${total} deleted members`
               }}
               scroll={{ x: 1000 }}
@@ -702,6 +1040,7 @@ const TrashManagementPage = () => {
               pagination={{
                 pageSize: 10,
                 showSizeChanger: true,
+                pageSizeOptions: ['10', '20', '50', '100'],
                 showTotal: (total) => `Total ${total} deleted agents`
               }}
               scroll={{ x: 1000 }}
@@ -739,6 +1078,7 @@ const TrashManagementPage = () => {
               pagination={{
                 pageSize: 10,
                 showSizeChanger: true,
+                pageSizeOptions: ['10', '20', '50', '100'],
                 showTotal: (total) => `Total ${total} deleted transactions`
               }}
               scroll={{ x: 1000 }}
@@ -762,6 +1102,31 @@ const TrashManagementPage = () => {
         width={600}
         open={viewDrawerVisible}
         onClose={() => setViewDrawerVisible(false)}
+        footer={
+          <Space className="w-full justify-end">
+            <Button onClick={() => setViewDrawerVisible(false)}>Close</Button>
+            <Button
+              type="primary"
+              icon={<RollbackOutlined />}
+              onClick={() => {
+                handleRestore(selectedItem, viewType)
+                setViewDrawerVisible(false)
+              }}
+            >
+              Restore
+            </Button>
+            <Button
+              danger
+              icon={<DeleteOutlined />}
+              onClick={() => {
+                handlePermanentDelete(selectedItem, viewType)
+                setViewDrawerVisible(false)
+              }}
+            >
+              Delete Permanently
+            </Button>
+          </Space>
+        }
       >
         {selectedItem && (
           <div className="space-y-4">
@@ -783,16 +1148,75 @@ const TrashManagementPage = () => {
                 </Card>
 
                 <Descriptions title="Member Information" bordered column={1}>
-                  <Descriptions.Item label="Father Name">{selectedItem.fatherName}</Descriptions.Item>
-                  <Descriptions.Item label="Phone">{selectedItem.phone}</Descriptions.Item>
-                  <Descriptions.Item label="Aadhaar">{selectedItem.aadhaarNo}</Descriptions.Item>
-                  <Descriptions.Item label="Village">{selectedItem.village}</Descriptions.Item>
-                  <Descriptions.Item label="City">{selectedItem.city}</Descriptions.Item>
-                  <Descriptions.Item label="Join Date">{selectedItem.dateJoin}</Descriptions.Item>
+                  <Descriptions.Item label="Father Name">{selectedItem.fatherName || 'N/A'}</Descriptions.Item>
+                  <Descriptions.Item label="Phone">
+                    <div className="flex items-center gap-1">
+                      <PhoneOutlined />
+                      {selectedItem.phone || 'N/A'}
+                    </div>
+                  </Descriptions.Item>
+                  <Descriptions.Item label="Aadhaar">
+                    <div className="flex items-center gap-1">
+                      <IdcardOutlined />
+                      {selectedItem.aadhaarNo || 'N/A'}
+                    </div>
+                  </Descriptions.Item>
+                  <Descriptions.Item label="Village/City">
+                    <div className="flex items-center gap-1">
+                      <EnvironmentOutlined />
+                      {selectedItem.village}, {selectedItem.city}
+                    </div>
+                  </Descriptions.Item>
+                  <Descriptions.Item label="Join Date">
+                    <div className="flex items-center gap-1">
+                      <CalendarOutlined />
+                      {selectedItem.dateJoin || 'N/A'}
+                    </div>
+                  </Descriptions.Item>
                   <Descriptions.Item label="Deleted On">
                     {selectedItem.deleted_at ? dayjs(selectedItem.deleted_at).format('DD/MM/YYYY HH:mm') : 'N/A'}
                   </Descriptions.Item>
+                  {selectedItem.deleted_by && (
+                    <Descriptions.Item label="Deleted By">
+                      User ID: {selectedItem.deleted_by}
+                    </Descriptions.Item>
+                  )}
                 </Descriptions>
+
+                {/* File Information */}
+                <Card title="Files" size="small">
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2">
+                      <FileTextOutlined />
+                      <span>Profile Photo: </span>
+                      {selectedItem.photoURL ? (
+                        <Tag color="green">Available</Tag>
+                      ) : (
+                        <Tag color="gray">Not available</Tag>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <FileTextOutlined />
+                      <span>Documents: </span>
+                      {selectedItem.documentFrontURL ? (
+                        <Tag color="green">Available</Tag>
+                      ) : (
+                        <Tag color="gray">Not available</Tag>
+                      )}
+                    </div>
+                    {selectedItem.guardian && (
+                      <div className="flex items-center gap-2">
+                        <FileTextOutlined />
+                        <span>Guardian: {selectedItem.guardian}</span>
+                        {selectedItem.guardianPhotoURL ? (
+                          <Tag color="green">Photo available</Tag>
+                        ) : (
+                          <Tag color="gray">No photo</Tag>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </Card>
               </>
             )}
 
@@ -814,16 +1238,35 @@ const TrashManagementPage = () => {
                 </Card>
 
                 <Descriptions title="Agent Information" bordered column={1}>
-                  <Descriptions.Item label="Father Name">{selectedItem.fatherName}</Descriptions.Item>
-                  <Descriptions.Item label="Phone 1">{selectedItem.phone1}</Descriptions.Item>
-                  <Descriptions.Item label="Phone 2">{selectedItem.phone2 || 'N/A'}</Descriptions.Item>
-                  <Descriptions.Item label="Aadhar">{selectedItem.aadharNo}</Descriptions.Item>
-                  <Descriptions.Item label="State">{selectedItem.state}</Descriptions.Item>
-                  <Descriptions.Item label="District">{selectedItem.district}</Descriptions.Item>
-                  <Descriptions.Item label="City">{selectedItem.city}</Descriptions.Item>
+                  <Descriptions.Item label="Father Name">{selectedItem.fatherName || 'N/A'}</Descriptions.Item>
+                  <Descriptions.Item label="Phone">
+                    <div className="flex items-center gap-1">
+                      <PhoneOutlined />
+                      {selectedItem.phone1 || 'N/A'}
+                      {selectedItem.phone2 && ` / ${selectedItem.phone2}`}
+                    </div>
+                  </Descriptions.Item>
+                  <Descriptions.Item label="Email">
+                    <div className="flex items-center gap-1">
+                      <MailOutlined />
+                      {selectedItem.email || 'N/A'}
+                    </div>
+                  </Descriptions.Item>
+                  <Descriptions.Item label="Aadhar">{selectedItem.aadharNo || 'N/A'}</Descriptions.Item>
+                  <Descriptions.Item label="Location">
+                    <div className="flex items-center gap-1">
+                      <EnvironmentOutlined />
+                      {selectedItem.city}, {selectedItem.district}, {selectedItem.state}
+                    </div>
+                  </Descriptions.Item>
                   <Descriptions.Item label="Deleted On">
                     {selectedItem.deleted_at ? dayjs(selectedItem.deleted_at).format('DD/MM/YYYY HH:mm') : 'N/A'}
                   </Descriptions.Item>
+                  {selectedItem.deleted_by && (
+                    <Descriptions.Item label="Deleted By">
+                      User ID: {selectedItem.deleted_by}
+                    </Descriptions.Item>
+                  )}
                 </Descriptions>
               </>
             )}
@@ -844,41 +1287,21 @@ const TrashManagementPage = () => {
                     <span className="text-lg font-semibold">₹{selectedItem.amount?.toLocaleString()}</span>
                   </Descriptions.Item>
                   <Descriptions.Item label="Description">{selectedItem.description}</Descriptions.Item>
-                  <Descriptions.Item label="Payment Method">{selectedItem.paymentMethod}</Descriptions.Item>
+                  <Descriptions.Item label="Payment Method">{selectedItem.paymentMethod || 'N/A'}</Descriptions.Item>
                   <Descriptions.Item label="Created On">
                     {selectedItem.created_at ? dayjs(selectedItem.created_at).format('DD/MM/YYYY HH:mm') : 'N/A'}
                   </Descriptions.Item>
                   <Descriptions.Item label="Deleted On">
                     {selectedItem.deleted_at ? dayjs(selectedItem.deleted_at).format('DD/MM/YYYY HH:mm') : 'N/A'}
                   </Descriptions.Item>
+                  {selectedItem.deleted_by && (
+                    <Descriptions.Item label="Deleted By">
+                      User ID: {selectedItem.deleted_by}
+                    </Descriptions.Item>
+                  )}
                 </Descriptions>
               </>
             )}
-
-            <div className="flex gap-2 mt-6">
-              <Button
-                type="primary"
-                icon={<RollbackOutlined />}
-                onClick={() => {
-                  handleRestore(selectedItem, viewType)
-                  setViewDrawerVisible(false)
-                }}
-                block
-              >
-                Restore
-              </Button>
-              <Button
-                danger
-                icon={<DeleteOutlined />}
-                onClick={() => {
-                  handlePermanentDelete(selectedItem, viewType)
-                  setViewDrawerVisible(false)
-                }}
-                block
-              >
-                Delete Permanently
-              </Button>
-            </div>
           </div>
         )}
       </Drawer>

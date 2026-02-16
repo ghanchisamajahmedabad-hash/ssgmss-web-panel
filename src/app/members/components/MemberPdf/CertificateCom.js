@@ -252,6 +252,7 @@ const styles = StyleSheet.create({
     color: '#D3292F',
     fontWeight: 'bold',
     flex: 1,
+    textTransform: 'uppercase',
   },
   
   detailValueNormal: {
@@ -259,6 +260,7 @@ const styles = StyleSheet.create({
     color: '#000',
     fontWeight: 'normal',
     flex: 1,
+    textTransform: 'uppercase',
   },
   
   // Photo Section - Right Side (Only Photo)
@@ -457,7 +459,7 @@ const CertificateCom = ({ data }) => {
           <View style={styles.headerSection}>
             <View style={styles.imageBox}>
               <Image
-                src="/Images/logoT.png"
+                src="/Images/logoT.png" 
                 style={styles.logoImage}
               />
               <Text style={styles.imageText}>SINCE: 2024</Text>
@@ -659,7 +661,9 @@ const CertificateCom = ({ data }) => {
             <View style={styles.footerTop}>
               <View style={styles.founderSection}>
                 <Text style={styles.founderLabel}>कार्यकर्ता</Text>
-                <Text style={styles.founderName}>voraramji parmar</Text>
+                <Text style={styles.founderName}>{data?.agentName || ''}</Text>
+                {/* <Text style={styles.founderName}>{data?.agentPhone || ''}</Text> */}
+
               </View>
 
               <View style={styles.centerFooter}>

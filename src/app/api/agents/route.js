@@ -2,6 +2,7 @@
 import { NextResponse } from "next/server";
 import admin from "../db/firebaseAdmin";
 import { checkRole, verifyToken } from "../../../../middleware/authMiddleware";
+import { sendEmailFun } from "../utils/emailSender";
 
 const db = admin.firestore();
 const auth = admin.auth();
@@ -378,16 +379,259 @@ export async function POST(req) {
       // Save to Firestore
       await agentRef.set(agentData);
 
+      // Send email to agent if requested
+      let emailResult = null;
+      if (sendEmail) {
+        const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000';
+        const loginUrl = `${siteUrl}/login`;
+        const supportEmail = process.env.SUPPORT_EMAIL || 'support@ssgmsss.com';
+        
+        const emailContent = `
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Agent Account Created - SSGMSSS</title>
+            <style>
+              body {
+                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                line-height: 1.6;
+                color: #333;
+                max-width: 600px;
+                margin: 0 auto;
+                padding: 20px;
+                background-color: #f9f9f9;
+              }
+              .container {
+                background-color: white;
+                border-radius: 10px;
+                overflow: hidden;
+                box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+              }
+              .header {
+                background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
+                padding: 40px 30px;
+                text-align: center;
+                color: white;
+              }
+              .header h1 {
+                margin: 0;
+                font-size: 28px;
+                font-weight: 600;
+              }
+              .header p {
+                margin: 10px 0 0;
+                opacity: 0.9;
+                font-size: 16px;
+              }
+              .content {
+                padding: 40px 30px;
+              }
+              .welcome-text {
+                font-size: 18px;
+                margin-bottom: 30px;
+                color: #444;
+              }
+              .credentials-box {
+                background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%);
+                border: 1px solid #bae6fd;
+                border-radius: 10px;
+                padding: 25px;
+                margin: 25px 0;
+              }
+              .credentials-box h3 {
+                margin-top: 0;
+                color: #0369a1;
+                font-size: 20px;
+                border-bottom: 2px solid #bae6fd;
+                padding-bottom: 10px;
+              }
+              .credential-item {
+                display: flex;
+                margin: 15px 0;
+                align-items: center;
+              }
+              .credential-label {
+                font-weight: 600;
+                color: #0c4a6e;
+                width: 120px;
+                min-width: 120px;
+              }
+              .credential-value {
+                background: white;
+                padding: 10px 15px;
+                border-radius: 6px;
+                border: 1px solid #cbd5e1;
+                flex-grow: 1;
+                font-family: monospace;
+                color: #1e293b;
+              }
+              .highlight {
+                background-color: #fff7ed;
+                border: 1px solid #fed7aa;
+                padding: 15px;
+                border-radius: 8px;
+                margin: 20px 0;
+                color: #9a3412;
+              }
+              .highlight strong {
+                color: #ea580c;
+              }
+              .login-btn {
+                display: inline-block;
+                background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
+                color: white;
+                text-decoration: none;
+                padding: 15px 30px;
+                border-radius: 8px;
+                font-weight: 600;
+                font-size: 16px;
+                margin: 20px 0;
+                text-align: center;
+                transition: transform 0.2s;
+              }
+              .login-btn:hover {
+                transform: translateY(-2px);
+              }
+              .instructions {
+                background-color: #f8fafc;
+                border-left: 4px solid #4f46e5;
+                padding: 20px;
+                margin: 25px 0;
+                border-radius: 0 8px 8px 0;
+              }
+              .instructions h4 {
+                margin-top: 0;
+                color: #4f46e5;
+              }
+              .instructions ul {
+                padding-left: 20px;
+              }
+              .instructions li {
+                margin: 8px 0;
+              }
+              .support {
+                text-align: center;
+                margin-top: 30px;
+                padding-top: 20px;
+                border-top: 1px solid #e2e8f0;
+                color: #64748b;
+                font-size: 14px;
+              }
+              .footer {
+                text-align: center;
+                padding: 20px;
+                background-color: #f1f5f9;
+                color: #64748b;
+                font-size: 12px;
+              }
+              @media (max-width: 600px) {
+                .content {
+                  padding: 20px 15px;
+                }
+                .credential-item {
+                  flex-direction: column;
+                  align-items: flex-start;
+                }
+                .credential-label {
+                  width: 100%;
+                  margin-bottom: 5px;
+                }
+              }
+            </style>
+          </head>
+          <body>
+            <div class="container">
+              <div class="header">
+                <h1>Agent Account Created</h1>
+                <p>SSGMSSS - Sports & Social Welfare Management System</p>
+              </div>
+              
+              <div class="content">
+                <div class="welcome-text">
+                  Hello <strong>${name}</strong>,<br>
+                  Your agent account has been successfully created in the SSGMSSS portal.
+                </div>
+                
+                <div class="credentials-box">
+                  <h3>Your Login Credentials</h3>
+                  
+                  <div class="credential-item">
+                    <div class="credential-label">Email:</div>
+                    <div class="credential-value">${email}</div>
+                  </div>
+                  
+                  <div class="credential-item">
+                    <div class="credential-label">Password:</div>
+                    <div class="credential-value">${agentPassword}</div>
+                  </div>
+                  
+                  <div class="credential-item">
+                    <div class="credential-label">Login URL:</div>
+                    <div class="credential-value">${loginUrl}</div>
+                  </div>
+                </div>
+                
+                <div class="highlight">
+                  <strong>Important:</strong> Please change your password immediately after first login for security.
+                </div>
+                
+                <center>
+                  <a href="${loginUrl}" class="login-btn" style="color: white;">
+                    Login to Agent Portal
+                  </a>
+                </center>
+                
+                <div class="instructions">
+                  <h4>Getting Started Guide:</h4>
+                  <ul>
+                    <li>Use the credentials above to login to the agent portal</li>
+                    <li>Complete your profile setup after login</li>
+                    <li>Explore the dashboard to understand features</li>
+                    <li>Start registering members in your assigned programs</li>
+                    <li>Track member registrations and payments</li>
+                    <li>Generate reports for your activities</li>
+                  </ul>
+                </div>
+                
+                <div class="support">
+                  <p>Need help? Contact our support team at <a href="mailto:${supportEmail}">${supportEmail}</a></p>
+                  <p>This is an automated email. Please do not reply directly to this message.</p>
+                </div>
+              </div>
+              
+              <div class="footer">
+                <p>&copy; ${new Date().getFullYear()} SSGMSSS. All rights reserved.</p>
+                <p>This email was sent to ${email}</p>
+              </div>
+            </div>
+          </body>
+          </html>
+        `;
 
+        emailResult = await sendEmailFun({
+          to: email,
+          subject: 'Your Agent Account Has Been Created - SSGMSSS',
+          html: emailContent,
+          text: `Hello ${name},\n\nYour agent account has been created.\n\nEmail: ${email}\nPassword: ${agentPassword}\nLogin URL: ${loginUrl}\n\nPlease change your password after first login.\n\nFor support, contact: ${supportEmail}`
+        });
 
-      return NextResponse.json({
+        console.log('📧 Email send result:', emailResult);
+      }
+
+      const responseData = {
         success: true,
         message: "Agent created successfully",
         data: {
           ...agentData,
-          tempPassword: !password ? agentPassword : undefined
+          tempPassword: !password ? agentPassword : undefined,
+          emailSent: sendEmail ? (emailResult?.success || false) : null,
+          emailMessage: sendEmail ? (emailResult?.message || emailResult?.error) : null
         }
-      }, { status: 201 });
+      };
+
+      return NextResponse.json(responseData, { status: 201 });
 
     } catch (error) {
       console.error("POST agents error:", error);

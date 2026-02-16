@@ -206,7 +206,6 @@ const fetchMemberData = async () => {
         fatherName: data.fatherName,
         surname: data.surname,
         caste: data.casteId,
-        religion: data.religion,
         phone: data.phone,
         phoneAlt: data.phoneAlt || '',
         bobDate: dob, // This is the form field name
@@ -525,7 +524,6 @@ const recordPaymentTransaction = async (
         surname: values.surname,
         caste: selectedCasteName,
         casteId: values.caste,
-        religion: values.religion,
         phone: values.phone,
         phoneAlt: values.phoneAlt || '',
         dateJoin: joinDate.format('DD-MM-YYYY'),
@@ -609,23 +607,7 @@ const recordPaymentTransaction = async (
       const memberRef = doc(db, 'members', memberId)
       await updateDoc(memberRef, updateData)
 
-      // Record additional payment if any
- // Record NEW transaction if payment changed
-    if (hasPaymentChange && joinFeesDone) {
-      await recordPaymentTransaction(
-        memberId,
-        values.name || memberData?.displayName || '',
-        memberData?.registrationNumber || '',
-        paymentDifference,
-        currentPaidAmount,
-        totalPendingAmount,
-        paymentMode,
-        values.joinFeesTxtId,
-        values.transactionDate || dayjs(),
-        values.paymentNotes || 'Payment updated via member edit',
-        currentUser?.uid
-      )
-    }
+
 
       // Update member programs
       await updateMemberPrograms(memberId, selectedPrograms, programPayments)
@@ -919,7 +901,7 @@ const recordPaymentTransaction = async (
               setSelectedAgent={setSelectedAgent}
             />
 
-           <FeesForm 
+           {/* <FeesForm 
   joinFeesDone={joinFeesDone}
   handleJoinFeesDoneChange={handleJoinFeesDoneChange}
   paymentMode={paymentMode}
@@ -935,7 +917,7 @@ const recordPaymentTransaction = async (
   registrationNumber={memberData?.registrationNumber || ''}
   memberName={memberData?.displayName || ''}
   currentUser={currentUser}
-/>
+/> */}
 
             <PhotoUploads 
               memberPhoto={memberPhoto}

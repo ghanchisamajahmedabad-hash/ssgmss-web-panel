@@ -12,7 +12,7 @@ const AddedByForm = ({
     ?.filter(agent => !agent.delete_flag && agent.active_flag)
     ?.map((item) => ({
       label: `${item.name} - ${item.phone1}`,
-      value: item.id
+      value: item.uid 
     })) || []
 
   return (

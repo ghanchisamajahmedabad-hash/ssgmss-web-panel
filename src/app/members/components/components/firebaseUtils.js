@@ -4,7 +4,7 @@ import {
 } from 'firebase/firestore'
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage'
 import dayjs from 'dayjs'
-import { db, storage } from '../../../../../lib/firbase-client'
+import { auth, db, storage } from '../../../../../lib/firbase-client'
 import { message } from 'antd'
 
 // File upload utility
@@ -92,30 +92,33 @@ export const uploadAllFiles = async (files) => {
 // Generate registration number
 export const generateRegistrationNumber = async () => {
   try {
-    const year = dayjs().format('YYYY')
-    const month = dayjs().format('MM')
-    const prefix = 'MEM'
-    
-    // Count members for current month
-    const startDate = `01-${month}-${year}`
-    const endDate = `31-${month}-${year}`
-    
+    const prefix = 'MEM';
+
+    const now = dayjs();
+    const year = now.format('YY');  // 26
+    const month = now.format('MM'); // 01
+
+    // Query only active members
     const q = query(
       collection(db, 'members'),
-      where('dateJoin', '>=', startDate),
-      where('dateJoin', '<=', endDate)
-    )
-    
-    const snapshot = await getDocs(q)
-    const count = snapshot.size + 1
-    
-    return `${prefix}${year}${month}${count.toString().padStart(4, '0')}`
+      where('status', '==', 'active'),
+      where('active_flag', '==', true)
+    );
+
+    const snapshot = await getDocs(q);
+    const count = snapshot.size + 1;
+
+    const paddedCount = count.toString().padStart(4, '0');
+    // Final format: MEM00052601
+    return `${prefix}${paddedCount}${year}${month}`;
+
   } catch (error) {
-    console.error('Error generating registration number:', error)
-    // Fallback with timestamp
-    return `MEM${dayjs().format('YYYYMMDDHHmmss')}`
+    console.error('Error generating registration number:', error);
+
+    // Fallback with full timestamp (safe)
+    return `MEM${dayjs().format('YYYYMMDDHHmmss')}`;
   }
-}
+};
 
 // Create search index using your function
 export function createSearchIndex(data) {
@@ -255,7 +258,35 @@ const createCompoundSearchStrings = (memberData) => {
   
   return compounds
 }
+export const memberAccoiuntCreate=async(memberData)=>{
+ 
+  const currentUser=auth.currentUser
+try {
+   fetch('/api/members',{
+    method:'POST',
+    headers:{
+      'Content-Type':'application/json',
+      'Accept':'application/json',
+      'authorization':`Bearer ${await currentUser.getIdToken()}`
+    },
+    body:JSON.stringify({
+      isOnlyAccountCreate:false,
+      memberData:memberData,
+      memberId:memberData.id, agentId:memberData.agentId,
+      operation:"add"
+    })
+   }).then(res=>res.json()).then(data=>{
+    console.log(data)
+   }).catch(error=>{
+    console.log(error)
+   }  
+    )
 
+
+} catch (error) {
+  console.log(error)
+}
+  }
 // SIMPLIFIED VERSION - Main handler for adding member
 export const handleSubmit = async (values, context, message) => {
   const {
@@ -296,42 +327,20 @@ export const handleSubmit = async (values, context, message) => {
       setLoading(false)
       return false
     }
-    const fileUrls = {}
+
     // Generate registration number first
     const registrationNumber = await generateRegistrationNumber()
     
-     const uploadFileIfNeeded = async (fileValue, folder, fileName) => {
-      // If it's a File object, upload it
-      if (fileValue instanceof File) {
-        return await uploadFile(fileValue, folder, fileName)
-      }
-      // If it's already a URL (existing file), return it
-      else if (typeof fileValue === 'string' && fileValue.startsWith('http')) {
-        return fileValue
-      }
-      // If it's null/undefined, return empty string
-      return ''
-    }
-    
-    // Upload all files in parallel
-    const uploadPromises = [
-      uploadFileIfNeeded(memberPhoto, 'members/photos', `${values.name || 'member'}_photo`),
-      uploadFileIfNeeded(guardianPhoto, 'members/guardian_photos', `${values.guardian || 'guardian'}_photo`),
-      uploadFileIfNeeded(memberDocFront, 'members/documents', `${values.name || 'member'}_doc_front`),
-      uploadFileIfNeeded(memberDocBack, 'members/documents', `${values.name || 'member'}_doc_back`),
-      uploadFileIfNeeded(guardianDoc, 'members/guardian_documents', `${values.guardian || 'guardian'}_doc`)
-    ]
-    
-    // Wait for all uploads to complete
-    const [photoURL, guardianPhotoURL, documentFrontURL, documentBackURL, guardianDocumentURL] = 
-      await Promise.allSettled(uploadPromises)
-    
-    // Extract values from promises
-    fileUrls.photoURL = photoURL.status === 'fulfilled' ? photoURL.value : ''
-    fileUrls.guardianPhotoURL = guardianPhotoURL.status === 'fulfilled' ? guardianPhotoURL.value : ''
-    fileUrls.documentFrontURL = documentFrontURL.status === 'fulfilled' ? documentFrontURL.value : ''
-    fileUrls.documentBackURL = documentBackURL.status === 'fulfilled' ? documentBackURL.value : ''
-    fileUrls.guardianDocumentURL = guardianDocumentURL.status === 'fulfilled' ? guardianDocumentURL.value : ''
+    // Upload files
+    const fileUrls = await uploadAllFiles({
+      memberPhoto,
+      guardianPhoto,
+      memberDocFront,
+      memberDocBack,
+      guardianDoc,
+      memberName: values.name,
+      guardianName: values.guardian
+    })
     
     // Calculate total join fees
     const totalJoinFees = programDetails.reduce((sum, p) => sum + (p.joinFees || 0), 0)
@@ -344,10 +353,67 @@ export const handleSubmit = async (values, context, message) => {
       return false
     }
     
-    // Calculate pending amount and payment percentage
-    const totalPendingAmount = Math.max(0, totalJoinFees - actualPaidAmount)
+    // Calculate program payments with PRIORITY ORDER allocation
+    const calculateProgramPayments = (programs, paidAmount) => {
+      const result = []
+      let remainingAmount = paidAmount
+      
+      // Sort programs if needed (by joinFees or programId)
+      const sortedPrograms = [...programs].sort((a, b) => {
+        // You can customize sorting logic here
+        // For example: sort by programId or joinFees
+        return (b.joinFees || 0) - (a.joinFees || 0) // Higher fees first
+      })
+      
+      for (const program of sortedPrograms) {
+        const programFees = program.joinFees || 0
+        
+        if (remainingAmount <= 0) {
+          // No money left for this program
+          result.push({
+            programId: program.programId,
+            programName: program.programName,
+            joinFees: programFees,
+            paidAmount: 0,
+            pendingAmount: programFees,
+            paymentPercentage: 0
+          })
+        } else if (remainingAmount >= programFees) {
+          // Full payment for this program
+          result.push({
+            programId: program.programId,
+            programName: program.programName,
+            joinFees: programFees,
+            paidAmount: programFees,
+            pendingAmount: 0,
+            paymentPercentage: 100
+          })
+          remainingAmount -= programFees
+        } else {
+          // Partial payment for this program
+          const programPaidAmount = remainingAmount
+          result.push({
+            programId: program.programId,
+            programName: program.programName,
+            joinFees: programFees,
+            paidAmount: programPaidAmount,
+            pendingAmount: programFees - programPaidAmount,
+            paymentPercentage: Math.round((programPaidAmount / programFees) * 100)
+          })
+          remainingAmount = 0
+        }
+      }
+      
+      return result
+    }
+    
+    // Calculate payments with priority order
+    const programPayments = calculateProgramPayments(programDetails, actualPaidAmount)
+    
+    // Calculate overall totals
+    const totalPendingAmount = programPayments.reduce((sum, p) => sum + p.pendingAmount, 0)
     const overallPaymentPercentage = totalJoinFees > 0 ? 
-      Math.round((actualPaidAmount / totalJoinFees) * 100) : 0
+      Math.round(((totalJoinFees - totalPendingAmount) / totalJoinFees) * 100) : 0
     
     // Get selected names
     const selectedStateName = states.find(s => s.id === values.state)?.name || ''
@@ -356,36 +422,26 @@ export const handleSubmit = async (values, context, message) => {
     const selectedCasteName = castes.find(c => c.id === values.caste)?.name || ''
     const selectedRelationName = relations.find(r => r.id === values.guardianRelation)?.name || ''
     
-    // Prepare member programs data with SIMPLE PROPORTIONAL DISTRIBUTION
-    const memberProgramsData = selectedPrograms.map(programId => {
-      const programDetail = programDetails.find(p => p.programId === programId)
-      const program = programs.find(p => p.id === programId)
-      
-      if (!programDetail || programDetail.error) return null
-      
-      // Simple proportional distribution
-      const programJoinFees = programDetail.joinFees || 0
-      const proportion = totalJoinFees > 0 ? programJoinFees / totalJoinFees : 0
-      const programPaidAmount = Math.round(actualPaidAmount * proportion)
-      const programPendingAmount = Math.max(0, programJoinFees - programPaidAmount)
-      const programPaymentPercentage = programJoinFees > 0 ? 
-        Math.round((programPaidAmount / programJoinFees) * 100) : 0
+    // Prepare member programs data
+    const memberProgramsData = programPayments.map(payment => {
+      const programDetail = programDetails.find(p => p.programId === payment.programId)
+      const program = programs.find(p => p.id === payment.programId)
       
       return {
-        programId,
-        programName: programDetail.programName,
-        ageGroupId: programDetail.ageGroupId,
-        ageGroupName: programDetail.ageGroupName,
-        joinFees: programJoinFees,
-        payAmount: programDetail.payAmount || 0,
-        paidAmount: programPaidAmount,
-        pendingAmount: programPendingAmount,
-        paymentPercentage: programPaymentPercentage,
-        paymentStatus: programPaymentPercentage === 100 ? 'paid' : 
-                      (programPaymentPercentage > 0 ? 'partial' : 'pending'),
+        programId: payment.programId,
+        programName: payment.programName,
+        ageGroupId: programDetail?.ageGroupId,
+        ageGroupName: programDetail?.ageGroupName,
+        joinFees: payment.joinFees,
+        payAmount: programDetail?.payAmount || 0,
+        paidAmount: payment.paidAmount,
+        pendingAmount: payment.pendingAmount,
+        paymentPercentage: payment.paymentPercentage,
+        paymentStatus: payment.paymentPercentage === 100 ? 'paid' : 
+                      (payment.paymentPercentage > 0 ? 'partial' : 'pending'),
         joinDate: joinDate.format('DD-MM-YYYY'),
-        periodStartDate: programDetail.periodStartDate,
-        periodEndDate: programDetail.periodEndDate,
+        periodStartDate: programDetail?.periodStartDate,
+        periodEndDate: programDetail?.periodEndDate,
         status: 'active',
         addedDate: serverTimestamp(),
         createdBy: currentUser?.uid,
@@ -393,13 +449,13 @@ export const handleSubmit = async (values, context, message) => {
         memberGroupName: program?.memberGroups?.[0]?.groupName,
         memberGroupCode: program?.memberGroups?.[0]?.code,
         
-        // Searchable fields for subcollection
-        search_programName: programDetail.programName?.toLowerCase() || '',
-        search_ageGroupName: programDetail.ageGroupName?.toLowerCase() || '',
-        search_paymentStatus: programPaymentPercentage === 100 ? 'paid' : 
-                            (programPaymentPercentage > 0 ? 'partial' : 'pending')
+        // Searchable fields
+        search_programName: payment.programName?.toLowerCase() || '',
+        search_ageGroupName: programDetail?.ageGroupName?.toLowerCase() || '',
+        search_paymentStatus: payment.paymentPercentage === 100 ? 'paid' : 
+                            (payment.paymentPercentage > 0 ? 'partial' : 'pending')
       }
-    }).filter(p => p !== null)
+    })
 
     // Count payment statistics
     const fullyPaidPrograms = memberProgramsData.filter(p => p.paymentPercentage === 100).length
@@ -420,18 +476,6 @@ export const handleSubmit = async (values, context, message) => {
       state: selectedStateName,
       caste: selectedCasteName,
       guardian: values.guardian
-    })
-
-    // Create compound search strings
-    const compoundSearchStrings = createCompoundSearchStrings({
-      displayName: values.name,
-      fatherName: values.fatherName,
-      surname: values.surname,
-      village: values.village,
-      city: selectedCityName,
-      district: selectedDistrictName,
-      phone: values.phone,
-      aadhaarNo: values.aadhaarNo
     })
 
     // Main member data
@@ -465,7 +509,7 @@ export const handleSubmit = async (values, context, message) => {
       addedBy: addedByRole,
       agentId: addedByRole === 'agent' ? selectedAgent : null,
       adminId: addedByRole === 'admin' ? currentUser?.uid : null,
-      
+      addedByName: addedByRole === 'agent' ? selectedAgent?.name : (currentUser?.displayName || 'Admin'),
       photoURL: fileUrls.photoURL,
       guardianPhotoURL: fileUrls.guardianPhotoURL,
       documentFrontURL: fileUrls.documentFrontURL,
@@ -476,8 +520,9 @@ export const handleSubmit = async (values, context, message) => {
       active_flag: true,
       isBlocked: false,
       marriage_flag: false,
+      payment_flag: false,
       role: 'member',
-      
+      status: 'active',
       // Financial summary
       payAmount: memberProgramsData.reduce((sum, p) => sum + (p.payAmount || 0), 0),
       joinFees: totalJoinFees,
@@ -499,27 +544,9 @@ export const handleSubmit = async (values, context, message) => {
       
       password: values.password,
       programIds: selectedPrograms,
-      
-      // SEARCHABLE INDEXING FIELDS
-      search_name: values.name?.toLowerCase() || '',
-      search_fatherName: values.fatherName?.toLowerCase() || '',
-      search_surname: values.surname?.toLowerCase() || '',
-      search_fullName: `${values.name} ${values.fatherName} ${values.surname}`.toLowerCase().trim(),
-      search_phone: values.phone || '',
-      search_phoneLast4: values.phone?.slice(-4) || '',
-      search_aadhaar: values.aadhaarNo || '',
-      search_aadhaarLast4: values.aadhaarNo?.slice(-4) || '',
-      search_registrationNumber: registrationNumber || '',
-      search_village: values.village?.toLowerCase() || '',
-      search_city: selectedCityName?.toLowerCase() || '',
-      search_district: selectedDistrictName?.toLowerCase() || '',
-      search_state: selectedStateName?.toLowerCase() || '',
-      search_caste: selectedCasteName?.toLowerCase() || '',
-      search_guardian: values.guardian?.toLowerCase() || '',
-      
+    
       // Array fields for OR queries
       search_keywords: searchIndex,
-      search_compounds: compoundSearchStrings,
       
       // Year and month for time-based queries
       joinYear: joinDate.year(),
@@ -543,7 +570,7 @@ export const handleSubmit = async (values, context, message) => {
     const memberRef = await addDoc(collection(db, 'members'), memberData)
     const memberId = memberRef.id
     
-    // Record join fee transaction if payment was made (SINGLE TRANSACTION)
+    // Record join fee transaction if payment was made
     if (joinFeesDone && actualPaidAmount > 0) {
       await recordJoinFeeTransaction({
         memberId: memberId,
@@ -571,36 +598,9 @@ export const handleSubmit = async (values, context, message) => {
       await addDoc(memberProgramsRef, program)
     }
 
-    // Create payment summary for analytics
-    const programPaymentSummary = {
-      memberId: memberId,
-      memberName: values.name,
-      registrationNumber: registrationNumber,
-      totalPrograms: selectedPrograms.length,
-      totalJoinFees: totalJoinFees,
-      totalPaidAmount: actualPaidAmount,
-      totalPendingAmount: totalPendingAmount,
-      paymentPercentage: overallPaymentPercentage,
-      paymentMode: joinFeesDone ? paymentMode : null,
-      programs: memberProgramsData.map(p => ({
-        programId: p.programId,
-        programName: p.programName,
-        joinFees: p.joinFees,
-        paidAmount: p.paidAmount,
-        pendingAmount: p.pendingAmount,
-        paymentPercentage: p.paymentPercentage
-      })),
-      createdAt: serverTimestamp(),
-      updated_at: serverTimestamp()
-    }
+    // Create account
+    await memberAccoiuntCreate({...memberData, id: memberId})
     
-    await addDoc(collection(db, 'memberPaymentSummaries'), programPaymentSummary)
-
-    // Update member with UID
-    await updateDoc(memberRef, {
-      uid: memberId
-    })
-
     message.success('Member added successfully!')
     setOpen(false)
     return true
@@ -613,7 +613,6 @@ export const handleSubmit = async (values, context, message) => {
     setLoading(false)
   }
 }
-
 // Function for adding additional payment in Edit mode
 export const addAdditionalPayment = async (memberId, paymentData, currentUser) => {
   try {

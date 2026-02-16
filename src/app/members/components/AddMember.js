@@ -4,7 +4,7 @@ import React, { useState, useEffect } from 'react'
 import { LoadingOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { collection, getDocs, query, where } from 'firebase/firestore'
-import { db } from '../../../../lib/firbase-client'
+import { auth, db } from '../../../../lib/firbase-client'
 import isBetween from 'dayjs/plugin/isBetween'
 
 // Import components
@@ -46,7 +46,6 @@ const AddMember = ({ open, setOpen, programs, agents, currentUser ,onSuccess}) =
   const [paymentMode, setPaymentMode] = useState('cash')
   const [paidAmount, setPaidAmount] = useState(0)
   const [age, setAge] = useState(null)
-
   // Fetch static data on component mount
   useEffect(() => {
     fetchStaticData()
@@ -383,7 +382,8 @@ const calculateProgramPayments = (programDetails, paidAmount) => {
       onClose={() => !loading && setOpen(false)}
       size={1000}
       footer={null}
-      maskClosable={!loading}
+      maskClosable={false}
+      destroyOnHidden
       closable={!loading}
     >
       <Spin spinning={loading} indicator={<LoadingOutlined style={{ fontSize: 24 }} spin />}>

@@ -2,6 +2,8 @@
 import { NextResponse } from "next/server";
 import admin from "../../db/firebaseAdmin";
 import { checkPermission, verifyToken,checkRole } from "../../../../../middleware/authMiddleware";
+import { sendEmailFun } from "../../utils/emailSender";
+import { userEmailSendTampalet } from "../../utils/emailTamplates";
 
 
 const db = admin.firestore();
@@ -335,7 +337,20 @@ export async function POST(req) {
     // Send welcome email if requested
     if (shouldSendEmail) {
       const loginUrl = `${process.env.NEXT_PUBLIC_APP_URL || req.headers.get('origin')}/login`;
-      await sendWelcomeEmail(email, name, userPassword, loginUrl);
+     const emailTamplate=userEmailSendTampalet({
+        to: email,
+        name,
+        password: userPassword,
+        loginUrl,
+        role,
+        createdBy: currentUser.name || currentUser.email,
+        supportEmail: process.env.SUPPORT_EMAIL || ''
+     })
+      sendEmailFun({
+         to:email,
+  subject:'Welcome to SSGMSSS - Your Admin Account Details',
+  html:emailTamplate,
+      })
     }
 
     // Don't return password in response

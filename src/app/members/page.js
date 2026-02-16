@@ -1,14 +1,17 @@
 "use client"
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useSelector } from 'react-redux'
 import AddMember from './components/AddMember'
 import { 
   Button, Card, Table, Space, Input, Tag, Avatar, 
   Badge, Tooltip, Row, Col, Statistic,
-   Menu, message, Popover,
-   Dropdown,
-   Modal,
-   Drawer
+  Menu, message, Popover,
+  Dropdown,
+  Modal,
+  Drawer,
+  Select,
+  Form,
+  DatePicker
 } from 'antd'
 import { 
   PlusOutlined, SearchOutlined, EyeOutlined, 
@@ -16,28 +19,67 @@ import {
   UserOutlined, PhoneOutlined, IdcardOutlined,
   CheckCircleOutlined, ClockCircleOutlined,
   FileTextOutlined, FilterOutlined, DownloadOutlined,
-  DollarOutlined, TeamOutlined, CalendarOutlined
+  DollarOutlined, TeamOutlined, CalendarOutlined,
+  ReloadOutlined, SettingOutlined, CloseOutlined,
+  UserAddOutlined, UserSwitchOutlined
 } from '@ant-design/icons'
 import { useAuth } from '@/components/Base/AuthProvider'
-import { collection, query, getDocs, doc, updateDoc, orderBy, where } from 'firebase/firestore'
 import dayjs from 'dayjs'
 import MemberDetailDrawer from './components/MemberDetailsView'
-import { db } from '../../../lib/firbase-client'
 import EditMember from './components/EditMember'
 import CertificateViewer from './components/MemberPdf/CertificateViewer'
+import { 
+  fetchMembersPaginated, 
+  getTotalMembersCount,
+  fetchAllMembersForSearch
+} from './components/firebase-helpers'
+import { auth, db } from '../../../lib/firbase-client'
+import { doc, updateDoc } from 'firebase/firestore'
+import { PDFDownloadLink } from '@react-pdf/renderer'
+import CertificateCom from './components/MemberPdf/CertificateCom'
 
 const { Search } = Input
+const { Option } = Select
 
 const Page = () => {
   const [openAddMember, setOpenAddMember] = useState(false)
-   const [openEditMember, setOpenEditMember] = useState(false) // Add this state
-  const [editMemberId, setEditMemberId] = useState(null) // Add this state
-  const [searchText, setSearchText] = useState('')
+  const [openEditMember, setOpenEditMember] = useState(false)
+  const [editMemberId, setEditMemberId] = useState(null)
   const [members, setMembers] = useState([])
   const [loading, setLoading] = useState(false)
   const [selectedMember, setSelectedMember] = useState(null)
-  const[openCertificate,setOpenCertificate]=useState(false)
+  const [openCertificate, setOpenCertificate] = useState(false)
   const [detailDrawerVisible, setDetailDrawerVisible] = useState(false)
+  const [filterModalVisible, setFilterModalVisible] = useState(false)
+  const currentUser = auth.currentUser
+  
+  // Search mode
+  const [searchMode, setSearchMode] = useState('paginated')
+  const [searchResults, setSearchResults] = useState([])
+  const [searchLoading, setSearchLoading] = useState(false)
+  
+  // Pagination state
+  const [pagination, setPagination] = useState({
+    current: 1,
+    pageSize: 10,
+    total: 0,
+    lastDoc: null,
+    lastDocs: {}
+  })
+  
+  // Filters state - Added agentId filter
+  const [filters, setFilters] = useState({
+    search: '',
+    programId: 'all',
+    agentId: 'all', // NEW: Agent filter
+    status: 'all',
+    paymentStatus: 'all',
+    fromDate: null,
+    toDate: null,
+    sortField: 'createdAt',
+    sortOrder: 'desc'
+  })
+  
   const [stats, setStats] = useState({
     total: 0,
     active: 0,
@@ -45,89 +87,268 @@ const Page = () => {
     todayAdded: 0,
     totalRevenue: 0
   })
+  
   const programList = useSelector((state) => state.data.programList)
   const agentList = useSelector((state) => state.data.agentList)
   const { user } = useAuth()
   
-  // Fetch members data
-  useEffect(() => {
-    fetchMembers()
-  }, [])
+  const [filterForm] = Form.useForm()
+  const searchTimerRef = useRef(null)
 
-  const fetchMembers = async () => {
-    setLoading(true)
-    try {
-      const membersRef = collection(db, 'members')
-      const q = query(membersRef,where('delete_flag', '==', false), orderBy('createdAt', 'desc'))
-      const querySnapshot = await getDocs(q)
+  // Get agent name by ID - SIMPLE VERSION
+  const getAgentName = useCallback((agentId) => {
+    if (!agentId) return 'Admin/System';
+    
+    const agent = agentList?.find(a => a.id === agentId || a.uid===agentId);
+    return agent ? agent.name : 'Unknown Agent';
+  }, [agentList])
+
+
+  // Get displayed members
+  const displayedMembers = useMemo(() => {
+    return searchMode === 'search' ? searchResults : members
+  }, [searchMode, searchResults, members])
+
+  // Calculate stats
+  useEffect(() => {
+    if (displayedMembers.length > 0) {
+      const today = dayjs().format('DD-MM-YYYY')
       
-      const membersData = querySnapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data(),
-        // Format timestamps
-        createdAt: doc.data().createdAt?.toDate?.() || null,
-        updated_at: doc.data().updated_at?.toDate?.() || null
+      const currentStats = {
+        total: searchMode === 'search' ? searchResults.length : pagination.total,
+        active: displayedMembers.filter(m => m.active_flag).length,
+        pendingPayments: displayedMembers.filter(m => 
+          m.paymentPercentage < 100
+        ).length,
+        todayAdded: displayedMembers.filter(m => m.dateJoin === today).length,
+        totalRevenue: displayedMembers.reduce((sum, m) => sum + (m.paidAmount || 0), 0)
+      }
+      
+      setStats(currentStats)
+    }
+  }, [displayedMembers, pagination.total, searchMode, searchResults.length])
+
+  // Fetch members with pagination
+  const fetchMembers = useCallback(async (page = 1, resetPagination = false) => {
+    setLoading(true)
+    setSearchMode('paginated')
+    
+    try {
+      const lastDoc = resetPagination ? null : pagination.lastDocs[page - 1] || null
+      
+      const fetchParams = {
+        ...filters,
+        search: '', // Don't use search in paginated mode
+        pageSize: pagination.pageSize,
+        lastDoc: lastDoc
+      }
+      
+      const result = await fetchMembersPaginated(fetchParams)
+      
+      setMembers(result.members)
+      
+      const newLastDocs = { ...pagination.lastDocs }
+      if (result.lastDoc) {
+        newLastDocs[page] = result.lastDoc
+      }
+      
+      setPagination(prev => ({
+        ...prev,
+        lastDocs: newLastDocs,
+        hasNextPage: result.hasNextPage,
+        current: page
       }))
       
-      setMembers(membersData)
-      calculateStats(membersData)
+      if (resetPagination) {
+        const totalCount = await getTotalMembersCount(filters)
+        setPagination(prev => ({ ...prev, total: totalCount }))
+      }
+      
     } catch (error) {
       console.error('Error fetching members:', error)
       message.error('Failed to load members data')
     } finally {
       setLoading(false)
     }
-  }
+  }, [filters, pagination.pageSize, pagination.lastDocs])
 
-  const calculateStats = (membersData) => {
-    const today = dayjs().format('DD-MM-YYYY')
-    
-    const stats = {
-      total: membersData.length,
-      active: membersData.filter(m => m.active_flag && !m.delete_flag).length,
-      pendingPayments: membersData.filter(m => m.hasPendingPayments).length,
-      todayAdded: membersData.filter(m => m.dateJoin === today).length,
-      totalRevenue: membersData.reduce((sum, m) => sum + (m.paidAmount || 0), 0)
+  // Search members
+  const searchMembers = useCallback(async (searchTerm) => {
+    if (!searchTerm || searchTerm.trim().length < 2) {
+      setSearchMode('paginated')
+      setSearchResults([])
+      fetchMembers(1, false)
+      return
     }
+
+    setSearchLoading(true)
+    setSearchMode('search')
     
-    setStats(stats)
+    try {
+      const results = await fetchAllMembersForSearch(searchTerm, filters.agentId)
+      setSearchResults(results)
+      
+      if (results.length === 0) {
+        message.info('No members found matching your search')
+      }
+    } catch (error) {
+      console.error('Error searching members:', error)
+      message.error('Failed to search members')
+    } finally {
+      setSearchLoading(false)
+    }
+  }, [fetchMembers, filters.agentId])
+
+  // Debounced search handler
+  const handleSearch = useCallback((value) => {
+    if (searchTimerRef.current) {
+      clearTimeout(searchTimerRef.current)
+    }
+
+    searchTimerRef.current = setTimeout(() => {
+      searchMembers(value)
+    }, 500)
+  }, [searchMembers])
+
+  // Handle search input change
+  const handleSearchChange = (e) => {
+    const value = e.target.value
+    setFilters(prev => ({ ...prev, search: value }))
+    handleSearch(value)
   }
 
-  const handleSearch = (value) => {
-    setSearchText(value)
+  // Initial load
+  useEffect(() => {
+    fetchMembers(1, true)
+  }, [])
+
+  // Handle filter form changes
+  const handleFilterChange = (changedValues, allValues) => {
+    setFilters(prev => ({ ...prev, ...changedValues }))
   }
 
-  const filteredMembers = members.filter(member => {
-    if (!searchText) return true
+  // Apply filters
+  const applyFilters = () => {
+    setFilterModalVisible(false)
+    setPagination(prev => ({ 
+      ...prev, 
+      current: 1, 
+      lastDoc: null,
+      lastDocs: {} 
+    }))
+    fetchMembers(1, true)
+  }
+
+  // Reset filters
+  const resetFilters = () => {
+    const resetValues = {
+      programId: 'all',
+      agentId: 'all',
+      status: 'all',
+      paymentStatus: 'all',
+      fromDate: null,
+      toDate: null,
+      sortField: 'createdAt',
+      sortOrder: 'desc'
+    }
+    setFilters(prev => ({ ...prev, ...resetValues }))
+    filterForm.resetFields()
+    setSearchMode('paginated')
+    setSearchResults([])
+    setPagination(prev => ({ 
+      ...prev, 
+      current: 1, 
+      lastDoc: null,
+      lastDocs: {} 
+    }))
+    setTimeout(() => fetchMembers(1, true), 0)
+  }
+
+  // Get active filter count
+  const getActiveFilterCount = () => {
+    let count = 0
+    if (filters.programId !== 'all') count++
+    if (filters.agentId !== 'all') count++
+    if (filters.status !== 'all') count++
+    if (filters.paymentStatus !== 'all') count++
+    if (filters.fromDate) count++
+    if (filters.toDate) count++
+    return count
+  }
+
+  // Format date
+  const formatDate = (date) => {
+    return date ? dayjs(date).format('DD-MM-YYYY') : null
+  }
+
+  // Handle table pagination change
+  const handleTableChange = (paginationInfo, filtersInfo, sorter) => {
+    if (searchMode === 'search') {
+      setPagination(prev => ({
+        ...prev,
+        current: paginationInfo.current,
+        pageSize: paginationInfo.pageSize
+      }))
+      return
+    }
+
+    const pageChanged = paginationInfo.current !== pagination.current
+    const pageSizeChanged = paginationInfo.pageSize !== pagination.pageSize
     
-    const searchLower = searchText.toLowerCase()
-    
-    // Search across multiple fields
-    return (
-      (member.displayName?.toLowerCase() || '').includes(searchLower) ||
-      (member.fatherName?.toLowerCase() || '').includes(searchLower) ||
-      (member.phone?.includes(searchText)) ||
-      (member.registrationNumber?.toLowerCase() || '').includes(searchLower) ||
-      (member.aadhaarNo?.includes(searchText)) ||
-      (member.village?.toLowerCase() || '').includes(searchLower) ||
-      (member.search_keywords?.some(keyword => 
-        keyword.toLowerCase().includes(searchLower)
-      )) ||
-      false
-    )
-  })
+    if (pageSizeChanged) {
+      setPagination(prev => ({
+        ...prev,
+        current: 1,
+        pageSize: paginationInfo.pageSize,
+        lastDocs: {}
+      }))
+      setTimeout(() => fetchMembers(1, true), 0)
+      return
+    }
+
+    if (sorter.field && sorter.order) {
+      setFilters(prev => ({
+        ...prev,
+        sortField: sorter.field,
+        sortOrder: sorter.order === 'ascend' ? 'asc' : 'desc'
+      }))
+      setPagination(prev => ({ 
+        ...prev, 
+        current: 1,
+        lastDocs: {} 
+      }))
+      setTimeout(() => fetchMembers(1, true), 0)
+      return
+    }
+
+    if (pageChanged) {
+      fetchMembers(paginationInfo.current, false)
+    }
+  }
 
   const handleViewMember = async (member) => {
     setSelectedMember(member)
-    // setDetailDrawerVisible(true)
+    setDetailDrawerVisible(true)
+  }
+  
+  const handleCertificateMember = async (member) => {
+
+
+      const agentData=agentList?.find(agent=>agent.id===member.agentId)||{}
+
+    setSelectedMember({
+      ...member,
+      agentName: agentData.name||'Admin/System',
+      agentPhone: agentData.phone1||'',
+    })
     setOpenCertificate(true)
   }
 
-
- const handleEditMember = (member) => {
+  const handleEditMember = (member) => {
     setEditMemberId(member.id)
     setOpenEditMember(true)
   }
+
   const handleDeleteMember = async (member) => {
     Modal.confirm({
       title: 'Confirm Delete',
@@ -137,7 +358,6 @@ const Page = () => {
       cancelText: 'Cancel',
       onOk: async () => {
         try {
-          // Soft delete - set delete_flag to true
           await updateDoc(doc(db, 'members', member.id), {
             delete_flag: true,
             deleted_at: new Date(),
@@ -145,7 +365,12 @@ const Page = () => {
           })
           
           message.success('Member deleted successfully')
-          fetchMembers() // Refresh the list
+          
+          if (searchMode === 'search' && filters.search) {
+            searchMembers(filters.search)
+          } else {
+            fetchMembers(pagination.current, false)
+          }
         } catch (error) {
           console.error('Error deleting member:', error)
           message.error('Failed to delete member')
@@ -162,24 +387,28 @@ const Page = () => {
       })
       
       message.success(`Member ${!member.active_flag ? 'activated' : 'deactivated'} successfully`)
-      fetchMembers() // Refresh the list
+      
+      if (searchMode === 'search' && filters.search) {
+        searchMembers(filters.search)
+      } else {
+        fetchMembers(pagination.current, false)
+      }
     } catch (error) {
       console.error('Error toggling member status:', error)
       message.error('Failed to update member status')
     }
   }
 
-  // Columns for member table
   const columns = [
     {
       title: 'Reg. No.',
       dataIndex: 'registrationNumber',
       key: 'registrationNumber',
-      width: 120,
+      width: 130,
       fixed: 'left',
-      sorter: (a, b) => a.registrationNumber?.localeCompare(b.registrationNumber),
+      sorter: searchMode === 'paginated',
       render: (text) => (
-        <Tag color="blue" style={{ fontWeight: 'bold' }}>
+        <Tag color="blue" style={{ fontWeight: 'bold', fontSize: '12px' }}>
           {text}
         </Tag>
       ),
@@ -187,7 +416,7 @@ const Page = () => {
     {
       title: 'Member',
       key: 'member',
-      width: 200,
+      width: 180,
       render: (_, record) => (
         <div className="flex items-center gap-2">
           <Avatar 
@@ -196,7 +425,7 @@ const Page = () => {
             size="small"
           />
           <div>
-            <div className="font-medium">{record.displayName}</div>
+            <div className="font-medium text-sm">{record.displayName}</div>
             <div className="text-xs text-gray-500">
               {record.fatherName} • {record.surname}
             </div>
@@ -207,11 +436,11 @@ const Page = () => {
     {
       title: 'Contact',
       key: 'contact',
-      width: 150,
+      width: 140,
       render: (_, record) => (
         <div>
-          <div className="flex items-center gap-1">
-            <PhoneOutlined style={{ fontSize: '12px' }} />
+          <div className="flex items-center gap-1 text-sm">
+            <PhoneOutlined style={{ fontSize: '11px' }} />
             <span>{record.phone}</span>
           </div>
           {record.phoneAlt && (
@@ -226,13 +455,37 @@ const Page = () => {
       title: 'Aadhaar',
       dataIndex: 'aadhaarNo',
       key: 'aadhaarNo',
-      width: 140,
-     
+      width: 130,
+      render: (text) => <span className="text-sm">{text}</span>,
+    },
+    // NEW: Agent Column
+    {
+      title: 'Agent',
+      key: 'agent',
+      width: 120,
+      render: (_, record) => {
+        const agentName = getAgentName(record.agentId)
+        return (
+          <div className="text-xs">
+            <div className="flex items-center gap-1">
+              <UserSwitchOutlined style={{ fontSize: '11px', color: '#1890ff' }} />
+              <span className="font-medium truncate" title={agentName}>
+                {agentName}
+              </span>
+            </div>
+            {record.agentId && agentName === 'Unknown Agent' && (
+              <div className="text-gray-500 text-xs truncate" title={record.agentId}>
+                ID: {record.agentId.substring(0, 8)}...
+              </div>
+            )}
+          </div>
+        )
+      },
     },
     {
       title: 'Programs',
       key: 'programs',
-      width: 120,
+      width: 110,
       render: (_, record) => (
         <Popover 
           title="Programs" 
@@ -252,6 +505,7 @@ const Page = () => {
               count={record.programIds?.length || 0} 
               showZero 
               color={record.programIds?.length > 0 ? 'blue' : 'gray'}
+              size="small"
             />
             <div className="text-xs text-gray-500 mt-1">
               {record.programPaymentSummary?.fullyPaidPrograms || 0} paid
@@ -263,8 +517,8 @@ const Page = () => {
     {
       title: 'Payment',
       key: 'payment',
-      width: 150,
-      sorter: (a, b) => (a.paymentPercentage || 0) - (b.paymentPercentage || 0),
+      width: 140,
+      sorter: searchMode === 'paginated',
       render: (_, record) => {
         const percentage = record.paymentPercentage || 0
         let color = 'red'
@@ -279,7 +533,7 @@ const Page = () => {
         
         return (  
           <div>
-            <div className="flex items-center gap-1">
+            <div className="flex items-center gap-1 text-sm">
               {icon}
               <span style={{ color, fontWeight: 'bold' }}>
                 {percentage}%
@@ -297,12 +551,12 @@ const Page = () => {
       dataIndex: 'dateJoin',
       key: 'dateJoin',
       width: 110,
-      sorter: (a, b) => dayjs(a.dateJoin, 'DD-MM-YYYY').unix() - dayjs(b.dateJoin, 'DD-MM-YYYY').unix(),
+      sorter: searchMode === 'paginated',
       render: (text) => (
-        <div>
+        <div className="text-sm">
           <div>{text}</div>
-          {dayjs(text, 'DD-MM-YYYY').isSame(dayjs(), 'day') && (
-            <Tag color="green" size="small">Today</Tag>
+          {text && dayjs(text, 'DD-MM-YYYY').isSame(dayjs(), 'day') && (
+            <Tag color="green" size="small" className="text-xs">Today</Tag>
           )}
         </div>
       ),
@@ -310,61 +564,57 @@ const Page = () => {
     {
       title: 'Status',
       key: 'status',
-      width: 120,
-      filters: [
-        { text: 'Active', value: 'active' },
-        { text: 'Inactive', value: 'inactive' },
-        { text: 'Pending Payment', value: 'pending_payment' },
-      ],
-      onFilter: (value, record) => {
-        if (value === 'active') return record.active_flag
-        if (value === 'inactive') return !record.active_flag
-        if (value === 'pending_payment') return record.hasPendingPayments
-        return true
-      },
+      width: 100,
       render: (_, record) => (
-        <Space direction="vertical" size="small">
-          <Tag 
-            color={record.active_flag ? 'green' : 'red'}
-            icon={record.active_flag ? <CheckCircleOutlined /> : <ClockCircleOutlined />}
-          >
-            {record.active_flag ? 'Active' : 'Inactive'}
-          </Tag>
-        </Space>
+        <Tag 
+          color={record.active_flag ? 'green' : 'red'}
+          icon={record.active_flag ? <CheckCircleOutlined /> : <ClockCircleOutlined />}
+          size="small"
+          className="text-xs"
+        >
+          {record.active_flag ? 'Active' : 'Inactive'}
+        </Tag>
       ),
     },
     {
       title: 'Actions',
       key: 'actions',
-      width: 100,
+      width: 90,
       fixed: 'right',
       render: (_, record) => {
-       const items = [
-  {
-    key: 'view',
-    label: 'View Details',
-    icon: <EyeOutlined />,
-    onClick: () => handleViewMember(record),
-  },
-  {
-    key: 'edit',
-    label: 'Edit',
-    icon: <EditOutlined />,
-    onClick: () => handleEditMember(record),
-  },
-  {
-    key: 'toggle',
-    label: record.active_flag ? 'Deactivate' : 'Activate',
-    onClick: () => handleToggleStatus(record),
-  },
-  { type: 'divider' },
-  {
-    key: 'delete',
-    label: 'Delete',
-    icon: <DeleteOutlined style={{ color: 'red' }} />,
-    onClick: () => handleDeleteMember(record),
-  },
-]
+        const items = [
+          {
+            key: 'view',
+            label: 'View Details',
+            icon: <EyeOutlined />,
+            onClick: () => handleViewMember(record),
+          },
+          {
+            key: 'certificate',
+            label: 'Certificate',
+            icon: <FileTextOutlined />,
+            onClick: () => handleCertificateMember(record),
+          },
+          {
+            key: 'edit',
+            label: 'Edit',
+            icon: <EditOutlined />,
+            onClick: () => handleEditMember(record),
+          },
+          {
+            key: 'toggle',
+            label: record.active_flag ? 'Deactivate' : 'Activate',
+            onClick: () => handleToggleStatus(record),
+          },
+          { type: 'divider' },
+          {
+            key: 'delete',
+            label: 'Delete',
+            icon: <DeleteOutlined style={{ color: 'red' }} />,
+            onClick: () => handleDeleteMember(record),
+          },
+        ]
+        
         return (
           <Space>
             <Tooltip title="View Details">
@@ -373,17 +623,19 @@ const Page = () => {
                 icon={<EyeOutlined />} 
                 onClick={() => handleViewMember(record)}
                 size="small"
+                className="text-xs"
               />
             </Tooltip>
-     <Dropdown menu={{ items }} trigger={['click']}>
-  <Tooltip title="More Options">
-    <Button
-      type="text"
-      icon={<MoreOutlined />}
-      size="small"
-    />
-  </Tooltip>
-</Dropdown>
+            <Dropdown menu={{ items }} trigger={['click']}>
+              <Tooltip title="More Options">
+                <Button
+                  type="text"
+                  icon={<MoreOutlined />}
+                  size="small"
+                  className="text-xs"
+                />
+              </Tooltip>
+            </Dropdown>
           </Space>
         )
       },
@@ -391,13 +643,13 @@ const Page = () => {
   ]
 
   const exportToCSV = () => {
-    // Simple CSV export implementation
     const headers = [
       'Registration No', 'Name', 'Father Name', 'Phone', 'Aadhaar',
-      'Village', 'City', 'Join Date', 'Status', 'Payment %', 'Paid Amount'
+      'Village', 'City', 'Join Date', 'Status', 'Payment %', 'Paid Amount',
+      'Agent Name'
     ]
     
-    const csvData = members.map(member => [
+    const csvData = displayedMembers.map(member => [
       member.registrationNumber,
       member.displayName,
       member.fatherName,
@@ -408,7 +660,8 @@ const Page = () => {
       member.dateJoin,
       member.active_flag ? 'Active' : 'Inactive',
       member.paymentPercentage || 0,
-      member.paidAmount || 0
+      member.paidAmount || 0,
+      getAgentName(member.agentId)
     ])
     
     const csvContent = [
@@ -424,11 +677,10 @@ const Page = () => {
     a.click()
   }
 
+  const fileName = selectedMember?.displayName?.replace(/\s+/g,'_')+"_"+selectedMember?.registrationNumber+"_certificate"||'certificate.pdf'
+
   return (
     <div className="">
-
-
-      {/* Main Card */}
       <Card className="mb-4">
         <div className="flex justify-between items-center mb-4">
           <div>
@@ -445,18 +697,93 @@ const Page = () => {
           </Button>
         </div>
 
-        {/* Search and Actions Bar */}
+        {/* Stats Row */}
+      
+
+        {/* Search and Filters Bar */}
         <div className="flex justify-between items-center mb-4">
-          <Search
-            placeholder="Search by name, phone, aadhaar, village..."
-            prefix={<SearchOutlined />}
-            style={{ width: 400 }}
-            onSearch={handleSearch}
-            onChange={(e) => setSearchText(e.target.value)}
-            allowClear
-            enterButton
-          />
+          <div className="flex gap-2 items-center">
+            <Search
+              placeholder="Search by name, fatherName, phone, aadhaar, village..."
+              prefix={<SearchOutlined />}
+              style={{ width: 450 }}
+              onChange={handleSearchChange}
+              value={filters.search}
+              allowClear
+              loading={searchLoading}
+            />
+            {searchMode === 'search' && (
+              <Tag color="blue" className="text-xs">
+                Search Mode - {searchResults.length} results
+              </Tag>
+            )}
+          </div>
+          
           <div className="flex gap-2">
+            {/* Active Filters Display */}
+            <div className="flex gap-1 items-center">
+              {getActiveFilterCount() > 0 && (
+                <div className="flex gap-1 flex-wrap">
+                  {filters.programId !== 'all' && (
+                    <Tag color="blue" closable onClose={() => {
+                      setFilters(prev => ({...prev, programId: 'all'}))
+                      fetchMembers(1, true)
+                    }}>
+                      Program: {programList?.find(p => p.id === filters.programId)?.name || filters.programId}
+                    </Tag>
+                  )}
+                  {filters.agentId !== 'all' && (
+                    <Tag color="purple" closable onClose={() => {
+                      setFilters(prev => ({...prev, agentId: 'all'}))
+                      fetchMembers(1, true)
+                    }}>
+                      Agent: {getAgentName(filters.agentId)}
+                    </Tag>
+                  )}
+                  {filters.status !== 'all' && (
+                    <Tag color="green" closable onClose={() => {
+                      setFilters(prev => ({...prev, status: 'all'}))
+                      fetchMembers(1, true)
+                    }}>
+                      Status: {filters.status}
+                    </Tag>
+                  )}
+                  {filters.paymentStatus !== 'all' && (
+                    <Tag color="orange" closable onClose={() => {
+                      setFilters(prev => ({...prev, paymentStatus: 'all'}))
+                      fetchMembers(1, true)
+                    }}>
+                      Payment: {filters.paymentStatus}
+                    </Tag>
+                  )}
+                  {filters.fromDate && (
+                    <Tag color="purple" closable onClose={() => {
+                      setFilters(prev => ({...prev, fromDate: null}))
+                      fetchMembers(1, true)
+                    }}>
+                      From: {formatDate(filters.fromDate)}
+                    </Tag>
+                  )}
+                  {filters.toDate && (
+                    <Tag color="cyan" closable onClose={() => {
+                      setFilters(prev => ({...prev, toDate: null}))
+                      fetchMembers(1, true)
+                    }}>
+                      To: {formatDate(filters.toDate)}
+                    </Tag>
+                  )}
+                </div>
+              )}
+            </div>
+            
+            <Button 
+              icon={<FilterOutlined />}
+              onClick={() => setFilterModalVisible(true)}
+              className={getActiveFilterCount() > 0 ? 'text-primary border-primary' : ''}
+            >
+              Filters {getActiveFilterCount() > 0 && `(${getActiveFilterCount()})`}
+            </Button>
+            
             <Tooltip title="Export to CSV">
               <Button 
                 icon={<DownloadOutlined />} 
@@ -465,9 +792,20 @@ const Page = () => {
                 Export
               </Button>
             </Tooltip>
-            <Tooltip title="Filter Options">
-              <Button icon={<FilterOutlined />}>
-                Filter
+            
+            <Tooltip title="Refresh">
+              <Button 
+                icon={<ReloadOutlined />} 
+                onClick={() => {
+                  if (searchMode === 'search' && filters.search) {
+                    searchMembers(filters.search)
+                  } else {
+                    fetchMembers(pagination.current, false)
+                  }
+                }}
+                loading={loading || searchLoading}
+              >
+                Refresh
               </Button>
             </Tooltip>
           </div>
@@ -476,23 +814,172 @@ const Page = () => {
         {/* Members Table */}
         <Table
           columns={columns}
-          dataSource={filteredMembers}
+          dataSource={displayedMembers}
           rowKey="id"
-          loading={loading}
+          loading={loading || searchLoading}
           pagination={{
-            pageSize: 10,
+            current: pagination.current,
+            pageSize: pagination.pageSize,
+            total: searchMode === 'search' ? searchResults.length : pagination.total,
             showSizeChanger: true,
             showQuickJumper: true,
             showTotal: (total, range) => 
               `${range[0]}-${range[1]} of ${total} members`,
+            pageSizeOptions: ['10', '20', '50', '100'],
           }}
-          scroll={{ x: 1300 }}
+          onChange={handleTableChange}
+          scroll={{ x: 1300, y: '50vh' }}
           sticky
-          onChange={(pagination, filters, sorter) => {
-            console.log('Table changed:', { pagination, filters, sorter })
-          }}
+          size="small"
+          className="compact-table"
+          rowClassName="text-xs"
         />
       </Card>
+
+      {/* Filter Modal - Updated with Agent Filter */}
+      <Modal
+        title={
+          <div className="flex justify-between items-center">
+            <span>
+              <FilterOutlined className="mr-2" />
+              Advanced Filters
+            </span>
+            <div className="flex gap-2">
+              {getActiveFilterCount() > 0 && (
+                <Button 
+                  type="link" 
+                  danger 
+                  onClick={resetFilters}
+                  size="small"
+                >
+                  Clear All
+                </Button>
+              )}
+            </div>
+          </div>
+        }
+        open={filterModalVisible}
+        onCancel={() => setFilterModalVisible(false)}
+        footer={[
+          <Button key="cancel" onClick={() => setFilterModalVisible(false)}>
+            Cancel
+          </Button>,
+          <Button key="reset" onClick={resetFilters}>
+            Reset
+          </Button>,
+          <Button key="apply" type="primary" onClick={applyFilters}>
+            Apply Filters
+          </Button>,
+        ]}
+        width={600}
+      >
+        <Form
+          form={filterForm}
+          layout="vertical"
+          onValuesChange={handleFilterChange}
+          initialValues={filters}
+        >
+          <Row gutter={16}>
+            <Col span={12}>
+              <Form.Item label="Yojna" name="programId">
+                <Select placeholder="Select Yojna">
+                  <Option value="all">All Yojna</Option>
+                  {programList?.map(program => (
+                    <Option key={program.id} value={program.id}>
+                      {program.name}
+                    </Option>
+                  ))}
+                </Select>
+              </Form.Item>
+            </Col>
+            
+            <Col span={12}>
+              <Form.Item label="Agent" name="agentId">
+           <Select
+  placeholder="Select Agent"
+  showSearch={{
+    optionFilterProp: 'children',
+    filterOption: (input, option) =>
+      option?.children
+        ?.toString()
+        .toLowerCase()
+        .includes(input.toLowerCase())
+  }}
+>
+  <Select.Option value="all">All Agents</Select.Option>
+
+  {agentList?.map(agent => (
+    <Select.Option key={agent.id} value={agent.id}>
+      {agent.name} ({agent.phone1 || 'No phone'})
+    </Select.Option>
+  ))}
+</Select>
+              </Form.Item>
+            </Col>
+          </Row>
+          
+          <Row gutter={16}>
+            <Col span={12}>
+              <Form.Item label="Status" name="status">
+                <Select placeholder="Select Status">
+                  <Option value="all">All Status</Option>
+                  <Option value="active">Active</Option>
+                  <Option value="inactive">Inactive</Option>
+                </Select>
+              </Form.Item>
+            </Col>
+            
+            <Col span={12}>
+              <Form.Item label="Payment Status" name="paymentStatus">
+                <Select placeholder="Select Payment Status">
+                  <Option value="all">All Payments</Option>
+                  <Option value="paid">Paid</Option>
+                  <Option value="partial">Partial</Option>
+                  <Option value="pending">Pending</Option>
+                </Select>
+              </Form.Item>
+            </Col>
+          </Row>
+          
+          
+          <Row gutter={16}>
+            <Col span={12}>
+              <Form.Item label="From Date" name="fromDate">
+                <DatePicker 
+                  format="DD-MM-YYYY"
+                  placeholder="Select From Date"
+                  style={{ width: '100%' }}
+                />
+              </Form.Item>
+            </Col>
+            
+            <Col span={12}>
+              <Form.Item label="To Date" name="toDate">
+                <DatePicker 
+                  format="DD-MM-YYYY"
+                  placeholder="Select To Date"
+                  style={{ width: '100%' }}
+                />
+              </Form.Item>
+            </Col>
+          </Row>
+          
+          <div className="text-xs text-gray-500 mt-4 p-3 bg-gray-50 rounded">
+            <div className="font-medium mb-1">Currently Applied Filters:</div>
+            <div className="space-y-1">
+              <div>• Program: {filters.programId === 'all' ? 'All' : (programList?.find(p => p.id === filters.programId)?.name || filters.programId)}</div>
+              <div>• Agent: {filters.agentId === 'all' ? 'All' : getAgentName(filters.agentId)}</div>
+              <div>• Status: {filters.status === 'all' ? 'All' : filters.status}</div>
+              <div>• Payment: {filters.paymentStatus === 'all' ? 'All' : filters.paymentStatus}</div>
+              <div>• Date Range: {filters.fromDate ? formatDate(filters.fromDate) : 'Any'} - {filters.toDate ? formatDate(filters.toDate) : 'Any'}</div>
+              <div>• Sort By: {filters.sortField === 'createdAt' ? 'Registration Date' : 
+                filters.sortField === 'displayName' ? 'Name' : 
+                filters.sortField === 'paymentPercentage' ? 'Payment %' : 'Join Date'} ({filters.sortOrder})
+              </div>
+            </div>
+          </div>
+        </Form>
+      </Modal>
 
       {/* Add Member Drawer */}
       <AddMember
@@ -501,16 +988,29 @@ const Page = () => {
         open={openAddMember}
         setOpen={setOpenAddMember}
         currentUser={user}
-        onSuccess={fetchMembers} // Refresh table after adding member
+        onSuccess={() => {
+          if (searchMode === 'search' && filters.search) {
+            searchMembers(filters.search)
+          } else {
+            fetchMembers(pagination.current, false)
+          }
+        }}
       />
-       <EditMember
+      
+      <EditMember
         programs={programList || []}
         agents={agentList || []}
         open={openEditMember}
         setOpen={setOpenEditMember}
         currentUser={user}
         memberId={editMemberId}
-        onSuccess={fetchMembers}
+        onSuccess={() => {
+          if (searchMode === 'search' && filters.search) {
+            searchMembers(filters.search)
+          } else {
+            fetchMembers(pagination.current, false)
+          }
+        }}
       />
 
       {/* Member Detail Drawer */}
@@ -523,23 +1023,48 @@ const Page = () => {
             setSelectedMember(null)
           }}
           programList={programList}
+          agentList={agentList}
         />
       )}
-      {
-        openCertificate && <Drawer
-open={openCertificate}
-onClose={()=>{
-  setOpenCertificate(false)
-}}
-title={"Member Certificates"}
-size={800}
-destroyOnHidden
->
-<CertificateViewer memberData={selectedMember}/>
-</Drawer>
-      }
-
-
+      
+      {openCertificate && (
+        <Drawer
+          open={openCertificate}
+          onClose={() => setOpenCertificate(false)}
+          title={fileName}
+          size={800}
+          destroyOnClose={true}
+          footer={
+            <div className='flex justify-end gap-3'>
+              <Button 
+                type="default" 
+                onClick={() => setOpenCertificate(false)}
+              >
+                Close
+              </Button>
+              <PDFDownloadLink
+                document={<CertificateCom data={selectedMember} />}
+                fileName={fileName}
+              >
+                {({ loading }) => (
+                  <Button
+                    type="primary"
+                    loading={loading}
+                    disabled={loading}
+                    onClick={() => {
+                      setTimeout(() => setOpenCertificate(false), 500);
+                    }}
+                  >
+                    {loading ? "Preparing PDF..." : "Download PDF"}
+                  </Button>
+                )}
+              </PDFDownloadLink>
+            </div>
+          }
+        >
+          <CertificateViewer memberData={selectedMember}  />
+        </Drawer>
+      )}
     </div>
   )
 }
