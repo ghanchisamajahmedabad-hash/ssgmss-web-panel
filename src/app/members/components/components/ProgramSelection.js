@@ -13,13 +13,15 @@ const ProgramSelection = ({
   dobDate,
   programDetails,
   calculateTotalJoinFees,
-  isEditMode = false
+  isEditMode = false,
+  existingMember
 }) => {
   const programManu = programs?.map((item) => ({
     label: item.name,
-    value: item.id
+    value: item.id,
+    disabled: existingMember?.programIds?.includes(item.id) || false
   })) || []
-console.log(programDetails,'programDetails')
+
   const programDetailColumns = [
     {
       title: 'Program',
@@ -71,7 +73,7 @@ console.log(programDetails,'programDetails')
         ),
     },
   ]
-
+ 
   // Debug logging
   useEffect(() => {
     console.log('ProgramSelection props:', {

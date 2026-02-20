@@ -3,9 +3,9 @@ import { Card, Row, Col, Form, Input, DatePicker, Select, Alert, Spin } from 'an
 import dayjs from "dayjs"
 import { LoadingOutlined } from '@ant-design/icons'
 
-const BasicInfoForm = ({ handleDobChange, age, castes, form, onAadhaarCheck }) => {
+const BasicInfoForm = ({ handleDobChange, age, castes, form, onAadhaarCheck,existingMember,setExistingMember }) => {
   const [checkingAadhaar, setCheckingAadhaar] = useState(false)
-  const [existingMember, setExistingMember] = useState(null)
+
   
   const handleAadhaarChange = async (e) => {
     const aadhaarNo = e.target.value
@@ -149,17 +149,7 @@ const BasicInfoForm = ({ handleDobChange, age, castes, form, onAadhaarCheck }) =
             />
           </Form.Item>
         </Col>
-        <Col span={8}>
-          {age !== null && (
-            <Form.Item label="Age">
-              <Input value={`${age} years`} disabled />
-            </Form.Item>
-          )}
-        </Col>
-      </Row>
-
-      <Row gutter={16}>
-        <Col span={12}>
+      <Col span={8}>
           <Form.Item
             label="Phone Number"
             name="phone"
@@ -171,7 +161,7 @@ const BasicInfoForm = ({ handleDobChange, age, castes, form, onAadhaarCheck }) =
             <Input placeholder="Enter phone number" />
           </Form.Item>
         </Col>
-        <Col span={12}>
+        <Col span={8}>
           <Form.Item
             label="Alternate Phone"
             name="phoneAlt"

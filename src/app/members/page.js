@@ -482,40 +482,32 @@ const Page = () => {
         )
       },
     },
+   {
+  title: 'Yojna',
+  key: 'programs',
+  width: 200,
+  render: (_, record) => {
+    if (!record.programIds || record.programIds.length === 0) {
+      return <span className="text-gray-400 text-xs">No Program</span>
+    }
+
+    return (
+      <div className='flex items-center gap-1 flex-wrap'>
+        {record.programIds.map((id) => {
+          const program = programList?.find(p => p.id === id)
+          return program ? (
+             <Tag color="pink" style={{ fontWeight: 'bold', fontSize: '10px' }}>
+               {program.name}
+             </Tag>
+           
+          ) : null
+        })}
+      </div>
+    )
+  },
+},
     {
-      title: 'Programs',
-      key: 'programs',
-      width: 110,
-      render: (_, record) => (
-        <Popover 
-          title="Programs" 
-          content={
-            <div>
-              {record.programIds?.map((id, idx) => {
-                const program = programList?.find(p => p.id === id)
-                return program ? (
-                  <div key={idx} className="text-xs py-1 text-primary">{program.name}</div>
-                ) : null
-              })}
-            </div>
-          }
-        >
-          <div>
-            <Badge 
-              count={record.programIds?.length || 0} 
-              showZero 
-              color={record.programIds?.length > 0 ? 'blue' : 'gray'}
-              size="small"
-            />
-            <div className="text-xs text-gray-500 mt-1">
-              {record.programPaymentSummary?.fullyPaidPrograms || 0} paid
-            </div>
-          </div>
-        </Popover>
-      ),
-    },
-    {
-      title: 'Payment',
+      title: 'Join Fees',
       key: 'payment',
       width: 140,
       sorter: searchMode === 'paginated',
@@ -704,7 +696,7 @@ const Page = () => {
         <div className="flex justify-between items-center mb-4">
           <div className="flex gap-2 items-center">
             <Search
-              placeholder="Search by name, fatherName, phone, aadhaar, village..."
+              placeholder="Search by name, fatherName,reg no,phone,aadhaar,village..."
               prefix={<SearchOutlined />}
               style={{ width: 450 }}
               onChange={handleSearchChange}

@@ -580,7 +580,7 @@ const MemberDetailDrawer = ({ member, visible, onClose }) => {
                 className="border-2 border-blue-500"
               />
               <div>
-                <div className="font-bold text-lg">{member?.displayName}</div>
+                <div className="font-bold text-lg">{member?.displayName} {member.fatherName}</div>
                 <div className="text-sm text-gray-500 flex items-center gap-2">
                   <BarcodeOutlined /> {member?.registrationNumber}
                 </div>
@@ -608,11 +608,11 @@ const MemberDetailDrawer = ({ member, visible, onClose }) => {
         placement="right"
         onClose={onClose}
         open={visible}
-        width={1400}
+        size={1400}
         className="member-detail-drawer"
         extra={
           <Space>
-            <Tooltip title="Print Member Details">
+            {/* <Tooltip title="Print Member Details">
               <Button icon={<PrinterOutlined />} />
             </Tooltip>
             <Tooltip title="Download PDF Report">
@@ -620,7 +620,7 @@ const MemberDetailDrawer = ({ member, visible, onClose }) => {
             </Tooltip>
             <Tooltip title="Edit Member">
               <Button icon={<EditOutlined />} type="primary" />
-            </Tooltip>
+            </Tooltip> */}
           </Space>
         }
       >

@@ -45,6 +45,7 @@ const AddMember = ({ open, setOpen, programs, agents, currentUser ,onSuccess}) =
   const [joinFeesDone, setJoinFeesDone] = useState(false)
   const [paymentMode, setPaymentMode] = useState('cash')
   const [paidAmount, setPaidAmount] = useState(0)
+   const [existingMember, setExistingMember] = useState(null)
   const [age, setAge] = useState(null)
   // Fetch static data on component mount
   useEffect(() => {
@@ -181,27 +182,51 @@ const AddMember = ({ open, setOpen, programs, agents, currentUser ,onSuccess}) =
       form.setFieldsValue({ paidAmount: totalJoinFees })
     }
   }
+const generatePassword = (name, dob) => {
+  if (!name || !dob) return '';
 
-  const handleDobChange = (date) => {
-    if (!date) {
-      setDobDate(null)
-      setAge(null)
-      setProgramDetails([])
-      return
-    }
-    
-    const dob = date
-    const today = dayjs()
-    const calculatedAge = today.diff(dob, 'year')
-    
-    setDobDate(dob)
-    setAge(calculatedAge)
-    
-    if (selectedPrograms.length > 0) {
-      calculateProgramDetails()
-    }
+  const firstName = name.trim().split(' ')[0];
+  const namePart = firstName.substring(0, 5);
+
+  const formattedName =
+    namePart.charAt(0).toUpperCase() +
+    namePart.slice(1).toLowerCase();
+
+  const year = dayjs(dob).format('YYYY');
+
+  return `${formattedName}${year}`;
+};
+const handleDobChange = (date) => {
+  if (!date) {
+    setDobDate(null);
+    setAge(null);
+    setProgramDetails([]);
+    form.setFieldsValue({ password: '' });
+    return;
   }
 
+  const dob = date;
+  const today = dayjs();
+  const calculatedAge = today.diff(dob, 'year');
+
+  setDobDate(dob);
+  setAge(calculatedAge);
+
+  // Get name from form
+  const name = form.getFieldValue('name');
+
+  // Generate password
+  const password = generatePassword(name, dob);
+
+  // Set password in form
+  form.setFieldsValue({
+    password: password
+  });
+
+  if (selectedPrograms.length > 0) {
+    calculateProgramDetails();
+  }
+};
   const handleProgramChange = (programIds) => {
     setSelectedPrograms(programIds)
     
@@ -238,6 +263,8 @@ const AddMember = ({ open, setOpen, programs, agents, currentUser ,onSuccess}) =
   }
 
   const onFormSubmit = async (values) => {
+
+    const addedByName = addedByRole === 'admin' ?currentUser?.displayName||"Admin" : agents.find(a => a.uid === selectedAgent)?.name || 'Unknown'
     const success = await handleSubmit(
       values,
       {
@@ -251,6 +278,7 @@ const AddMember = ({ open, setOpen, programs, agents, currentUser ,onSuccess}) =
         relations,
         addedByRole,
         selectedAgent,
+        addedByName,
         joinDate,
         dobDate,
         age,
@@ -404,6 +432,8 @@ const calculateProgramPayments = (programDetails, paidAmount) => {
               age={age}
               castes={castes}
               form={form}
+              existingMember={existingMember}
+              setExistingMember={setExistingMember}
               onAadhaarCheck={handleAadhaarCheck}  // यहाँ pass करें
             />
 
@@ -429,6 +459,7 @@ const calculateProgramPayments = (programDetails, paidAmount) => {
               dobDate={dobDate}
               programDetails={programDetails}
               calculateTotalJoinFees={calculateTotalJoinFees}
+                existingMember={existingMember}
             />
 
             <AddedByForm 
