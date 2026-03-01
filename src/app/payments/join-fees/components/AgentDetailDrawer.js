@@ -48,7 +48,7 @@ const AgentDetailDrawer = ({
       }
       open={!!agent}
       onClose={onClose}
-      width={420}
+      size={600}
       extra={
         <Space>
           <Button

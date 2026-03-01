@@ -377,6 +377,29 @@ export const themeAntd={
             },
           }
 
+          export const Colors = {
+  primary:   '#db2777',
+  primaryL:  '#f472b6',
+  primaryD:  '#be185d',
+  secondary: '#ea580c',
+  secondaryL:'#fb923c',
+  accent:    '#059669',
+  accentL:   '#34d399',
+  tertiary:  '#f59e0b',
+  bg:        '#fff8f5',
+  surface:   '#ffffff',
+  surfaceSec:'#fef2ed',
+  fg:        '#3e1f1a',
+  fgSec:     '#6b4f47',
+  muted:     '#8b7871',
+  border:    '#fde2d8',
+  success:   '#16a34a',
+  warning:   '#f59e0b',
+  error:     '#dc2626',
+  info:      '#2563eb',
+}
+
+
 
 export const sideBarStyle=`
         /* User Info Styles */

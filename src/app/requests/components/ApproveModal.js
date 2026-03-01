@@ -325,6 +325,7 @@ const executeApproval = async () => {
       if (paymentInfo) {
         await updateDoc(programDoc.ref, {
           status: 'active',
+          memberId:selectedMember.id,
           joinFees: paymentInfo.joinFees,
           paidAmount: paymentInfo.paidAmount,
           pendingAmount: paymentInfo.pendingAmount,

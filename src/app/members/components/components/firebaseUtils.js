@@ -432,6 +432,7 @@ export const handleSubmit = async (values, context, message) => {
       return {
         programId: payment.programId,
         programName: payment.programName,
+        
         ageGroupId: programDetail?.ageGroupId,
         ageGroupName: programDetail?.ageGroupName,
         joinFees: payment.joinFees,
@@ -605,8 +606,8 @@ export const handleSubmit = async (values, context, message) => {
 
   // 👇 Yaha custom ID use ho raha hai
   const programDocRef = doc(memberProgramsRef, program.programId);
-
-  await setDoc(programDocRef, program, { merge: true });
+   const programData={...program,memberId:memberId}
+  await setDoc(programDocRef, programData, { merge: true });
 }
 
     // Create account
