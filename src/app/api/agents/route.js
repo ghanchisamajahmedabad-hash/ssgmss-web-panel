@@ -315,8 +315,8 @@ export async function POST(req) {
       });
 
       // Create agent in Firestore first to get ID
-      agentRef = db.collection("agents").doc();
-      const agentId = agentRef.id;
+  const agentId = uid;
+  agentRef = db.collection("agents").doc(uid);
 
       // Upload files if provided (handle base64)
       let photoUrl = '';
@@ -328,7 +328,12 @@ export async function POST(req) {
       if (photoFile && photoFile.data) {
         photoUrl = await uploadBase64ToStorage(photoFile, photoFile.name, 'photo', agentId);
       }
-
+if (photoUrl) {
+  await auth.updateUser(uid, {
+    photoURL: photoUrl,
+    displayName: name
+  });
+}
       if (signatureFile && signatureFile.data) {
         signatureUrl = await uploadBase64ToStorage(signatureFile, signatureFile.name, 'signature', agentId);
       }

@@ -306,3 +306,37 @@ export const fetchAllMembersForSearch = async (searchTerm, agentId = null) => {
     return [];
   }
 };
+
+
+export const fetchMembersByAgent = async (agentId) => {
+  if (!agentId || agentId === "all") {
+    return [];
+  }
+
+  try {
+    const membersRef = collection(db, "members");
+
+    const q = query(
+      membersRef,
+      where("delete_flag", "==", false),
+      where("status", "==", "active"),
+      where("agentId", "==", agentId),
+      orderBy("createdAt", "desc")
+        );
+
+    const querySnapshot = await getDocs(q);
+
+    const members = querySnapshot.docs.map((doc) => ({
+      id: doc.id,
+      ...doc.data(),
+      createdAt: doc.data().createdAt?.toDate?.() || null,
+      updated_at: doc.data().updated_at?.toDate?.() || null,
+    }));
+
+    return members;
+
+  } catch (error) {
+    console.error("❌ Error fetching agent members:", error);
+    return [];
+  }
+};

@@ -1,6 +1,7 @@
 import { 
   collection, addDoc, serverTimestamp, query, where, getDocs, 
-  getDoc, doc, updateDoc, deleteDoc 
+  getDoc, doc, updateDoc, deleteDoc, 
+  setDoc
 } from 'firebase/firestore'
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage'
 import dayjs from 'dayjs'
@@ -595,9 +596,18 @@ export const handleSubmit = async (values, context, message) => {
 
     // Add member programs to subcollection
     const memberProgramsRef = collection(memberRef, 'memberPrograms')
-    for (const program of memberProgramsData) {
-      await addDoc(memberProgramsRef, program)
-    }
+  for (const program of memberProgramsData) {
+
+  if (!program.programId) {
+    console.log("Program ID missing");
+    continue;
+  }
+
+  // 👇 Yaha custom ID use ho raha hai
+  const programDocRef = doc(memberProgramsRef, program.programId);
+
+  await setDoc(programDocRef, program, { merge: true });
+}
 
     // Create account
     await memberAccoiuntCreate({...memberData, id: memberId})

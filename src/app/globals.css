@@ -69,65 +69,6 @@
    DARK MODE - Elegant & Comfortable
 ================================ */
 
-.dark {
-  /* Backgrounds */
-  --background: #1a0d08;       /* Deep warm dark */
-  --surface: #2d1810;          /* Warm dark brown */
-  --surface-secondary: #3e2318; /* Slightly lighter brown */
-
-  /* Text Colors */
-  --foreground: #fef7f3;       /* Warm white */
-  --foreground-secondary: #e7d5cc; /* Soft warm beige */
-  --muted-foreground: #b5a29a; /* Warm gray */
-
-  /* Primary - Softer for dark mode */
-  --primary: #fb7185;          /* Rose-400 */
-  --primary-light: #fda4af;    /* Rose-300 */
-  --primary-dark: #f43f5e;     /* Rose-500 */
-  --primary-foreground: #1a0d08;
-
-  /* Secondary */
-  --secondary: #fb923c;        /* Orange-400 */
-  --secondary-light: #fdba74;  /* Orange-300 */
-  --secondary-dark: #f97316;   /* Orange-500 */
-  --secondary-foreground: #1a0d08;
-
-  /* Accent */
-  --accent: #34d399;           /* Emerald-400 */
-  --accent-light: #6ee7b7;     /* Emerald-300 */
-  --accent-foreground: #1a0d08;
-
-  /* Tertiary */
-  --tertiary: #fbbf24;         /* Amber-400 */
-  --tertiary-light: #fcd34d;   /* Amber-300 */
-
-  /* Borders & Inputs */
-  --border: #4a2e22;           /* Warm brown border */
-  --border-hover: #5c3828;     /* Lighter warm brown */
-  --input: #5c2e20;            /* Deep warm brown */
-  --ring: #fb923c;             /* Orange-400 */
-
-  /* Status Colors - Adjusted for dark mode */
-  --success: #22c55e;          /* Green-500 */
-  --success-light: #4ade80;    /* Green-400 */
-  --warning: #fbbf24;          /* Amber-400 */
-  --warning-light: #fcd34d;    /* Amber-300 */
-  --error: #f87171;            /* Red-400 */
-  --error-light: #fca5a5;      /* Red-300 */
-  --info: #60a5fa;             /* Blue-400 */
-  --info-light: #93c5fd;       /* Blue-300 */
-
-  /* Gradients */
-  --gradient-primary: linear-gradient(135deg, #fb7185 0%, #fb923c 100%);
-  --gradient-warm: linear-gradient(135deg, #fdba74 0%, #fcd34d 100%);
-  --gradient-success: linear-gradient(135deg, #22c55e 0%, #34d399 100%);
-
-  /* Shadows - More subtle in dark mode */
-  --shadow-sm: 0 1px 2px 0 rgba(251, 113, 133, 0.1);
-  --shadow-md: 0 4px 6px -1px rgba(251, 113, 133, 0.15);
-  --shadow-lg: 0 10px 15px -3px rgba(251, 113, 133, 0.2);
-  --shadow-xl: 0 20px 25px -5px rgba(251, 113, 133, 0.25);
-}
 
 /* ===============================
    TAILWIND THEME MAPPING
@@ -162,7 +103,7 @@
 body {
   margin: 0;
   padding: 0;
-  background: var(--background);
+  background: var(--);
   color: var(--foreground);
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;

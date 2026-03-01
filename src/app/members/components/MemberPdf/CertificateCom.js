@@ -21,18 +21,17 @@ const styles = StyleSheet.create({
   page: {
     backgroundColor: '#ffffff',
     fontFamily: 'NotoSansDevanagari',
-    padding: 5,
     width: '210mm',
     height: '148mm',
   },
   outerView: {
     width: '100%',
     height: "100%",
-    borderWidth: 4,
-    borderColor: "#d4af37",
-    borderStyle: "solid",
+    // borderWidth: 4,
+    // borderColor: "#d4af37",
+    // borderStyle: "solid",
     position: 'relative',
-    padding: 10,
+    padding: 35,
     display: 'flex',
     flexDirection: 'column',
   },
@@ -41,8 +40,8 @@ const styles = StyleSheet.create({
   topText: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginBottom: 6,
-    paddingHorizontal: 4,
+    marginBottom: 10,
+    paddingHorizontal: 30,
   },
   smallText: {
     fontSize: 9,
@@ -55,7 +54,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: 6,
-    paddingHorizontal: 4,
+    paddingHorizontal: 10,
   },
   logoImage: {
     width: 70,
@@ -187,14 +186,14 @@ const styles = StyleSheet.create({
   
   dateLabel: {
     fontSize: 10,
-    color: '#000',
+    color: '#1B385A',
     fontWeight: 'normal',
   },
   
   dateValue: {
     fontSize: 10,
     color: '#D3292F',
-    fontWeight: 'bold',
+    fontWeight: '500',
   },
   
   // Main Content Section with Controlled Height
@@ -234,7 +233,7 @@ const styles = StyleSheet.create({
   
   detailLabel: {
     fontSize: 10,
-    color: '#000',
+    color: '#1B385A',
     fontWeight: 'normal',
     width: '30%',
     textAlign: 'left',
@@ -242,23 +241,23 @@ const styles = StyleSheet.create({
   
   detailColon: {
     fontSize: 10,
-    color: '#000',
-    fontWeight: 'normal',
+     color: '#D3292F',
+    fontWeight: '500',
     marginHorizontal: 2,
   },
   
   detailValue: {
     fontSize: 10,
     color: '#D3292F',
-    fontWeight: 'bold',
+    fontWeight: '500',
     flex: 1,
     textTransform: 'uppercase',
   },
   
   detailValueNormal: {
     fontSize: 10,
-    color: '#000',
-    fontWeight: 'normal',
+    color: '#D3292F',
+    fontWeight: '500',
     flex: 1,
     textTransform: 'uppercase',
   },
@@ -273,8 +272,6 @@ const styles = StyleSheet.create({
   memberPhotoContainer: {
     width: 95,
     height: 115,
-    borderWidth: 2,
-    borderColor: '#1B385A',
     borderRadius: 2,
     overflow: 'hidden',
   },
@@ -282,7 +279,7 @@ const styles = StyleSheet.create({
   memberPhoto: {
     width: '100%',
     height: '100%',
-    objectFit: 'cover',
+    objectFit: 'fill',
   },
   
   noPhotoContainer: {
@@ -337,7 +334,7 @@ const styles = StyleSheet.create({
     marginTop: 'auto',
     paddingTop: 6,
     paddingBottom: 2,
-    paddingHorizontal: 4,
+    paddingHorizontal: 15,
     borderTopWidth: 1,
     borderTopColor: '#1B385A',
     position:'relative',
@@ -386,7 +383,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     position:'absolute',
     top:30,
-    left:100,
+    left:90,
     width:'50%'
   },
   
@@ -413,7 +410,7 @@ const styles = StyleSheet.create({
   },
   
   footerNote: {
-    fontSize: 10,
+    fontSize: 9,
     color: '#487BA3',
     textAlign: 'center',
     marginBottom: 1,
@@ -431,9 +428,29 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     marginBottom: 2,
   },
+  bgImage: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    width: '100%',
+    height: '100%',
+    objectFit: 'fill',
+    zIndex: -1,
+      opacity: 0.8,
+  },
+  frameImg:{
+     position: 'absolute',
+    top: 0,
+    left: 0,
+    width: '100%',
+    height: '100%',
+    objectFit: 'fill',
+    zIndex: -1,
+      }
 });
 
 const CertificateCom = ({ data }) => {
+  console.log(data,"data")
   // Format the date
   const formatDate = (dateString) => {
     if (!dateString) return '09-01-2026';
@@ -443,12 +460,21 @@ const CertificateCom = ({ data }) => {
   return (
     <Document>
       <Page size={{ width: '210mm', height: '148mm' }} style={styles.page}>
+
+           <Image
+            src="/Images/frameImg.png"
+            style={styles.frameImg}
+          />
+                {/* <Image
+            src="/Images/frameImg4.jpg"
+            style={styles.bgImage}
+          /> */}
         <View style={styles.outerView}>
           <Image
             src="/Images/logoT.png"
             style={styles.watermark}
           />
-
+     
           {/* Header Section */}
           <View style={styles.topText}>
             <Text style={styles.smallText}>॥ श्री गणेशाय नमः ॥</Text>
@@ -507,7 +533,7 @@ const CertificateCom = ({ data }) => {
               सदस्य क्रमांक : <Text style={styles.memberIdValue}>{data?.registrationNumber || 'S1001511'}</Text>
             </Text>
             <Text style={styles.schemeNameText}>
-              Suraksha Sahyog Yojna Group - Part 2
+             {data?.programName || 'सामाजिक सुरक्षा योजना'}
             </Text>
             <View style={styles.dateContainer}>
               <Text style={styles.dateLabel}>दिनांक : </Text>

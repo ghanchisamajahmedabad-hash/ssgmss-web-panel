@@ -299,8 +299,18 @@ export const agentApi = {
   },
 };
 
+
+export const paymentApi={
+  JoinFeesAdd:(data)=>{
+       return apiRequest('/api/join-fees-add', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+}
 // Export both APIs
 export default {
   userApi,
   agentApi,
+  paymentApi
 };

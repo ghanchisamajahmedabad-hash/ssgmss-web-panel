@@ -144,7 +144,7 @@ const Page = () => {
       }
       
       const result = await fetchMembersPaginated(fetchParams)
-      
+      console.log(result,"result")
       setMembers(result.members)
       
       const newLastDocs = { ...pagination.lastDocs }
@@ -331,15 +331,18 @@ const Page = () => {
     setDetailDrawerVisible(true)
   }
   
-  const handleCertificateMember = async (member) => {
+  const handleCertificateMember = async (member,programId) => {
 
 
       const agentData=agentList?.find(agent=>agent.id===member.agentId)||{}
-
+      const programData=programList?.find(program=>program.id===programId)||{}
+  
     setSelectedMember({
       ...member,
-      agentName: agentData.name||'Admin/System',
+      agentName: agentData.displayName ||agentData.name ||'Admin/System',
       agentPhone: agentData.phone1||'',
+      programId: programId,
+      programName: programData.hindiName || ''
     })
     setOpenCertificate(true)
   }
@@ -573,40 +576,67 @@ const Page = () => {
       key: 'actions',
       width: 90,
       fixed: 'right',
-      render: (_, record) => {
-        const items = [
-          {
-            key: 'view',
-            label: 'View Details',
-            icon: <EyeOutlined />,
-            onClick: () => handleViewMember(record),
-          },
-          {
-            key: 'certificate',
-            label: 'Certificate',
-            icon: <FileTextOutlined />,
-            onClick: () => handleCertificateMember(record),
-          },
-          {
-            key: 'edit',
-            label: 'Edit',
-            icon: <EditOutlined />,
-            onClick: () => handleEditMember(record),
-          },
-          {
-            key: 'toggle',
-            label: record.active_flag ? 'Deactivate' : 'Activate',
-            onClick: () => handleToggleStatus(record),
-          },
-          { type: 'divider' },
-          {
-            key: 'delete',
-            label: 'Delete',
-            icon: <DeleteOutlined style={{ color: 'red' }} />,
-            onClick: () => handleDeleteMember(record),
-          },
-        ]
-        
+      render: (_, record) => { 
+       const items = [
+  {
+    key: 'view',
+    label: 'View Details',
+    icon: <EyeOutlined />,
+    onClick: () => handleViewMember(record),
+  },
+
+  // ✅ Certificate Logic
+  record.programIds && record.programIds.length > 1
+    ? {
+        key: 'certificate',
+        label: 'Certificate',
+        icon: <FileTextOutlined />,
+        children: record.programIds
+          .map((id) => {
+            const program = programList?.find(p => p.id === id)
+            if (!program) return null
+
+            return {
+              key: `cert-${id}`,
+              label: program.name,
+              onClick: () => handleCertificateMember(record, id), // pass programId
+            }
+          })
+          .filter(Boolean),
+      }
+    : {
+        key: 'certificate',
+        label: 'Certificate',
+        icon: <FileTextOutlined />,
+        onClick: () =>
+          handleCertificateMember(
+            record,
+            record.programIds?.[0] || null
+          ),
+      },
+
+  {
+    key: 'edit',
+    label: 'Edit',
+    icon: <EditOutlined />,
+    onClick: () => handleEditMember(record),
+  },
+
+  {
+    key: 'toggle',
+    label: record.active_flag ? 'Deactivate' : 'Activate',
+    onClick: () => handleToggleStatus(record),
+  },
+
+  { type: 'divider' },
+
+  {
+    key: 'delete',
+    label: 'Delete',
+    icon: <DeleteOutlined style={{ color: 'red' }} />,
+    onClick: () => handleDeleteMember(record),
+  },
+].filter(Boolean) 
         return (
           <Space>
             <Tooltip title="View Details">
