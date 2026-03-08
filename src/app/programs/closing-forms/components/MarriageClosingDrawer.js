@@ -348,54 +348,54 @@ const MarriageClosingDrawer = ({
         setProcessing(true)
         try {
           // 1. Create the Group Closing Header Record
-        //   const groupData = {
-        //     count: selectedMembersList.length,
-        //     memberIds: selectedMembersList,
-        //     closedBy: currentUser?.uid,
-        //     closedByName: currentUser?.displayName || 'Unknown',
-        //     closedAt: serverTimestamp(),
-        //     programId: selectedProgram,
-        //     ageGroups: selectedAgeGroups,
-        //     memberGroups: selectedMemberGroups,
-        //     type: 'GROUP_CLOSING'
-        //   }
-        //   const groupRef = await addDoc(collection(db, 'groupClosings'), groupData)
-        //   const groupId = groupRef.id
+          const groupData = {
+            count: selectedMembersList.length,
+            memberIds: selectedMembersList,
+            closedBy: currentUser?.uid,
+            closedByName: currentUser?.displayName || 'Unknown',
+            closedAt: serverTimestamp(),
+            programId: selectedProgram,
+            ageGroups: selectedAgeGroups,
+            memberGroups: selectedMemberGroups,
+            type: 'GROUP_CLOSING'
+          }
+          const groupRef = await addDoc(collection(db, 'groupClosings'), groupData)
+          const groupId = groupRef.id
 
-        //   // 2. Process Individual Members
-        //   for (const memberId of selectedMembersList) {
-        //     const d = memberDetails[memberId]
-        //     const member = members.find(m => m.id === memberId)
+          // 2. Process Individual Members
+          for (const memberId of selectedMembersList) {
+            const d = memberDetails[memberId]
+            const member = members.find(m => m.id === memberId)
             
-        //     const closingData = {
-        //       memberId, 
-        //       groupId,
-        //       programId: selectedProgram,
-        //       marriageDate: d.marriageDate.toISOString(),
-        //       note: d.note, 
-        //       invitationUrl: d.invitationUrl || '',
-        //       closedBy: currentUser?.uid,
-        //       closedByName: currentUser?.displayName || 'Unknown',
-        //       closedAt: serverTimestamp(),
-        //       memberName: member?.displayName || member?.name,
-        //       registrationNumber: member?.registrationNumber,
-        //       ageGroupId: member?.ageGroupId || member?.ageGroup,
-        //       memberGroupId: member?.memberGroupId || member?.groupId
-        //     }
+            const closingData = {
+              memberId, 
+              groupId,
+              programId: selectedProgram,
+              marriageDate: d.marriageDate.toISOString(),
+              note: d.note, 
+              invitationUrl: d.invitationUrl || '',
+              closedBy: currentUser?.uid,
+              closedByName: currentUser?.displayName || 'Unknown',
+              closedAt: serverTimestamp(),
+              memberName: member?.displayName || member?.name,
+              registrationNumber: member?.registrationNumber,
+              ageGroupId: member?.ageGroupId || member?.ageGroup,
 
-        //     await addDoc(collection(db, 'memberClosings'), closingData)
+            }
 
-        //     await updateDoc(doc(db, 'members', memberId), {
-        //       member_closed: true,
-        //       member_closed_at: serverTimestamp(),
-        //       member_closed_by: currentUser?.uid,
-        //       member_closed_program: selectedProgram,
-        //       closed_group_id: groupId,
-        //       closed_date: d.marriageDate.toISOString(),
-        //       closed_note: d.note,
-        //       closed_invitation_url: d.invitationUrl || ''
-        //     })
-        //   }
+            await addDoc(collection(db, 'memberClosings'), closingData)
+
+            await updateDoc(doc(db, 'members', memberId), {
+              member_closed: true,
+              member_closed_at: serverTimestamp(),
+              member_closed_by: currentUser?.uid,
+              member_closed_program: selectedProgram,
+              closed_group_id: groupId,
+              closed_date: d.marriageDate.toISOString(),
+              closed_note: d.note,
+              closed_invitation_url: d.invitationUrl || ''
+            })
+          }
 const memberClosingList=  selectedMembersList.map((memberId)=>{
  const d = memberDetails[memberId]
             const member = members.find(m => m.id === memberId)
@@ -406,7 +406,8 @@ const memberClosingList=  selectedMembersList.map((memberId)=>{
               member_closed_program: selectedProgram,
               closed_date: d.marriageDate.toISOString(),
               closed_note: d.note,
-              closed_invitation_url: d.invitationUrl || ''
+              closed_invitation_url: d.invitationUrl || '',
+              closed_memberId: memberId,
             }
             return newData
 })
@@ -414,6 +415,7 @@ const memberClosingList=  selectedMembersList.map((memberId)=>{
           const data = {
           count: selectedMembersList.length,
             memberIds: selectedMembersList,
+            groupId:groupId,
             closedBy: currentUser?.uid,
             closedByName: currentUser?.displayName || 'Unknown',
             closedAt: serverTimestamp(),

@@ -312,6 +312,12 @@ export const paymentApi={
       method: 'POST',
       body: JSON.stringify(data),
     });
+  },
+  closedPaymentUpdate:(data)=>{
+       return apiRequest('/api/closed_payment_update', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
   }
 }
 // Export both APIs

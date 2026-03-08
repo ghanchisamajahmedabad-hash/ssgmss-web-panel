@@ -4,7 +4,7 @@ import { collection, query, where, getDocs, orderBy } from 'firebase/firestore';
 import { db } from '../../../lib/firbase-client';
 
 
-export const usePaymentHistory = () => {
+export const useClosingPaymentHistory = () => {
   const [paymentGroups, setPaymentGroups] = useState([]);
   const [paymentTransactions, setPaymentTransactions] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -18,8 +18,8 @@ export const usePaymentHistory = () => {
       const groupsQuery = query(
         collection(db, 'paymentGroups'),
         where('agentId', '==', agentId),
-        where('paymentType', '==', 'joinFees'),
-        orderBy('createdAt', 'desc')
+        where('paymentType', '==', 'closingPayment'), 
+        orderBy('createdAt', 'desc'),
       );
       const groupsSnapshot = await getDocs(groupsQuery);
       const groups = [];
@@ -29,7 +29,7 @@ export const usePaymentHistory = () => {
         
         // Fetch transactions for this group
         const transactionsQuery = query(
-          collection(db, 'memberJoinFees'),
+          collection(db, 'memberClosingFees'),
           where('groupId', '==', groupDoc.id)
         );
         const transactionsSnapshot = await getDocs(transactionsQuery);

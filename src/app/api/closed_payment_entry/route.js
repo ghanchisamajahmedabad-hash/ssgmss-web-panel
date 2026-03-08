@@ -74,6 +74,7 @@ const getMembersGenrateEntry = async (body) => {
           id: memberDoc.id,
           ...memberData,
           memberPrograms: [],
+          allowedClosings,
           calculate_Amout,
           validClosingsCount: allowedClosings.length
         };
@@ -89,37 +90,169 @@ const getMembersGenrateEntry = async (body) => {
   }
 }
 
+
 export async function POST(req) {
   const authResult = await verifyToken(req);
   if (!authResult.success) {
-    return NextResponse.json(
-      { success: false, message: authResult.error },
-      { status: authResult.status }
-    );
+    return NextResponse.json({ success: false, message: authResult.error }, { status: authResult.status });
   }
 
-  if (!checkRole(['superadmin', 'admin'], authResult.user.role)) {
-    return NextResponse.json(
-      { success: false, message: "No Permission" },
-      { status: 403 }
-    );
-  }
+  const body = await req.json();
+  const { programId, groupId,memberClosingList } = body;
 
- const body = await req.json();
+  if (!groupId || !programId) {
+    return NextResponse.json({ success: false, message: "groupId and programId are required" }, { status: 400 });
+  }
 
   try {
-      const membersList=await getMembersGenrateEntry(body)
-      console.log(membersList,'membersList')
+    const membersList = await getMembersGenrateEntry(body);
+
+    if (!membersList.length) {
+      return NextResponse.json({ success: false, message: "No eligible members found" });
+    }
+
+    const batch = db.batch();
+    const timestamp = admin.firestore.FieldValue.serverTimestamp();
+    const paymentColRef = db.collection("closing_payment");
+
+    let totalGlobalAmount = 0;
+    let totalGlobalClosingCount = 0;
+    const agentStatsUpdates = {}; 
+
+    for (const member of membersList) {
+      const amount = Number(member.calculate_Amout || 0);
+      const closingCount = Number(member.validClosingsCount || 0);
+      console.log(amount,"amount")
+      console.log(closingCount,"closingCount")
+
+      if (amount <= 0 || closingCount <= 0) continue;
+
+      totalGlobalAmount += amount;
+      totalGlobalClosingCount += closingCount;
+      
+      // 1. Create Individual Closing Payment Entry
+      const entryRef = paymentColRef.doc();
+      batch.set(entryRef, {
+        memberId: member.id,
+        memberName: member.displayName || '',
+        agentId: member.agentId || '',
+        amount: amount,
+        validClosingsCount: closingCount,
+        closingMemberIds: member.allowedClosings.map(c => c.closed_memberId || c.memberId || 'unknown'),
+        programId: programId,
+        closingGroupId: groupId,
+        status: "pending", // Payment is currently pending
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        active_flag: true,
+        deleted_flag: false,
+        generatedBy: authResult.user.uid
+      });
+
+      // 2. Update Member Main Document Counters
+      console.log(member.id,'member.id')
+      const memberRef = db.collection('members').doc(member.id);
+      batch.update(memberRef, {
+        // Financials
+        closing_totalAmount: admin.firestore.FieldValue.increment(amount),
+        closing_pendingAmount: admin.firestore.FieldValue.increment(amount),
+        // Counts
+        totalClosingCount: admin.firestore.FieldValue.increment(closingCount),
+        pendingClosingCount: admin.firestore.FieldValue.increment(closingCount),
+        updated_at: timestamp
+      });
+
+      // 3. Update Member Sub-collection Program
+      const memberProgramRef = memberRef.collection('memberPrograms').doc(programId);
+      batch.set(memberProgramRef, {
+        closing_totalAmount: admin.firestore.FieldValue.increment(amount),
+        closing_pendingAmount: admin.firestore.FieldValue.increment(amount),
+        totalClosingCount: admin.firestore.FieldValue.increment(closingCount),
+        pendingClosingCount: admin.firestore.FieldValue.increment(closingCount),
+        updated_at: timestamp
+      }, { merge: true });
+
+      // 4. Track Agent Aggregate Data
+      if (member.agentId) {
+        if (!agentStatsUpdates[member.agentId]) {
+          agentStatsUpdates[member.agentId] = { amount: 0, count: 0 };
+        }
+        agentStatsUpdates[member.agentId].amount += amount;
+        agentStatsUpdates[member.agentId].count += closingCount;
+      }
+    }
+
+    // 5. Update the Closing Group Summary (groupClosings)
+    const groupRef = db.collection('groupClosings').doc(groupId);
+    batch.set(groupRef, {
+      totalAmount: admin.firestore.FieldValue.increment(totalGlobalAmount),
+      totalPendingAmount: admin.firestore.FieldValue.increment(totalGlobalAmount),
+      totalPaidAmount: admin.firestore.FieldValue.increment(0),
+      totalClosingCount: admin.firestore.FieldValue.increment(totalGlobalClosingCount),
+      pendingClosingCount: admin.firestore.FieldValue.increment(totalGlobalClosingCount), // Total members' closings pending in this group
+      paidClosingCount: admin.firestore.FieldValue.increment(0),
+      totalMembersProcessed: admin.firestore.FieldValue.increment(membersList.length),
+      status: 'generated',
+      updated_at: timestamp
+    }, { merge: true });
+
+    for (const [agentId, stats] of Object.entries(agentStatsUpdates)) {
+      const agentRef = db.collection('agents').doc(agentId);
+      
+      // We use dot notation to update specific fields inside the programStats map
+      // This prevents overwriting other programs' data
+      const updateData = {
+        // Global Agent Stats
+        closing_pendingAmount: admin.firestore.FieldValue.increment(stats.amount),
+        closing_totalAmount: admin.firestore.FieldValue.increment(stats.amount),
+        totalClosingCount: admin.firestore.FieldValue.increment(stats.count),
+        closedCount: admin.firestore.FieldValue.increment(memberClosingList.length), // No change in closed count at generation time
+        pendingClosingCount: admin.firestore.FieldValue.increment(stats.count),
+        updated_at: timestamp,
+        // Program-Specific Stats (using dot notation for safety)
+        [`programStats.${programId}.totalClosingPendingAmount`]: admin.firestore.FieldValue.increment(stats.amount),
+        [`programStats.${programId}.closedCount`]: admin.firestore.FieldValue.increment(memberClosingList.length),
+        [`programStats.${programId}.totalClosingAmount`]: admin.firestore.FieldValue.increment(stats.amount),
+        [`programStats.${programId}.totalClosingCount`]: admin.firestore.FieldValue.increment(stats.count),
+        [`programStats.${programId}.pendingClosingCount`]: admin.firestore.FieldValue.increment(stats.count),
+        [`programStats.${programId}.lastUpdated`]: timestamp
+      };
+
+      batch.update(agentRef, updateData);
+    }
+console.log(programId,"programId")
+    // 7. Update Global Program & Org Stats
+    const globalProgramRef = db.collection('programs').doc(programId);
+    batch.set(globalProgramRef, {
+        closedCount: admin.firestore.FieldValue.increment(memberClosingList.length), // No change in closed count at generation time
+      totalClosingPendingAmount: admin.firestore.FieldValue.increment(totalGlobalAmount),
+      totalClosingAmount: admin.firestore.FieldValue.increment(totalGlobalAmount),
+      totalClosingCount: admin.firestore.FieldValue.increment(totalGlobalClosingCount),
+      pendingClosingCount: admin.firestore.FieldValue.increment(totalGlobalClosingCount),
+      updated_at: timestamp
+    }, { merge: true });
+
+    // 7. Update Organization Stats
+    const orgRef = db.collection('organizationStats').doc('current');
+    batch.set(orgRef, {
+        closedCount: admin.firestore.FieldValue.increment(memberClosingList.length), // No change in closed count at generation time
+          totalClosingPendingAmount: admin.firestore.FieldValue.increment(totalGlobalAmount),
+      totalClosingAmount: admin.firestore.FieldValue.increment(totalGlobalAmount),
+      totalClosingCount: admin.firestore.FieldValue.increment(totalGlobalClosingCount),
+      pendingClosingCount: admin.firestore.FieldValue.increment(totalGlobalClosingCount),
+      updated_at: timestamp
+    }, { merge: true });
+
+    await batch.commit();
+
     return NextResponse.json({
       success: true,
-      data: membersList
+      message: `Processed ${membersList.length} members for Group: ${groupId}`,
+      summary: { totalGlobalAmount, totalGlobalClosingCount }
     });
 
   } catch (err) {
-    console.error(err);
-    return NextResponse.json(
-      { success: false, message: "Server Error" },
-      { status: 500 }
-    );
+    console.error("Critical Processing Error:", err);
+    return NextResponse.json({ success: false, message: err.message }, { status: 500 });
   }
 }

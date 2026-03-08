@@ -39,9 +39,13 @@ import dayjs from 'dayjs';
 import { auth, db } from '../../../../../lib/firbase-client';
 import { paymentApi } from '@/utils/api';
 import { collection, query, where, getDocs, orderBy } from 'firebase/firestore';
-import PaymentConfirmationDrawer from '../components/PaymentConfirmationDrawer';
-import TransactionDetailDrawer from '../components/TransactionDetailDrawer';
-import PaymentHistoryDrawer from '../components/PaymentHistoryDrawer';
+// import PaymentConfirmationDrawer from '../components/PaymentConfirmationDrawer';
+// import TransactionDetailDrawer from '../components/TransactionDetailDrawer';
+// import PaymentHistoryDrawer from '../components/PaymentHistoryDrawer';
+import TransactionDetailDrawer from '../../join-fees/components/TransactionDetailDrawer';
+import PaymentConfirmationDrawer from '../../join-fees/components/PaymentConfirmationDrawer';
+import ClosingPaymentConfirmationDrawer from '../components/PaymentConfirmationDrawer';
+import ClosingPaymentHistoryDrawer from '../components/PaymentHistoryDrawer';
 
 
 const { Title, Text } = Typography;
@@ -136,13 +140,14 @@ const MemberPaymentPage = () => {
     try {
       const membersData = await fetchMembersByAgent(agentId);
       
+      
       // Process members with payment calculations and handle deleted ones
       const processedMembers = membersData.map(member => ({
         ...member,
         key: member.id,
-        pendingAmount: member.delete_flag ? 0 : (member.pendingAmount || member.joinFees - (member.paidAmount || 0) || 0),
-        paidAmount: member.paidAmount || 0,
-        totalFees: member.delete_flag ? 0 : (member.joinFees || 0),
+        closing_pendingAmount: member.delete_flag ? 0 : (member.closing_pendingAmount || 0),
+        paidAmount: member.closing_paidAmount || 0,
+        totalFees: member.delete_flag ? 0 : (member.closing_totalAmount || 0),
         programNames: member.programIds?.map(pid => 
           programList?.find(p => p.id === pid)?.name
         ).filter(Boolean).join(', ') || 'No Program',
@@ -181,9 +186,9 @@ const MemberPaymentPage = () => {
   const fetchMemberPaymentHistory = async (memberId) => {
     setHistoryLoading(true);
     try {
-      // Query memberJoinFees collection for this member
+      // Query memberClosingFees collection for this member
       const transactionsQuery = query(
-        collection(db, 'memberJoinFees'),
+        collection(db, 'memberClosingFees'),
         where('memberId', '==', memberId),
         orderBy('createdAt', 'desc')
       );
@@ -240,7 +245,7 @@ const MemberPaymentPage = () => {
   const handleSelectAll = (checked) => {
     if (checked) {
       const selectableMembers = filteredMembers
-        .filter(m => !m.isDeleted && m.pendingAmount > 0)
+        .filter(m => !m.isDeleted && m.closing_pendingAmount > 0)
         .map(m => m.id);
       setSelectedMembers(selectableMembers);
     } else {
@@ -253,8 +258,8 @@ const MemberPaymentPage = () => {
     if (member?.isDeleted) return;
     
     // Validate amount doesn't exceed pending
-    if (value > member.pendingAmount) {
-      message.warning(`Amount cannot exceed pending amount (₹${member.pendingAmount.toLocaleString()})`);
+    if (value > member.closing_pendingAmount) {
+      message.warning(`Amount cannot exceed pending amount (₹${member.closing_pendingAmount.toLocaleString()})`);
       return;
     }
     
@@ -268,13 +273,12 @@ const MemberPaymentPage = () => {
     if (!globalPaymentAmount || selectedMembers.length === 0) return;
     
     const amount = parseFloat(globalPaymentAmount) || 0;
-       const perMember = Math.floor(amount / selectedMembers.length);
-    
+    const perMember = Math.floor(amount / selectedMembers.length);
     const updatedPayments = { ...memberPayments };
     selectedMembers.forEach(memberId => {
       const member = members.find(m => m.id === memberId);
       if (member && !member.isDeleted) {
-        updatedPayments[memberId] = Math.min(perMember, member.pendingAmount);
+        updatedPayments[memberId] = Math.min(perMember, member.closing_pendingAmount);
       }
     });
     
@@ -286,7 +290,7 @@ const MemberPaymentPage = () => {
     const paymentsToProcess = selectedMembers.filter(memberId => {
       const amount = parseFloat(memberPayments[memberId]) || 0;
       const member = members.find(m => m.id === memberId);
-      return !member?.isDeleted && amount > 0 && amount <= member.pendingAmount;
+      return !member?.isDeleted && amount > 0 && amount <= member.closing_pendingAmount;
     });
 
     if (paymentsToProcess.length === 0) {
@@ -332,7 +336,7 @@ const MemberPaymentPage = () => {
         fileUrl = "https://firebasestorage.googleapis.com/v0/b/ssgms-project-dev.firebasestorage.app/o/memberpayments%2FJoinFees%2Fsample.jpeg?alt=media&token=sample-token";
       }
 
-      const res = await paymentApi.JoinFeesAdd({
+      const res = await paymentApi.closedPaymentUpdate({
         memberPayments: processingPayments,
         paymentDate: paymentDate.toISOString(),
         paymentMethod,
@@ -387,8 +391,8 @@ const MemberPaymentPage = () => {
       title: () => (
         <Checkbox 
           onChange={(e) => handleSelectAll(e.target.checked)}
-          checked={selectedMembers.length === filteredMembers.filter(m => !m.isDeleted && m.pendingAmount > 0).length && filteredMembers.filter(m => !m.isDeleted && m.pendingAmount > 0).length > 0}
-          indeterminate={selectedMembers.length > 0 && selectedMembers.length < filteredMembers.filter(m => !m.isDeleted && m.pendingAmount > 0).length}
+          checked={selectedMembers.length === filteredMembers.filter(m => !m.isDeleted && m.closing_pendingAmount > 0).length && filteredMembers.filter(m => !m.isDeleted && m.closing_pendingAmount > 0).length > 0}
+          indeterminate={selectedMembers.length > 0 && selectedMembers.length < filteredMembers.filter(m => !m.isDeleted && m.closing_pendingAmount > 0).length}
         />
       ),
       key: 'selection',
@@ -397,7 +401,7 @@ const MemberPaymentPage = () => {
         <Checkbox 
           checked={selectedMembers.includes(record.id)}
           onChange={(e) => handleMemberSelect(record.id, e.target.checked)}
-          disabled={record.isDeleted || record.pendingAmount === 0}
+          disabled={record.isDeleted || record.closing_pendingAmount === 0}
         />
       ),
     },
@@ -443,16 +447,18 @@ const MemberPaymentPage = () => {
       ),
     },
     {
-      title: 'Program',
-      key: 'program',
+      title: 'Closing forms',
+      key: 'totalClosingCount',
       width: 100,
       render: (_, record) => {
-        const programCount = record.programIds?.length || 0;
+        console.log(record.payAmount,'record')
+        const programCount = record.totalClosingCount || 0;
+
         return (
           <Tooltip title={record.programNames}>
             <Tag color={record.isDeleted ? 'default' : 'geekblue'} style={{ fontSize: '11px' }}>
-              {programCount} Program{programCount !== 1 ? 's' : ''}
-              {programCount > 0 && ` • ${record.programPaymentSummary?.fullyPaidPrograms || 0} paid`}
+              {programCount} closing{programCount !== 1 ? 's' : ''}
+              {programCount > 0 && ` • ${record.pendingClosingCount || 0} pending`}
             </Tag>
           </Tooltip>
         );
@@ -490,7 +496,7 @@ const MemberPaymentPage = () => {
     },
     {
       title: 'Pending (₹)',
-      dataIndex: 'pendingAmount',
+      dataIndex: 'closing_pendingAmount',
       width: 90,
       align: 'right',
       render: (pending, record) => {
@@ -551,9 +557,9 @@ const MemberPaymentPage = () => {
             placeholder="Enter amount"
             value={memberPayments[record.id]}
             onChange={(value) => handlePaymentAmountChange(record.id, value)}
-            disabled={record.pendingAmount === 0 || !selectedMembers.includes(record.id)}
+            disabled={record.closing_pendingAmount === 0 || !selectedMembers.includes(record.id)}
             min={0}
-            max={record.pendingAmount}
+            max={record.closing_pendingAmount}
             precision={0}
             style={{ width: 110 }}
             formatter={value => `₹ ${value}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}
@@ -568,12 +574,12 @@ const MemberPaymentPage = () => {
   const activeMembers = members.filter(m => !m.isDeleted);
   const totalSelectedPending = members
     .filter(m => selectedMembers.includes(m.id) && !m.isDeleted)
-    .reduce((sum, m) => sum + m.pendingAmount, 0);
+    .reduce((sum, m) => sum + m.closing_pendingAmount, 0);
   
   const totalSelectedMembers = selectedMembers.length;
   const totalPaymentAmount = getTotalSelectedPayment();
-  const totalOverallPending = activeMembers.reduce((sum, m) => sum + m.pendingAmount, 0);
-  const totalOverallPaid = activeMembers.reduce((sum, m) => sum + (m.paidAmount || 0), 0);
+  const totalOverallPending = activeMembers.reduce((sum, m) => sum + m.closing_pendingAmount, 0);
+  const totalOverallPaid = activeMembers.reduce((sum, m) => sum + (m.closing_paidAmount || 0), 0);
 
   // Get selected members data for drawer
   const selectedMembersData = members.filter(m => 
@@ -672,8 +678,8 @@ const MemberPaymentPage = () => {
             <Space size={8}>
               <Checkbox 
                 onChange={(e) => handleSelectAll(e.target.checked)}
-                checked={selectedMembers.length === filteredMembers.filter(m => !m.isDeleted && m.pendingAmount > 0).length && filteredMembers.filter(m => !m.isDeleted && m.pendingAmount > 0).length > 0}
-                indeterminate={selectedMembers.length > 0 && selectedMembers.length < filteredMembers.filter(m => !m.isDeleted && m.pendingAmount > 0).length}
+                checked={selectedMembers.length === filteredMembers.filter(m => !m.isDeleted && m.closing_pendingAmount > 0).length && filteredMembers.filter(m => !m.isDeleted && m.closing_pendingAmount > 0).length > 0}
+                indeterminate={selectedMembers.length > 0 && selectedMembers.length < filteredMembers.filter(m => !m.isDeleted && m.closing_pendingAmount > 0).length}
               >
                 <Text strong>Select All</Text>
               </Checkbox>
@@ -821,7 +827,7 @@ const MemberPaymentPage = () => {
       )}
 
       {/* Payment History Drawer */}
-      <PaymentHistoryDrawer
+      <ClosingPaymentHistoryDrawer
         visible={historyDrawerVisible}
         onClose={() => {
           setHistoryDrawerVisible(false);
@@ -850,7 +856,7 @@ const MemberPaymentPage = () => {
       />
 
       {/* Payment Confirmation Drawer */}
-      <PaymentConfirmationDrawer
+      <ClosingPaymentConfirmationDrawer
         visible={isPaymentDrawerVisible}
         onClose={() => setIsPaymentDrawerVisible(false)}
         onConfirm={confirmPayment}
