@@ -129,7 +129,7 @@ const ClosingPayment = () => {
         color="warning"
         style={{ borderRadius: 20, fontWeight: 600 }}
       >
-        ₹{pending.toLocaleString()} Due
+        ₹{pending?.toLocaleString()} Due
       </Tag>
     );
   };
@@ -313,7 +313,7 @@ const ClosingPayment = () => {
       align: 'right',
       render: (_, r) => (
         <Text style={{ color: r.closing_pendingAmount > 0 ? colors.error : colors.success, fontWeight: 600 }}>
-          ₹{r.closing_pendingAmount.toLocaleString()}
+          ₹{r.closing_pendingAmount?.toLocaleString()}
         </Text>
       ),
     },

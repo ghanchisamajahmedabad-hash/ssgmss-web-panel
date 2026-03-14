@@ -140,11 +140,11 @@ const SideBar = ({ collapsed, setCollapsed }) => {
         label: collapsed ? null : 'Programs',
         module: 'programs',
         children: [
-          {
-            key: '/programs/members',
-            label: 'Members',
-            module: 'programs'
-          },
+          // {
+          //   key: '/programs/members',
+          //   label: 'Members',
+          //   module: 'programs'
+          // },
           {
             key: '/programs/closing-forms',
             label: 'Closing Forms',
@@ -240,12 +240,12 @@ const SideBar = ({ collapsed, setCollapsed }) => {
           },
         ],
       },
-      {
-        key: '/rule-policy',
-        icon: <FileProtectOutlined />,
-        label: collapsed ? null : 'Rule & Policy',
-        module: 'rulePolicy'
-      },
+      // {
+      //   key: '/rule-policy',
+      //   icon: <FileProtectOutlined />,
+      //   label: collapsed ? null : 'Rule & Policy',
+      //   module: 'rulePolicy'
+      // },
       {
         key: '/expenses',
         icon: <TagOutlined />,

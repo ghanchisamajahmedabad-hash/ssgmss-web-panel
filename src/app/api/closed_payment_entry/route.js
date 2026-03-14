@@ -129,7 +129,7 @@ export async function POST(req) {
 
       totalGlobalAmount += amount;
       totalGlobalClosingCount += closingCount;
-      
+      console.log(member.allowedClosings," member.allowedClosings")
       // 1. Create Individual Closing Payment Entry
       const entryRef = paymentColRef.doc();
       batch.set(entryRef, {
@@ -140,7 +140,7 @@ export async function POST(req) {
         validClosingsCount: closingCount,
         closingMemberIds: member.allowedClosings.map(c => c.closed_memberId || c.memberId || 'unknown'),
         programId: programId,
-        closingGroupId: groupId,
+        closingGroupId: groupId,  
         status: "pending", // Payment is currently pending
         createdAt: timestamp,
         updatedAt: timestamp,

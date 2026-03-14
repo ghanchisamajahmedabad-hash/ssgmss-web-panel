@@ -44,27 +44,27 @@ const TopBar = ({ collapsed, setCollapsed }) => {
   };
   // Mock notifications data
   const notifications = [
-    {
-      id: 1,
-      title: 'New Match Request',
-      description: 'Sarah Johnson sent you a match request',
-      time: '5 min ago',
-      unread: true,
-    },
-    {
-      id: 2,
-      title: 'Profile Approved',
-      description: 'Your profile has been approved and is now live',
-      time: '1 hour ago',
-      unread: true,
-    },
-    {
-      id: 3,
-      title: 'New Message',
-      description: 'You have a new message from Michael Brown',
-      time: '2 hours ago',
-      unread: false,
-    },
+    // {
+    //   id: 1,
+    //   title: 'New Match Request',
+    //   description: 'Sarah Johnson sent you a match request',
+    //   time: '5 min ago',
+    //   unread: true,
+    // },
+    // {
+    //   id: 2,
+    //   title: 'Profile Approved',
+    //   description: 'Your profile has been approved and is now live',
+    //   time: '1 hour ago',
+    //   unread: true,
+    // },
+    // {
+    //   id: 3,
+    //   title: 'New Message',
+    //   description: 'You have a new message from Michael Brown',
+    //   time: '2 hours ago',
+    //   unread: false,
+    // },
   ];
 
   const unreadCount = notifications.filter((n) => n.unread).length;
