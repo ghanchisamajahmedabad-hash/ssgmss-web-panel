@@ -3,33 +3,86 @@ import { createContext, useContext, useEffect, useState } from "react";
 import { onAuthStateChanged } from "firebase/auth";
 import { doc, getDoc } from "firebase/firestore";
 import { message } from "antd";
-import { redirect } from "next/navigation";
+import { useRouter, usePathname } from "next/navigation";
 import { auth, db } from "../../../lib/firbase-client";
 import { Provider } from "react-redux";
 import store from "@/Redux/store";
 
 const AuthContext = createContext();
 
+// ── Pages that never need a permission check ──────────────────────────────────
+const PUBLIC_PATHS = [
+  "/auth/login",
+  "/auth/register",
+  "/auth/forgot-password",
+  "/auth/reset-password",
+];
+
+// ── Exact same logic as SideBar — must stay in sync ──────────────────────────
+function isSuperAdmin(user) {
+  return user?.role === "superadmin";
+}
+
+function hasPageAccess(user, pageKey) {
+  if (!user) return false;
+  if (isSuperAdmin(user)) return true;
+
+  // Exact match only
+  const pages = user.permissions?.pages || [];
+  return pages.includes(pageKey);
+}
+
+/**
+ * For nested routes like /settings/security/sessions we also accept access if
+ * the EXACT child path is listed — but we do NOT grant access just because a
+ * parent is listed (that was the original bug).
+ *
+ * We DO allow the parent path itself to be "visited" as a passthrough when the
+ * user has at least one child under it, because Ant Menu parent items are
+ * clickable. The actual page content for that parent key should handle the
+ * redirect internally, but we don't hard-block it here.
+ */
+function canVisit(user, pathname) {
+  if (!user) return false;
+  if (isSuperAdmin(user)) return true;
+
+  const pages = user.permissions?.pages || [];
+
+  // 1. Exact match
+  if (pages.includes(pathname)) return true;
+
+  // 2. Allow a parent path if the user has at least one child listed under it.
+  //    e.g. user has /programs/closing-forms → allow /programs route itself
+  //    so the menu sub-item is reachable without being blocked on the parent URL.
+  const hasChildAccess = pages.some(
+    (p) => p !== pathname && p.startsWith(pathname + "/")
+  );
+  if (hasChildAccess) return true;
+
+  return false;
+}
+
+// ── Provider ──────────────────────────────────────────────────────────────────
 export function AuthProvider({ children }) {
-  const [user, setUser] = useState(null);
+  const [user, setUser]       = useState(null);
   const [loading, setLoading] = useState(true);
   const [messageApi, contextHolder] = message.useMessage();
 
+  const router   = useRouter();
+  const pathname = usePathname();
+
+  // ── Auth state ──────────────────────────────────────────────────────────────
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       try {
         if (firebaseUser) {
-          // Fetch additional user data from Firestore
           const userDoc = await getDoc(doc(db, "users", firebaseUser.uid));
-          
           if (userDoc.exists()) {
-            // Combine Firebase Auth user with Firestore data
             setUser({
-                tokens:firebaseUser?.stsTokenManager,
-              ...userDoc.data()
+              tokens: firebaseUser?.stsTokenManager,
+              ...userDoc.data(),
             });
           } else {
-            // If no Firestore document exists, just use Firebase Auth user
             setUser(firebaseUser);
           }
         } else {
@@ -47,19 +100,42 @@ export function AuthProvider({ children }) {
     return () => unsubscribe();
   }, [messageApi]);
 
-  // useEffect(() => {
-  //   if (!loading && !user) {
-  //     messageApi.error("You need to be logged in to access this page");
-  //     redirect("/auth/login");
-  //   }
-  // }, [user, loading, messageApi]);
+  // ── Route guard — runs on every pathname change ─────────────────────────────
+  useEffect(() => {
+    if (loading) return; // wait until auth state is resolved
+
+    const isPublic = PUBLIC_PATHS.some(
+      (p) => pathname === p || pathname.startsWith(p + "/")
+    );
+
+    // Not logged in → send to login
+    if (!user) {
+      if (!isPublic) {
+        messageApi.error("Please login to continue");
+        router.replace("/auth/login");
+      }
+      return;
+    }
+
+    // Logged in but on a public/auth page → send to dashboard
+    if (isPublic) {
+      router.replace("/");
+      return;
+    }
+
+    // Logged in — check page permission
+    if (!canVisit(user, pathname)) {
+      messageApi.error("You don't have permission to access this page");
+      router.replace("/unauthorized");
+    }
+  }, [loading, user, pathname]);
 
   return (
     <AuthContext.Provider value={{ user, loading, messageApi }}>
-              <Provider store={store}>
-      {contextHolder}
-      {children}
-              </Provider>
+      <Provider store={store}>
+        {contextHolder}
+        {children}
+      </Provider>
     </AuthContext.Provider>
   );
 }

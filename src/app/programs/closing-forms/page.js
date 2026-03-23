@@ -1,535 +1,352 @@
 "use client"
 import React, { useState, useEffect } from 'react'
 import { useSelector } from 'react-redux'
-import { 
-  Button, Card, Table, Space, Input, Tag, Avatar, 
-  message, Drawer, Select, Row, Col, Statistic, Tabs,
-  Tooltip
+import {
+  Button, Card, Table, Space, Input, Tag, Avatar,
+  message, Select, Row, Col, Statistic, Tabs, Modal,
+  Tooltip, Badge, Descriptions, List, Typography
 } from 'antd'
-import { 
-  SearchOutlined, EyeOutlined, UserOutlined, 
+import {
+  SearchOutlined, EyeOutlined, UserOutlined,
   PlusOutlined, ArrowLeftOutlined, CloseCircleOutlined,
-  TeamOutlined, CalendarOutlined, FileTextOutlined
+  TeamOutlined, CalendarOutlined, FileTextOutlined,
+  RollbackOutlined, ExclamationCircleOutlined,
+  HeartFilled, ClockCircleOutlined, CheckCircleOutlined,
+  InfoCircleOutlined
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
-import { collection, query, where, getDocs, orderBy } from 'firebase/firestore'
+import relativeTime from 'dayjs/plugin/relativeTime'
+import {
+  collection, query, where, getDocs, orderBy, limit
+} from 'firebase/firestore'
 import { db, auth } from '../../../../lib/firbase-client'
 import MemberDetailDrawer from '@/app/members/components/MemberDetailsView'
 import MarriageClosingDrawer from './components/MarriageClosingDrawer'
-import GroupClosingDetailsDrawer from './components/GroupClosingDetailsDrawer'
+import { paymentApi } from '@/utils/api'
 
-const { Option } = Select
-const { TabPane } = Tabs
+dayjs.extend(relativeTime)
+
+const { Option }  = Select
+const { confirm } = Modal
+const { Text }    = Typography
 
 const colors = {
-  primary: '#db2777',
-  secondary: '#ea580c',
-  success: '#16a34a',
-  error: '#dc2626',
-  info: '#2563eb',
-  warning: '#f59e0b',
-  background: '#fff8f5',
+  primary:    '#db2777', secondary: '#ea580c',
+  success:    '#16a34a', error: '#dc2626',
+  info:       '#2563eb', warning: '#f59e0b',
+  background: '#fff8f5', surface: '#ffffff',
+  border:     '#fce7f3', muted: '#9ca3af', fg: '#111827',
+}
+const gradPrimary = `linear-gradient(135deg, ${colors.primary} 0%, ${colors.secondary} 100%)`
+
+// ── Closing Group Detail Modal ─────────────────────────────────────────────────
+const ClosingGroupModal = ({ group, visible, onClose, programList }) => {
+  if (!group) return null
+  const program = programList.find(p => p.id === group.programId)
+  return (
+    <Modal open={visible} onCancel={onClose} footer={null} width={720}
+      title={<Space><HeartFilled style={{ color: colors.primary }} /><span style={{ fontWeight: 700 }}>Closing Group Detail</span><Tag color={group.status === 'reversed' ? 'red' : 'green'}>{group.status === 'reversed' ? 'Reversed' : 'Active'}</Tag></Space>}>
+      <Descriptions size="small" bordered column={2} style={{ marginBottom: 16 }}>
+        <Descriptions.Item label="Group ID"><Text copyable style={{ fontSize: 11 }}>{group.id}</Text></Descriptions.Item>
+        <Descriptions.Item label="Program">{program?.name || group.programId}</Descriptions.Item>
+        <Descriptions.Item label="Closed By">{group.closedByName || '—'}</Descriptions.Item>
+        <Descriptions.Item label="Closed At">{group.closedDate ? dayjs(group.closedDate).format('DD/MM/YYYY HH:mm') : '—'}</Descriptions.Item>
+        <Descriptions.Item label="Member Count"><Tag color="blue">{group.memberCount}</Tag></Descriptions.Item>
+        <Descriptions.Item label="Total Amount"><span style={{ fontWeight: 700, color: colors.success }}>₹{group.totalAmount?.toLocaleString()}</span></Descriptions.Item>
+        {group.status === 'reversed' && (
+          <>
+            <Descriptions.Item label="Reversed By">{group.reversedByName || '—'}</Descriptions.Item>
+            <Descriptions.Item label="Reversal Reason">{group.reversalReason || '—'}</Descriptions.Item>
+          </>
+        )}
+      </Descriptions>
+      <div style={{ fontWeight: 700, marginBottom: 8, color: colors.fg }}>Members ({group.members?.length || 0})</div>
+      <div style={{ maxHeight: 360, overflowY: 'auto' }}>
+        <List size="small" dataSource={group.members || []}
+          renderItem={m => (
+            <List.Item extra={<Space>{m.invitationUrl && <Button size="small" type="link" onClick={() => window.open(m.invitationUrl)}>View Card</Button>}<Tag color="blue">₹{m.amount}</Tag></Space>}>
+              <List.Item.Meta
+                avatar={<Avatar icon={<UserOutlined />} size={30} style={{ background: colors.primary + '30', color: colors.primary }} />}
+                title={<Space size={4}><span style={{ fontWeight: 600, fontSize: 13 }}>{m.memberName}</span><Tag style={{ fontSize: 10 }}>{m.registrationNumber}</Tag></Space>}
+                description={<Space size={4} style={{ fontSize: 11, color: colors.muted }}>{m.phone && <span>{m.phone}</span>}{m.marriageDate && <span>• {dayjs(m.marriageDate).format('DD/MM/YYYY')}</span>}{m.note && <span>• {m.note}</span>}</Space>}
+              />
+            </List.Item>
+          )} />
+      </div>
+    </Modal>
+  )
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
 const ClosingMembersPage = () => {
-  const [loading, setLoading] = useState(false)
-  const [groups, setGroups] = useState([])
-  const [members, setMembers] = useState([])
-  const [filteredGroups, setFilteredGroups] = useState([])
-  const [selectedGroup, setSelectedGroup] = useState(null)
-  const [selectedMember, setSelectedMember] = useState(null)
-  const [groupDrawerVisible, setGroupDrawerVisible] = useState(false)
-  const [detailDrawerVisible, setDetailDrawerVisible] = useState(false)
-  const [activeTab, setActiveTab] = useState('1')
-  
-  // Add Closing Form
-  const [closingFormVisible, setClosingFormVisible] = useState(false)
-  
-  // Search
-  const [searchText, setSearchText] = useState('')
-  const [programFilter, setProgramFilter] = useState('all')
+  const [loading,              setLoading]              = useState(false)
+  const [members,              setMembers]              = useState([])
+  const [selectedMember,       setSelectedMember]       = useState(null)
+  const [detailDrawerVisible,  setDetailDrawerVisible]  = useState(false)
+  const [closingFormVisible,   setClosingFormVisible]   = useState(false)
+  const [activeTab,            setActiveTab]            = useState('closed')
+  const [closingGroups,        setClosingGroups]        = useState([])
+  const [groupsLoading,        setGroupsLoading]        = useState(false)
+  const [reversingId,          setReversingId]          = useState(null)
+  const [selectedGroup,        setSelectedGroup]        = useState(null)
+  const [groupModalVisible,    setGroupModalVisible]    = useState(false)
+  const [searchText,           setSearchText]           = useState('')
+  const [programFilter,        setProgramFilter]        = useState('all')
+  const [groupProgramFilter,   setGroupProgramFilter]   = useState('all')
 
-  const programList = useSelector((state) => state.data.programList || [])
-  const agentList = useSelector((state) => state.data.agentList || [])
+  const programList = useSelector((s) => s.data.programList || [])
+  const agentList   = useSelector((s) => s.data.agentList   || [])
   const currentUser = auth.currentUser
 
-  // Fetch all data
+  // ── Fetch all active members (single programId flat field) ─────────────────
   const fetchData = async () => {
     setLoading(true)
     try {
-      // Fetch members
-      const membersQuery = query(
+      const snap = await getDocs(query(
         collection(db, 'members'),
         where('delete_flag', '==', false),
-        where('status','==','active')
-      )
-      const membersSnapshot = await getDocs(membersQuery)
-      const membersData = membersSnapshot.docs.map(doc => ({
-        id: doc.id,
-        key: doc.id,
-        ...doc.data(),
-        displayName: doc.data().displayName || doc.data().name || 'Unknown',
-      }))
-      console.log(membersData,'membersData')
-      setMembers(membersData)
-
-      // Fetch group closings
-      const groupsQuery = query(
-        collection(db, 'groupClosings'),
-        orderBy('closedAt', 'desc')
-      )
-      const groupsSnapshot = await getDocs(groupsQuery)
-      const groupsData = await Promise.all(groupsSnapshot.docs.map(async (doc) => {
-        const groupData = {
-          id: doc.id,
-          key: doc.id,
-          ...doc.data(),
-          closedAt: doc.data().closedAt?.toDate?.() || doc.data().closedAt,
-        }
-
-        // Fetch member details for this group
-        if (groupData.memberIds && groupData.memberIds.length > 0) {
-          const memberDetails = await Promise.all(
-            groupData.memberIds.map(async (memberId) => {
-              const member = membersData.find(m => m.id === memberId)
-              if (member) {
-                // Fetch individual closing record for this member
-                const closingQuery = query(
-                  collection(db, 'memberClosings'),
-                  where('groupId', '==', doc.id),
-                  where('memberId', '==', memberId)
-                )
-                const closingSnapshot = await getDocs(closingQuery)
-                const closingData = closingSnapshot.docs[0]?.data()
-                
-                return {
-                  ...member,
-                  marriage_date: closingData?.marriageDate,
-                  marriage_note: closingData?.note,
-                  marriage_invitation_url: closingData?.invitationUrl,
-                  closedAt: closingData?.closedAt?.toDate?.() || closingData?.closedAt
-                }
-              }
-              return null
-            })
-          )
-          groupData.members = memberDetails.filter(m => m !== null)
-        }
-
-        return groupData
-      }))
-      
-      setGroups(groupsData)
-      setFilteredGroups(groupsData)
-    } catch (error) {
-      console.error('Error fetching data:', error)
-      message.error('Failed to load data')
-    } finally {
-      setLoading(false)
-    }
+        where('status',      '==', 'active')
+      ))
+      setMembers(snap.docs.map(d => ({
+        id: d.id, key: d.id, ...d.data(),
+        displayName: d.data().displayName || d.data().name || 'Unknown',
+      })))
+    } catch (e) { console.error(e); message.error('Failed to load data') }
+    finally { setLoading(false) }
   }
 
-  useEffect(() => {
-    fetchData()
-  }, [])
-
-  // Filter groups
-  useEffect(() => {
-    let filtered = [...groups]
-
-    if (programFilter !== 'all') {
-      filtered = filtered.filter(group => 
-        group.programId === programFilter
-      )
-    }
-
-    if (searchText) {
-      const searchLower = searchText.toLowerCase()
-      filtered = filtered.filter(group => 
-        group.id?.toLowerCase().includes(searchLower) ||
-        group.closedByName?.toLowerCase().includes(searchLower) ||
-        group.members?.some(m => 
-          m.displayName?.toLowerCase().includes(searchLower) ||
-          m.registrationNumber?.toLowerCase().includes(searchLower)
-        )
-      )
-    }
-
-    setFilteredGroups(filtered)
-  }, [searchText, programFilter, groups])
-
-  // Handle view group
-  const handleViewGroup = (group) => {
-    setSelectedGroup(group)
-    setGroupDrawerVisible(true)
+  const fetchClosingGroups = async () => {
+    setGroupsLoading(true)
+    try {
+      const snap = await getDocs(query(collection(db, 'groupClosings'), orderBy('closedAt', 'desc'), limit(100)))
+      setClosingGroups(snap.docs.map(d => ({
+        id: d.id, key: d.id, ...d.data(),
+        closedDate: d.data().closedDate || (d.data().closedAt?.toDate?.()?.toISOString()) || null,
+      })))
+    } catch (e) { console.error(e); message.error('Failed to load closing history') }
+    finally { setGroupsLoading(false) }
   }
 
-  // Handle view member
-  const handleViewMember = (member) => {
-    setSelectedMember(member)
-    setDetailDrawerVisible(true)
-  }
+  useEffect(() => { fetchData() }, [])
+  useEffect(() => { if (activeTab === 'history') fetchClosingGroups() }, [activeTab])
 
-  // Handle refresh after closing
-  const handleClosingComplete = () => {
-    fetchData()
-  }
-
-  // Columns for groups table
-  const groupColumns = [
-    {
-      title: 'Group ID',
-      key: 'id',
-      width: 200,
-      render: (_, record) => (
-        <Tag color="purple" style={{ fontSize: 13 }}>
-          GRP-{record.id.slice(-6).toUpperCase()}
-        </Tag>
-      )
-    },
-    {
-      title: 'Program',
-      key: 'program',
-      width: 180,
-      render: (_, record) => {
-        const program = programList.find(p => p.id === record.programId)
-        return (
-          <Tag color="blue">{program?.name || 'Unknown'}</Tag>
-        )
-      }
-    },
-    {
-      title: 'Members',
-      key: 'members',
-      width: 300,
-      render: (_, record) => (
-        <Avatar.Group 
-          maxCount={3} 
-          size="small"
-          maxStyle={{ color: '#f56a00', backgroundColor: '#fde3cf' }}
-        >
-          {record.members?.map(member => (
-            <Tooltip key={member.id} title={member.displayName}>
-              <Avatar src={member.photoURL} icon={<UserOutlined />} />
-            </Tooltip>
-          ))}
-        </Avatar.Group>
-      )
-    },
-    {
-      title: 'Total Members',
-      dataIndex: 'count',
-      key: 'count',
-      width: 120,
-      render: (count) => <Tag color="green">{count} members</Tag>
-    },
-    {
-      title: 'Closed By',
-      key: 'closedBy',
-      width: 150,
-      render: (_, record) => (
-        <Space>
-          <UserOutlined />
-          <span>{record.closedByName}</span>
-        </Space>
-      )
-    },
-    {
-      title: 'Closed Date',
-      key: 'closedAt',
-      width: 150,
-      render: (_, record) => (
-        <Space>
-          <CalendarOutlined />
-          <span>{dayjs(record.closedAt).format('DD/MM/YYYY HH:mm')}</span>
-        </Space>
-      )
-    },
-    {
-      title: 'Action',
-      key: 'action',
-      width: 100,
-      render: (_, record) => (
-        <Button 
-          type="primary" 
-          icon={<EyeOutlined />}
-          onClick={() => handleViewGroup(record)}
-          size="small"
-          style={{ background: colors.primary, borderColor: colors.primary }}
-        >
-          View Group
-        </Button>
-      )
-    }
-  ]
-
-  // Columns for individual members table (for closed members view)
-  const memberColumns = [
-    {
-      title: 'Reg. No.',
-      dataIndex: 'registrationNumber',
-      key: 'regNo',
-      width: 120,
-      render: (text, record) => (
-        <Tag color={record.marriage_closed ? 'red' : 'blue'}>{text}</Tag>
-      )
-    },
-    {
-      title: 'Member Name',
-      key: 'name',
-      width: 200,
-      render: (_, record) => (
-        <Space>
-          <Avatar src={record.photoURL} icon={<UserOutlined />} size={32} />
-          <div>
-            <div>{record.displayName}</div>
-            <div style={{ fontSize: 11, color: '#666' }}>{record.fatherName}</div>
-          </div>
-        </Space>
-      )
-    },
-    {
-      title: 'Phone',
-      dataIndex: 'phone',
-      key: 'phone',
-      width: 120
-    },
-    {
-      title: 'Program',
-      key: 'program',
-      width: 150,
-      render: (_, record) => {
-        const program = programList.find(p => p.id === record.member_closed_program)
-        return program ? <Tag color="blue">{program.name}</Tag> : 'N/A'
-      }
-    },
-    {
-      title: 'Closed Date',
-      key: 'closed_date',
-      width: 120,
-      render: (_, record) => (
-        record.closed_date ? 
-          dayjs(record.closed_date).format('DD/MM/YYYY') : 
-          'N/A'
-      )
-    },
-    {
-      title: 'Invitation',
-      key: 'invitation',
-      width: 100,
-      render: (_, record) => (
-        record.closed_invitation_url ? (
-          <Button 
-            type="link" 
-            size="small"
-            onClick={() => window.open(record.closed_invitation_url)}
-          >
-            View Card
-          </Button>
-        ) : 'No'
-      )
-    },
-    {
-      title: 'Group ID',
-      key: 'groupId',
-      width: 150,
-      render: (_, record) => (
-        record.closed_group_id ? (
-          <Tag color="purple">GRP-{record.closed_group_id.slice(-6).toUpperCase()}</Tag>
-        ) : 'N/A'
-      )
-    },
-    {
-      title: 'Action',
-      key: 'action',
-      width: 80,
-      render: (_, record) => (
-        <Button 
-          type="text" 
-          icon={<EyeOutlined />} 
-          onClick={() => handleViewMember(record)}
-        />
-      )
-    }
-  ]
-
-  // Get closed members
+  // ── Derived lists — use flat member.programId ──────────────────────────────
   const closedMembers = members.filter(m => m.member_closed)
-console.log(closedMembers,'closedMembers')
+
+  const filteredClosedMembers = closedMembers.filter(m => {
+    // member_closed_program is a single programId string
+    if (programFilter !== 'all' && m.member_closed_program !== programFilter) return false
+    if (!searchText) return true
+    const s = searchText.toLowerCase()
+    return (
+      m.displayName?.toLowerCase().includes(s) ||
+      m.registrationNumber?.toLowerCase().includes(s) ||
+      m.phone?.toLowerCase().includes(s)
+    )
+  })
+
+  const filteredGroups   = closingGroups.filter(g => groupProgramFilter === 'all' || g.programId === groupProgramFilter)
+  const activeMembers    = members.filter(m => !m.member_closed)
+
+  // ── Reverse ────────────────────────────────────────────────────────────────
+  const handleReverseGroup = (group) => {
+    let reason = ''
+    confirm({
+      title: 'Reverse Closing Group?',
+      icon: <ExclamationCircleOutlined style={{ color: colors.error }} />,
+      content: (
+        <div>
+          <p style={{ marginBottom: 12 }}>Un-close <strong>{group.memberCount} member(s)</strong> and reverse all counters for group:</p>
+          <Tag style={{ marginBottom: 12, fontFamily: 'monospace', fontSize: 11 }}>{group.id}</Tag>
+          <div style={{ fontWeight: 600, marginBottom: 6 }}>Reason:</div>
+          <Input.TextArea rows={2} placeholder="Enter reason…" onChange={e => { reason = e.target.value }} style={{ borderColor: colors.primary }} />
+        </div>
+      ),
+      okText: 'Yes, Reverse', okType: 'danger', cancelText: 'Cancel',
+      onOk: async () => {
+        setReversingId(group.id)
+        try {
+          const res = await paymentApi.reverseClosing({
+            closingGroupId: group.id, programId: group.programId,
+            reason: reason || 'No reason provided',
+            reversedBy: currentUser?.uid, reversedByName: currentUser?.displayName || 'Unknown',
+          })
+          if (res?.success) {
+            message.success(`Reversed! ${res.summary?.membersRestored} members restored.`)
+            fetchData(); fetchClosingGroups()
+          } else { message.error(res?.message || 'Reversal failed') }
+        } catch (e) { console.error(e); message.error('Reversal request failed') }
+        finally { setReversingId(null) }
+      }
+    })
+  }
+
+  const handleViewMember       = (m) => { setSelectedMember(m); setDetailDrawerVisible(true) }
+  const handleClosingComplete  = () => { fetchData(); if (activeTab === 'history') fetchClosingGroups() }
+
+  // ── Columns: Closed Members ────────────────────────────────────────────────
+  const memberColumns = [
+    { title: 'Reg. No.', dataIndex: 'registrationNumber', key: 'regNo', width: 120, render: t => <Tag color="blue">{t}</Tag> },
+    {
+      title: 'Member', key: 'name', width: 220,
+      render: (_, r) => <Space><Avatar src={r.photoURL} icon={<UserOutlined />} size={36} /><div><div style={{ fontWeight: 600 }}>{r.displayName}</div><div style={{ fontSize: 11, color: '#666' }}>{r.fatherName}</div></div></Space>
+    },
+    { title: 'Phone', dataIndex: 'phone', key: 'phone', width: 130 },
+    {
+      // Single program — member_closed_program is a flat string
+      title: 'Program', key: 'program', width: 160,
+      render: (_, r) => {
+        const p = programList.find(p => p.id === r.member_closed_program)
+        return p ? <Tag color="blue">{p.name}</Tag> : <Tag>N/A</Tag>
+      }
+    },
+    { title: 'Closed Date', key: 'closed_date', width: 130, render: (_, r) => r.closed_date ? dayjs(r.closed_date).format('DD/MM/YYYY') : 'N/A' },
+    {
+      title: 'Group', key: 'closingGroupId', width: 140,
+      render: (_, r) => r.closingGroupId ? (
+        <Tooltip title={r.closingGroupId}>
+          <Tag icon={<TeamOutlined />} color="purple" style={{ cursor: 'pointer', fontSize: 10 }}
+            onClick={() => { const g = closingGroups.find(g => g.id === r.closingGroupId); if (g) { setSelectedGroup(g); setGroupModalVisible(true) } }}>
+            {r.closingGroupId.slice(-6)}
+          </Tag>
+        </Tooltip>
+      ) : <Tag>—</Tag>
+    },
+    {
+      title: 'Invitation', key: 'invitation', width: 110,
+      render: (_, r) => r.closed_invitation_url ? <Button type="link" size="small" onClick={() => window.open(r.closed_invitation_url)}>View Card</Button> : <Tag color="warning">No Card</Tag>
+    },
+    { title: 'Note', key: 'note', width: 200, render: (_, r) => <span style={{ fontSize: 12, color: '#555' }}>{r.closed_note || '—'}</span> },
+    { title: 'Action', key: 'action', width: 80, render: (_, r) => <Button type="text" icon={<EyeOutlined />} onClick={() => handleViewMember(r)} /> },
+  ]
+
+  // ── Columns: History ───────────────────────────────────────────────────────
+  const historyColumns = [
+    {
+      title: 'Closed At', key: 'closedDate', width: 170,
+      sorter: (a, b) => new Date(b.closedDate) - new Date(a.closedDate), defaultSortOrder: 'ascend',
+      render: (_, r) => (
+        <div>
+          <div style={{ fontWeight: 600, fontSize: 13 }}>{r.closedDate ? dayjs(r.closedDate).format('DD MMM YYYY') : '—'}</div>
+          <div style={{ fontSize: 11, color: colors.muted }}>{r.closedDate ? dayjs(r.closedDate).format('hh:mm A') : ''}</div>
+          <div style={{ fontSize: 10, color: colors.muted }}>{r.closedDate ? dayjs(r.closedDate).fromNow() : ''}</div>
+        </div>
+      )
+    },
+    {
+      title: 'Group ID', key: 'id', width: 130,
+      render: (_, r) => <Tooltip title={r.id}><Tag style={{ fontFamily: 'monospace', fontSize: 11, cursor: 'pointer' }} onClick={() => { setSelectedGroup(r); setGroupModalVisible(true) }}>{r.id.slice(-8)}</Tag></Tooltip>
+    },
+    {
+      title: 'Program', key: 'program', width: 160,
+      render: (_, r) => { const p = programList.find(p => p.id === r.programId); return p ? <Tag color="blue">{p.name}</Tag> : <Tag>{r.programId?.slice(-6)}</Tag> }
+    },
+    {
+      title: 'Members', key: 'memberCount', width: 100,
+      render: (_, r) => <div style={{ textAlign: 'center' }}><div style={{ fontSize: 20, fontWeight: 800, color: colors.primary, lineHeight: '24px' }}>{r.memberCount}</div><div style={{ fontSize: 10, color: colors.muted }}>members</div></div>
+    },
+    { title: 'Total Amount', key: 'totalAmount', width: 130, render: (_, r) => <span style={{ fontWeight: 700, color: colors.success, fontSize: 15 }}>₹{(r.totalAmount || 0).toLocaleString()}</span> },
+    { title: 'Closed By', key: 'closedByName', width: 150, render: (_, r) => <div style={{ fontWeight: 600, fontSize: 12 }}>{r.closedByName || '—'}</div> },
+    {
+      title: 'Status', key: 'status', width: 120,
+      render: (_, r) => r.status === 'reversed'
+        ? <div><Tag icon={<RollbackOutlined />} color="red">Reversed</Tag>{r.reversedByName && <div style={{ fontSize: 10, color: colors.muted, marginTop: 2 }}>by {r.reversedByName}</div>}</div>
+        : <Tag icon={<CheckCircleOutlined />} color="green">Active</Tag>
+    },
+    {
+      title: 'Actions', key: 'actions', width: 130,
+      render: (_, r) => (
+        <Space>
+          <Tooltip title="View detail"><Button type="text" size="small" icon={<InfoCircleOutlined />} onClick={() => { setSelectedGroup(r); setGroupModalVisible(true) }} /></Tooltip>
+          {r.status !== 'reversed' && <Tooltip title="Reverse"><Button type="text" size="small" danger icon={<RollbackOutlined />} loading={reversingId === r.id} onClick={() => handleReverseGroup(r)} /></Tooltip>}
+        </Space>
+      )
+    },
+  ]
+
+  const tabItems = [
+    {
+      key: 'closed',
+      label: <Space><CloseCircleOutlined />Closed Members<Badge count={closedMembers.length} style={{ backgroundColor: colors.error }} /></Space>,
+      children: (
+        <>
+          <div style={{ display: 'flex', gap: 12, marginBottom: 16 }}>
+            <Input placeholder="Search by name, reg. no, phone..." prefix={<SearchOutlined />} style={{ width: 300 }}
+              onChange={e => setSearchText(e.target.value)} allowClear />
+            <Select style={{ width: 200 }} value={programFilter} onChange={setProgramFilter}>
+              <Option value="all">All Programs</Option>
+              {programList.map(p => <Option key={p.id} value={p.id}>{p.name}</Option>)}
+            </Select>
+          </div>
+          <Table columns={memberColumns} dataSource={filteredClosedMembers} rowKey="id" loading={loading} pagination={{ pageSize: 15 }} size="small" />
+        </>
+      )
+    },
+    {
+      key: 'history',
+      label: <Space><ClockCircleOutlined />Closing History<Badge count={closingGroups.filter(g => g.status === 'active').length} style={{ backgroundColor: colors.primary }} /></Space>,
+      children: (
+        <>
+          <div style={{ display: 'flex', gap: 12, marginBottom: 16, alignItems: 'center' }}>
+            <Select style={{ width: 220 }} value={groupProgramFilter} onChange={setGroupProgramFilter} placeholder="Filter by program">
+              <Option value="all">All Programs</Option>
+              {programList.map(p => <Option key={p.id} value={p.id}>{p.name}</Option>)}
+            </Select>
+            <div style={{ display: 'flex', gap: 8, marginLeft: 'auto' }}>
+              <Tag color="green" icon={<CheckCircleOutlined />}>Active: {closingGroups.filter(g => g.status === 'active').length}</Tag>
+              <Tag color="red"   icon={<RollbackOutlined />}>Reversed: {closingGroups.filter(g => g.status === 'reversed').length}</Tag>
+              <Tag color="blue"  icon={<TeamOutlined />}>Total closed: {closingGroups.filter(g => g.status === 'active').reduce((s, g) => s + (g.memberCount || 0), 0)}</Tag>
+            </div>
+          </div>
+          <Table columns={historyColumns} dataSource={filteredGroups} rowKey="id" loading={groupsLoading} pagination={{ pageSize: 20 }} size="small" rowClassName={r => r.status === 'reversed' ? 'row-reversed' : ''} />
+        </>
+      )
+    }
+  ]
+
   return (
     <div style={{ padding: 20, background: colors.background, minHeight: '100vh' }}>
-      {/* Header */}
+      <style>{`.row-reversed td { opacity: 0.55; }`}</style>
+
       <Card style={{ marginBottom: 16 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
           <div>
-            <h2 style={{ margin: 0 }}>
-              <CloseCircleOutlined style={{ color: colors.error, marginRight: 8 }} />
-              Marriage Closing Management
-            </h2>
-            <p style={{ color: '#666', marginTop: 4 }}>Manage group closings and member marriage details</p>
+            <h2 style={{ margin: 0 }}><HeartFilled style={{ color: colors.primary, marginRight: 8 }} />Marriage Closing Management</h2>
+            <p style={{ color: '#666', marginTop: 4 }}>Manage member marriage closings & track batch history</p>
           </div>
           <Space>
-            <Button icon={<ArrowLeftOutlined />} onClick={() => window.history.back()}>
-              Back
-            </Button>
-            <Button 
-              type="primary" 
-              icon={<PlusOutlined />}
-              onClick={() => setClosingFormVisible(true)}
-              style={{ background: colors.error, borderColor: colors.error }}
-            >
+            <Button icon={<ArrowLeftOutlined />} onClick={() => window.history.back()}>Back</Button>
+            <Button type="primary" icon={<PlusOutlined />} onClick={() => setClosingFormVisible(true)}
+              style={{ background: gradPrimary, border: 'none', fontWeight: 700 }}>
               New Marriage Closing
             </Button>
           </Space>
         </div>
-
-        {/* Stats */}
-        {/* <Row gutter={16} style={{ marginBottom: 16 }}>
-          <Col span={6}>
-            <Card size="small">
-              <Statistic 
-                title="Total Groups" 
-                value={groups.length} 
-                prefix={<TeamOutlined />}
-              />
-            </Card>
-          </Col>
-          <Col span={6}>
-            <Card size="small">
-              <Statistic 
-                title="Total Closed" 
-                value={closedMembers.length} 
-                prefix={<CloseCircleOutlined />}
-              />
-            </Card>
-          </Col>
-          <Col span={6}>
-            <Card size="small">
-              <Statistic 
-                title="This Month" 
-                value={groups.filter(g => 
-                  g.closedAt && dayjs(g.closedAt).isSame(dayjs(), 'month')
-                ).length} 
-                prefix={<CalendarOutlined />}
-              />
-            </Card>
-          </Col>
-          <Col span={6}>
-            <Card size="small">
-              <Statistic 
-                title="With Invitation" 
-                value={closedMembers.filter(m => m.marriage_invitation_url).length} 
-                prefix={<FileTextOutlined />}
-              />
-            </Card>
-          </Col>
-        </Row> */}
-
-        {/* Filters */}
-        <div style={{ display: 'flex', gap: 16 }}>
-          <Input
-            placeholder="Search groups, members..."
-            prefix={<SearchOutlined />}
-            style={{ width: 300 }}
-            onChange={(e) => setSearchText(e.target.value)}
-            allowClear
-          />
-          <Select
-            placeholder="Filter by Program"
-            style={{ width: 200 }}
-            value={programFilter}
-            onChange={setProgramFilter}
-            allowClear
-          >
-            <Option value="all">All Programs</Option>
-            {programList.map(p => (
-              <Option key={p.id} value={p.id}>{p.name}</Option>
-            ))}
-          </Select>
-        </div>
+        <Row gutter={16}>
+          {[
+            { title: 'Total Members',   value: members.length,                                                              prefix: <TeamOutlined />,         color: colors.info    },
+            { title: 'Closed Members',  value: closedMembers.length,                                                        prefix: <CloseCircleOutlined />,  color: colors.error   },
+            { title: 'Active Members',  value: activeMembers.length,                                                        prefix: <UserOutlined />,         color: colors.success },
+            { title: 'Closing Batches', value: closingGroups.filter(g => g.status === 'active').length,                    prefix: <CalendarOutlined />,     color: colors.primary },
+            { title: 'With Invitation', value: closedMembers.filter(m => m.closed_invitation_url).length,                  prefix: <FileTextOutlined />,     color: colors.warning },
+          ].map(s => <Col span={4} key={s.title}><Card size="small"><Statistic title={s.title} value={s.value} prefix={s.prefix} valueStyle={{ color: s.color }} /></Card></Col>)}
+        </Row>
       </Card>
 
-      {/* Tabs for different views */}
-      <Card>
-        <Tabs activeKey={activeTab} onChange={setActiveTab}>
-          <TabPane 
-            tab={<span><TeamOutlined /> Group Closings</span>} 
-            key="1"
-          >
-            <Table
-              columns={groupColumns}
-              dataSource={filteredGroups}
-              rowKey="id"
-              loading={loading}
-              pagination={{ pageSize: 10 }}
-              expandable={{
-                expandedRowRender: (record) => (
-                  <div style={{ margin: 0 }}>
-                    <Table
-                      columns={memberColumns.slice(0, 6)} // Show limited columns in expanded view
-                      dataSource={record.members || []}
-                      rowKey="id"
-                      pagination={false}
-                      size="small"
-                      showHeader={false}
-                    />
-                  </div>
-                ),
-                rowExpandable: (record) => record.members?.length > 0,
-              }}
-            />
-          </TabPane>
-          <TabPane 
-            tab={<span><UserOutlined /> Individual Members</span>} 
-            key="2"
-          >
-            <Table
-              columns={memberColumns}
-              dataSource={closedMembers}
-              rowKey="id"
-              loading={loading}
-              pagination={{ pageSize: 10 }}
-            />
-          </TabPane>
-        </Tabs>
-      </Card>
+      <Card><Tabs activeKey={activeTab} onChange={setActiveTab} items={tabItems} /></Card>
 
-      {/* Marriage Closing Drawer */}
+      <ClosingGroupModal group={selectedGroup} visible={groupModalVisible} onClose={() => { setGroupModalVisible(false); setSelectedGroup(null) }} programList={programList} />
+
       <MarriageClosingDrawer
-        visible={closingFormVisible}
-        onClose={() => setClosingFormVisible(false)}
-        members={members}
-        programList={programList}
-        currentUser={currentUser}
-        onSuccess={handleClosingComplete}
+        visible={closingFormVisible} onClose={() => setClosingFormVisible(false)}
+        members={members} programList={programList} currentUser={currentUser}
+        onSuccess={() => { setClosingFormVisible(false); handleClosingComplete() }}
       />
 
-      {/* Group Closing Details Drawer */}
-      {selectedGroup && (
-        <GroupClosingDetailsDrawer
-          group={selectedGroup}
-          visible={groupDrawerVisible}
-          onClose={() => {
-            setGroupDrawerVisible(false)
-            setSelectedGroup(null)
-          }}
-          programList={programList}
-          onViewMember={handleViewMember}
-        />
-      )}
-
-      {/* Member Detail Drawer */}
       {selectedMember && (
-        <MemberDetailDrawer
-          member={selectedMember}
-          visible={detailDrawerVisible}
-          onClose={() => {
-            setDetailDrawerVisible(false)
-            setSelectedMember(null)
-          }}
-          programList={programList}
-          agentList={agentList}
-        />
+        <MemberDetailDrawer member={selectedMember} visible={detailDrawerVisible}
+          onClose={() => { setDetailDrawerVisible(false); setSelectedMember(null) }}
+          programList={programList} agentList={agentList} />
       )}
     </div>
   )

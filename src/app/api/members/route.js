@@ -3,601 +3,336 @@ import { NextResponse } from "next/server";
 import admin from "../db/firebaseAdmin";
 import { checkRole, verifyToken } from "../../../../middleware/authMiddleware";
 
-const db = admin.firestore();
+const db   = admin.firestore();
 const auth = admin.auth();
+const INC  = admin.firestore.FieldValue.increment;
+const STS  = admin.firestore.FieldValue.serverTimestamp;
 
-// Common function to get memberPrograms data
-const getMemberProgramsData = async (memberId) => {
+// ─────────────────────────────────────────────────────────────────────────────
+// Read single-program financial data DIRECTLY from the member doc.
+// No memberPrograms subcollection needed — all fields are flat on the member.
+// ─────────────────────────────────────────────────────────────────────────────
+const getMemberData = async (memberId) => {
   if (!memberId) return null;
-  
   try {
-    const memberProgramsRef = db
-      .collection('members')
-      .doc(memberId)
-      .collection('memberPrograms');
-    
-    const memberProgramsSnap = await memberProgramsRef.get();
-    
-    if (memberProgramsSnap.empty) {
-      return null;
-    }
-    
-    // Aggregate all program data
-    const programAggregates = {};
-    let totalJoinFees = 0;
-    let totalPaid = 0;
-    let totalPending = 0;
-    const allProgramData = [];
-    
-    memberProgramsSnap.forEach(doc => {
-      const programData = doc.data();
-      allProgramData.push(programData);
-      
-      const programId = programData.programId;
-      
-      if (programId) {
-        if (!programAggregates[programId]) {
-          programAggregates[programId] = {
-            programName: programData.programName || programId,
-            joinFees: programData.joinFees || 0,
-            paidAmount: programData.paidAmount || 0,
-            pendingAmount: programData.pendingAmount || 0,
-            memberCount: 1
-          };
-        } else {
-          programAggregates[programId].joinFees += programData.joinFees || 0;
-          programAggregates[programId].paidAmount += programData.paidAmount || 0;
-          programAggregates[programId].pendingAmount += programData.pendingAmount || 0;
-          programAggregates[programId].memberCount += 1;
-        }
-      }
-      
-      totalJoinFees += programData.joinFees || 0;
-      totalPaid += programData.paidAmount || 0;
-      totalPending += programData.pendingAmount || 0;
-    });
-    
+    const snap = await db.collection('members').doc(memberId).get();
+    if (!snap.exists) return null;
+
+    const d = snap.data();
+
+    // Single program — all flat fields
+    const programId   = d.programId   || '';
+    const programName = d.programName || '';
+    const joinFees    = d.joinFees    || 0;
+    const paidAmount  = d.paidAmount  || 0;
+    const pending     = d.pendingAmount || 0;
+
     return {
-      programAggregates,
-      totalJoinFees,
-      totalPaid,
-      totalPending,
-      allProgramData,
-      hasData: true
+      programId,
+      programName,
+      joinFees,
+      paidAmount,
+      pendingAmount: pending,
+      agentId:  d.agentId  || null,
+      hasData:  true,
     };
-  } catch (error) {
-    console.error("❌ Error fetching memberPrograms data:", error);
+  } catch (e) {
+    console.error("❌ getMemberData error:", e);
     return null;
   }
 };
 
-// REVERSE COUNT: Decrease counts when member is deleted/updated
-const reverseAgentProgramStats = async (agentId, memberProgramsData) => {
-  if (!agentId || !memberProgramsData || !memberProgramsData.hasData) return;
-  
+// ─── Password generator ───────────────────────────────────────────────────────
+export const generatePassword = (name, dobDate) => {
   try {
-    const agentRef = db.collection('agents').doc(agentId);
-    const agentDoc = await agentRef.get();
-    
-    if (!agentDoc.exists) return;
-    
-    const currentAgentData = agentDoc.data();
-    const programStats = currentAgentData.programStats || {};
-    const { programAggregates, totalJoinFees, totalPaid, totalPending } = memberProgramsData;
-    
-    // Reverse each program's stats for this agent
-    for (const [programId, stats] of Object.entries(programAggregates)) {
-      if (programStats[programId]) {
-        const currentStats = programStats[programId];
-        
-        // Calculate new values (don't go below 0)
-        const newMemberCount = Math.max(0, (currentStats.memberCount || 0) - stats.memberCount);
-        const newTotalJoinFees = Math.max(0, (currentStats.totalJoinFees || 0) - stats.joinFees);
-        const newTotalJoinFeesPaid = Math.max(0, (currentStats.totalJoinFeesPaid || 0) - stats.paidAmount);
-        const newTotalJoinFeesPending = Math.max(0, (currentStats.totalJoinFeesPending || 0) - stats.pendingAmount);
-        
-        if (newMemberCount <= 0) {
-          // Remove the program from stats if no members left
-          delete programStats[programId];
-        } else {
-          // Update with reduced values
-          programStats[programId] = {
-            ...currentStats,
-            memberCount: newMemberCount,
-            totalJoinFees: newTotalJoinFees,
-            totalJoinFeesPaid: newTotalJoinFeesPaid,
-            totalJoinFeesPending: newTotalJoinFeesPending,
-            lastUpdated: admin.firestore.FieldValue.serverTimestamp()
-          };
-        }
-      }
-    }
-    
-    // Calculate new overall counts (don't go below 0)
-    const newMemberCount = Math.max(0, (currentAgentData.memberCount || 0) - 1);
-    const newTotalJoinFees = Math.max(0, (currentAgentData.totalJoinFees || 0) - totalJoinFees);
-    const newTotalJoinFeesPaid = Math.max(0, (currentAgentData.totalJoinFeesPaid || 0) - totalPaid);
-    const newTotalJoinFeesPending = Math.max(0, (currentAgentData.totalJoinFeesPending || 0) - totalPending);
-    
-    const updateData = {
-      memberCount: newMemberCount,
-      totalJoinFees: newTotalJoinFees,
-      totalJoinFeesPaid: newTotalJoinFeesPaid,
-      totalJoinFeesPending: newTotalJoinFeesPending,
-      updated_at: admin.firestore.FieldValue.serverTimestamp()
-    };
-    
-    // Only include programStats if it has entries
-    if (Object.keys(programStats).length > 0) {
-      updateData.programStats = programStats;
-    }
-    
-    await agentRef.update(updateData);
-    
-    console.log(`✅ Agent ${agentId} program-wise stats reversed (decreased)`);
-    
-    return { totalJoinFees, totalPaid, totalPending };
-  } catch (error) {
-    console.error("❌ Error reversing agent program stats:", error);
-    throw error;
+    if (!name || !dobDate) return 'ssgmsss2024';
+    const namePart = name.trim().split(' ')[0].substring(0, 5);
+    const year     = dobDate.split('-')[2];   // DD-MM-YYYY → YYYY
+    return `${namePart}${year}`;
+  } catch (e) {
+    console.error('generatePassword error:', e);
+    return '';
   }
 };
 
-// REVERSE COUNT: Decrease program counts
-const reverseProgramCounts = async (memberProgramsData) => {
-  if (!memberProgramsData || !memberProgramsData.allProgramData) return;
-  
+// ─── Create Firebase Auth account for member ──────────────────────────────────
+const createMemberAccount = async ({ memberId, displayName, photoURL, password, programId, registrationNumber }) => {
   try {
-    const batch = db.batch();
-    const allProgramData = memberProgramsData.allProgramData;
-    
-    for (const programData of allProgramData) {
-      const programId = programData.programId;
-      
-      if (programId) {
-        const programRef = db.collection('programs').doc(programId);
-        const programDoc = await programRef.get();
-        
-        if (programDoc.exists) {
-          const currentData = programDoc.data();
-          
-          // Calculate new values (don't go below 0)
-          const newMemberCount = Math.max(0, (currentData.memberCount || 0) - 1);
-          const newTotalJoinFees = Math.max(0, (currentData.totalJoinFees || 0) - (programData.joinFees || 0));
-          const newTotalJoinFeesPaid = Math.max(0, (currentData.totalJoinFeesPaid || 0) - (programData.paidAmount || 0));
-          const newTotalJoinFeesPending = Math.max(0, (currentData.totalJoinFeesPending || 0) - (programData.pendingAmount || 0));
-          
-          batch.update(programRef, {
-            memberCount: newMemberCount,
-            totalJoinFees: newTotalJoinFees,
-            totalJoinFeesPaid: newTotalJoinFeesPaid,
-            totalJoinFeesPending: newTotalJoinFeesPending,
-            updated_at: admin.firestore.FieldValue.serverTimestamp()
-          });
-        }
-      }
-    }
-    
-    await batch.commit();
-    console.log(`✅ ${allProgramData.length} program counts reversed (decreased)`);
-  } catch (error) {
-    console.error("❌ Error reversing program counts:", error);
-  }
-};
-
-// REVERSE COUNT: Decrease organization count
-const reverseOrganizationCount = async (memberProgramsData) => {
-  try {
-    const orgRef = db.collection('organizationStats').doc('current');
-    const orgDoc = await orgRef.get();
-    
-    if (!orgDoc.exists) return;
-    
-    const currentOrgData = orgDoc.data();
-    
-    let totalJoinFees = 0;
-    let totalPaid = 0;
-    let totalPending = 0;
-    
-    if (memberProgramsData && memberProgramsData.hasData) {
-      // Use memberPrograms data if available
-      totalJoinFees = memberProgramsData.totalJoinFees;
-      totalPaid = memberProgramsData.totalPaid;
-      totalPending = memberProgramsData.totalPending;
-    }
-    
-    // Calculate new values (don't go below 0)
-    const newTotalMembers = Math.max(0, (currentOrgData.totalMembers || 0) - 1);
-    const newTotalJoinFees = Math.max(0, (currentOrgData.totalJoinFees || 0) - totalJoinFees);
-    const newTotalJoinFeesPaid = Math.max(0, (currentOrgData.totalJoinFeesPaid || 0) - totalPaid);
-    const newTotalJoinFeesPending = Math.max(0, (currentOrgData.totalJoinFeesPending || 0) - totalPending);
-    
-    await orgRef.update({
-      totalMembers: newTotalMembers,
-      totalJoinFees: newTotalJoinFees,
-      totalJoinFeesPaid: newTotalJoinFeesPaid,
-      totalJoinFeesPending: newTotalJoinFeesPending,
-      updated_at: admin.firestore.FieldValue.serverTimestamp()
-    });
-    
-    console.log("✅ Organization count reversed (decreased)");
-  } catch (error) {
-    console.error("❌ Error reversing organization count:", error);
-  }
-};
-
-// Helper function: Update agent's program-wise stats (ADD)
-const updateAgentProgramStats = async (agentId, memberProgramsData) => {
-  if (!agentId || !memberProgramsData || !memberProgramsData.hasData) return;
-  
-  try {
-    const agentRef = db.collection('agents').doc(agentId);
-    const agentDoc = await agentRef.get();
-    
-    if (!agentDoc.exists) return;
-    
-    const currentAgentData = agentDoc.data();
-    const programStats = currentAgentData.programStats || {};
-    const { programAggregates, totalJoinFees, totalPaid, totalPending } = memberProgramsData;
-    
-    // Update each program's stats for this agent
-    for (const [programId, stats] of Object.entries(programAggregates)) {
-      if (!programStats[programId]) {
-        // Initialize if first member in this program
-        programStats[programId] = {
-          programName: stats.programName,
-          memberCount: stats.memberCount,
-          totalJoinFees: stats.joinFees,
-          totalJoinFeesPaid: stats.paidAmount,
-          totalJoinFeesPending: stats.pendingAmount,
-          lastUpdated: admin.firestore.FieldValue.serverTimestamp()
-        };
-      } else {
-        // Update existing program stats
-        programStats[programId] = {
-          ...programStats[programId],
-          programName: stats.programName || programStats[programId].programName,
-          memberCount: (programStats[programId].memberCount || 0) + stats.memberCount,
-          totalJoinFees: (programStats[programId].totalJoinFees || 0) + stats.joinFees,
-          totalJoinFeesPaid: (programStats[programId].totalJoinFeesPaid || 0) + stats.paidAmount,
-          totalJoinFeesPending: (programStats[programId].totalJoinFeesPending || 0) + stats.pendingAmount,
-          lastUpdated: admin.firestore.FieldValue.serverTimestamp()
-        };
-      }
-    }
-    
-    // Update overall agent counts
-    await agentRef.update({
-      memberCount: admin.firestore.FieldValue.increment(1),
-      totalJoinFees: admin.firestore.FieldValue.increment(totalJoinFees),
-      totalJoinFeesPaid: admin.firestore.FieldValue.increment(totalPaid),
-      totalJoinFeesPending: admin.firestore.FieldValue.increment(totalPending),
-      programStats: programStats,
-      updated_at: admin.firestore.FieldValue.serverTimestamp()
-    });
-    
-    console.log(`✅ Agent ${agentId} program-wise stats updated (increased)`);
-    
-    return { totalJoinFees, totalPaid, totalPending };
-  } catch (error) {
-    console.error("❌ Error updating agent program stats:", error);
-    throw error;
-  }
-};
-
-// Update program counts based on memberPrograms data (ADD)
-const updateProgramCounts = async (memberProgramsData) => {
-  if (!memberProgramsData || !memberProgramsData.allProgramData) return;
-  
-  try {
-    const batch = db.batch();
-    const allProgramData = memberProgramsData.allProgramData;
-    
-    for (const programData of allProgramData) {
-      const programId = programData.programId;
-      
-      if (programId) {
-        const programRef = db.collection('programs').doc(programId);
-        
-        // Update each program with individual amounts
-        batch.update(programRef, {
-          memberCount: admin.firestore.FieldValue.increment(1),
-          totalJoinFees: admin.firestore.FieldValue.increment(programData.joinFees || 0),
-          totalJoinFeesPaid: admin.firestore.FieldValue.increment(programData.paidAmount || 0),
-          totalJoinFeesPending: admin.firestore.FieldValue.increment(programData.pendingAmount || 0),
-          updated_at: admin.firestore.FieldValue.serverTimestamp()
-        });
-      }
-    }
-    
-    await batch.commit();
-    console.log(`✅ ${allProgramData.length} program counts updated (increased)`);
-  } catch (error) {
-    console.error("❌ Error updating program counts:", error);
-  }
-};
-
-// Update organization count (ADD)
-const updateOrganizationCount = async (memberProgramsData) => {
-  try {
-    const orgRef = db.collection('organizationStats').doc('current');
-    
-    let totalJoinFees = 0;
-    let totalPaid = 0;
-    let totalPending = 0;
-    
-    if (memberProgramsData && memberProgramsData.hasData) {
-      // Use memberPrograms data if available
-      totalJoinFees = memberProgramsData.totalJoinFees;
-      totalPaid = memberProgramsData.totalPaid;
-      totalPending = memberProgramsData.totalPending;
-    }
-    
-    const orgDoc = await orgRef.get();
-    
-    if (!orgDoc.exists) {
-      await orgRef.set({
-        totalMembers: 1,
-        totalJoinFees: totalJoinFees,
-        totalJoinFeesPaid: totalPaid,
-        totalJoinFeesPending: totalPending,
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
-        updated_at: admin.firestore.FieldValue.serverTimestamp()
-      });
-    } else {
-      const currentOrgData = orgDoc.data();
-      
-      await orgRef.update({
-        totalMembers: admin.firestore.FieldValue.increment(1),
-        totalJoinFees: admin.firestore.FieldValue.increment(totalJoinFees),
-        totalJoinFeesPaid: admin.firestore.FieldValue.increment(totalPaid),
-        totalJoinFeesPending: admin.firestore.FieldValue.increment(totalPending),
-        updated_at: admin.firestore.FieldValue.serverTimestamp()
-      });
-    }
-    
-    console.log("✅ Organization count updated (increased)");
-  } catch (error) {
-    console.error("❌ Error updating organization count:", error);
-  }
-};
-
-// Create member account
-const createMemberAccount = async ({
-  memberId,
-  displayName,
-  photoURL,
-  password,
-  programIds,
-  registrationNumber
-}) => {
-  try {
-    // Check if auth user already exists
     try {
       await auth.getUser(memberId);
       console.log("Auth already exists:", memberId);
     } catch {
       const email = `${registrationNumber}@ssgmsss.com`;
-
       await auth.createUser({
-        uid: memberId,
-        email,
-        emailVerified: true,
-        displayName: displayName,
-        photoURL: photoURL || null,
+        uid: memberId, email, emailVerified: true,
+        displayName, photoURL: photoURL || null,
         password: password || "Member@123"
       });
-
-      await auth.setCustomUserClaims(memberId, {
-        role: "member",
-        programIds: programIds || []
-      });
+      // Set custom claims — single programId (string, not array)
+      await auth.setCustomUserClaims(memberId, { role: "member", programId: programId || '' });
 
       const memberDoc = await db.collection('members').doc(memberId).get();
       if (memberDoc.exists) {
-        await memberDoc.ref.update({
-          uid: memberId,
-          account_flag: true,
-        });
+        await memberDoc.ref.update({ uid: memberId, account_flag: true });
       }
     }
-  } catch (error) {
-    console.error("❌ Error creating member account:", error);
-    throw error;
+  } catch (e) {
+    console.error("❌ createMemberAccount error:", e);
+    throw e;
   }
 };
 
-// Main handler for adding/removing counts
-const handleMemberCountUpdate = async (operation, memberData, memberId, agentId) => {
-  const agentIdToUpdate = agentId || memberData.agentId;
-  const actualMemberId = memberId || memberData.uid;
-  
-  // 1. Get memberPrograms data ONCE
-  const memberProgramsData = await getMemberProgramsData(actualMemberId);
-  
-  if (!memberProgramsData) {
-    console.log("No memberPrograms data found");
-    return;
-  }
-  
-  // 2. Update agent counts with program-wise stats
-  if (agentIdToUpdate) {
-    if (operation === 'add') {
-      await updateAgentProgramStats(agentIdToUpdate, memberProgramsData);
-    } else if (operation === 'remove') {
-      await reverseAgentProgramStats(agentIdToUpdate, memberProgramsData);
+// ─────────────────────────────────────────────────────────────────────────────
+// ADD stats — increment agent, program, org counts using flat member fields
+// ─────────────────────────────────────────────────────────────────────────────
+const addMemberStats = async (memberInfo) => {
+  const { agentId, programId, programName, joinFees, paidAmount, pendingAmount } = memberInfo;
+  const batch = db.batch();
+
+  // ── Agent ──────────────────────────────────────────────────────────────────
+  if (agentId) {
+    const agentRef  = db.collection('agents').doc(agentId);
+    const agentSnap = await agentRef.get();
+    if (agentSnap.exists) {
+      const existing = agentSnap.data().programStats || {};
+
+      // Build updated programStats for this single program
+      const programStats = { ...existing };
+      if (!programStats[programId]) {
+        programStats[programId] = {
+          programName, memberCount: 1,
+          totalJoinFees: joinFees, totalJoinFeesPaid: paidAmount, totalJoinFeesPending: pendingAmount,
+          lastUpdated: STS()
+        };
+      } else {
+        programStats[programId] = {
+          ...programStats[programId],
+          programName: programName || programStats[programId].programName,
+          memberCount:           (programStats[programId].memberCount           || 0) + 1,
+          totalJoinFees:         (programStats[programId].totalJoinFees         || 0) + joinFees,
+          totalJoinFeesPaid:     (programStats[programId].totalJoinFeesPaid     || 0) + paidAmount,
+          totalJoinFeesPending:  (programStats[programId].totalJoinFeesPending  || 0) + pendingAmount,
+          lastUpdated: STS()
+        };
+      }
+
+      batch.update(agentRef, {
+        memberCount:           INC(1),
+        totalJoinFees:         INC(joinFees),
+        totalJoinFeesPaid:     INC(paidAmount),
+        totalJoinFeesPending:  INC(pendingAmount),
+        programStats,
+        updated_at: STS()
+      });
     }
   }
-  
-  // 3. Update program counts
-  if (operation === 'add') {
-    await updateProgramCounts(memberProgramsData);
-  } else if (operation === 'remove') {
-    await reverseProgramCounts(memberProgramsData);
+
+  // ── Program ────────────────────────────────────────────────────────────────
+  if (programId) {
+    batch.update(db.collection('programs').doc(programId), {
+      memberCount:          INC(1),
+      totalJoinFees:        INC(joinFees),
+      totalJoinFeesPaid:    INC(paidAmount),
+      totalJoinFeesPending: INC(pendingAmount),
+      updated_at:           STS()
+    });
   }
-  
-  // 4. Update organization count
-  if (operation === 'add') {
-    await updateOrganizationCount(memberProgramsData);
-  } else if (operation === 'remove') {
-    await reverseOrganizationCount(memberProgramsData);
+
+  // ── Organization ──────────────────────────────────────────────────────────
+  const orgRef  = db.collection('organizationStats').doc('current');
+  const orgSnap = await orgRef.get();
+  if (orgSnap.exists) {
+    batch.update(orgRef, {
+      totalMembers:         INC(1),
+      totalJoinFees:        INC(joinFees),
+      totalJoinFeesPaid:    INC(paidAmount),
+      totalJoinFeesPending: INC(pendingAmount),
+      updated_at:           STS()
+    });
+  } else {
+    batch.set(orgRef, {
+      totalMembers: 1,
+      totalJoinFees: joinFees, totalJoinFeesPaid: paidAmount, totalJoinFeesPending: pendingAmount,
+      createdAt: STS(), updated_at: STS()
+    });
   }
-  
-  console.log(`✅ All counts ${operation === 'add' ? 'increased' : 'decreased'} successfully`);
+
+  await batch.commit();
+  console.log(`✅ Stats ADDED — program: ${programId}, agent: ${agentId}`);
 };
-export const generatePassword = (name, dobDate) => {
-  try {
-    if (!name || !dobDate) return 'ssgmsss2024';
 
-    // Get first word from name (before space)
-    const firstName = name.trim().split(' ')[0];
+// ─────────────────────────────────────────────────────────────────────────────
+// REMOVE stats — decrement (reverse) agent, program, org counts
+// ─────────────────────────────────────────────────────────────────────────────
+const removeMemberStats = async (memberInfo) => {
+  const { agentId, programId, joinFees, paidAmount, pendingAmount } = memberInfo;
+  const batch = db.batch();
 
-    // Take first 5 letters (if less than 5, use full)
-    const namePart = firstName.substring(0, 5);
+  // ── Agent ──────────────────────────────────────────────────────────────────
+  if (agentId) {
+    const agentRef  = db.collection('agents').doc(agentId);
+    const agentSnap = await agentRef.get();
+    if (agentSnap.exists) {
+      const agentData    = agentSnap.data();
+      const programStats = { ...(agentData.programStats || {}) };
 
-    // Extract year from DD-MM-YYYY
-    const year = dobDate.split('-')[2];
+      if (programStats[programId]) {
+        const ps           = programStats[programId];
+        const newMemberCnt = Math.max(0, (ps.memberCount || 0) - 1);
 
-    return `${namePart}${year}`;
+        if (newMemberCnt <= 0) {
+          delete programStats[programId];
+        } else {
+          programStats[programId] = {
+            ...ps,
+            memberCount:          newMemberCnt,
+            totalJoinFees:        Math.max(0, (ps.totalJoinFees        || 0) - joinFees),
+            totalJoinFeesPaid:    Math.max(0, (ps.totalJoinFeesPaid    || 0) - paidAmount),
+            totalJoinFeesPending: Math.max(0, (ps.totalJoinFeesPending || 0) - pendingAmount),
+            lastUpdated: STS()
+          };
+        }
+      }
 
-  } catch (error) {
-    console.error('Error generating password:', error);
-    return '';
+      batch.update(agentRef, {
+        memberCount:          Math.max(0, (agentData.memberCount          || 0) - 1),
+        totalJoinFees:        Math.max(0, (agentData.totalJoinFees        || 0) - joinFees),
+        totalJoinFeesPaid:    Math.max(0, (agentData.totalJoinFeesPaid    || 0) - paidAmount),
+        totalJoinFeesPending: Math.max(0, (agentData.totalJoinFeesPending || 0) - pendingAmount),
+        programStats,
+        updated_at: STS()
+      });
+    }
   }
+
+  // ── Program ────────────────────────────────────────────────────────────────
+  if (programId) {
+    const progSnap = await db.collection('programs').doc(programId).get();
+    if (progSnap.exists) {
+      const pd = progSnap.data();
+      batch.update(db.collection('programs').doc(programId), {
+        memberCount:          Math.max(0, (pd.memberCount          || 0) - 1),
+        totalJoinFees:        Math.max(0, (pd.totalJoinFees        || 0) - joinFees),
+        totalJoinFeesPaid:    Math.max(0, (pd.totalJoinFeesPaid    || 0) - paidAmount),
+        totalJoinFeesPending: Math.max(0, (pd.totalJoinFeesPending || 0) - pendingAmount),
+        updated_at:           STS()
+      });
+    }
+  }
+
+  // ── Organization ──────────────────────────────────────────────────────────
+  const orgSnap = await db.collection('organizationStats').doc('current').get();
+  if (orgSnap.exists) {
+    const od = orgSnap.data();
+    batch.update(db.collection('organizationStats').doc('current'), {
+      totalMembers:         Math.max(0, (od.totalMembers         || 0) - 1),
+      totalJoinFees:        Math.max(0, (od.totalJoinFees        || 0) - joinFees),
+      totalJoinFeesPaid:    Math.max(0, (od.totalJoinFeesPaid    || 0) - paidAmount),
+      totalJoinFeesPending: Math.max(0, (od.totalJoinFeesPending || 0) - pendingAmount),
+      updated_at:           STS()
+    });
+  }
+
+  await batch.commit();
+  console.log(`✅ Stats REMOVED — program: ${programId}, agent: ${agentId}`);
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Main orchestrator
+// ─────────────────────────────────────────────────────────────────────────────
+const handleMemberCountUpdate = async (operation, memberId, agentId) => {
+  // Read all data from the flat member doc — no subcollection
+  const memberInfo = await getMemberData(memberId);
+  if (!memberInfo) { console.log("No member data found for", memberId); return; }
+
+  // Override agentId if provided explicitly
+  if (agentId) memberInfo.agentId = agentId;
+
+  if (operation === 'add')    await addMemberStats(memberInfo);
+  if (operation === 'remove') await removeMemberStats(memberInfo);
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST — create account + update counts
+// ─────────────────────────────────────────────────────────────────────────────
 export async function POST(req) {
   try {
-    // Verify token
     const authResult = await verifyToken(req);
-    if (!authResult.success) {
-      return NextResponse.json(
-        { success: false, message: authResult.error },
-        { status: authResult.status }
-      );
-    }
-    
-    const currentUser = authResult.user;
-    
-    // Check permission
-    if (!checkRole(['superadmin', 'admin'], currentUser.role)) {
-      return NextResponse.json(
-        { success: false, message: 'Insufficient permissions to create members' },
-        { status: 403 }
-      );
-    }
+    if (!authResult.success)
+      return NextResponse.json({ success: false, message: authResult.error }, { status: authResult.status });
+
+    if (!checkRole(['superadmin', 'admin'], authResult.user.role))
+      return NextResponse.json({ success: false, message: 'Insufficient permissions' }, { status: 403 });
 
     const body = await req.json();
-    const { 
-      isOnlyAccountCreate = false, 
-      memberData, 
-      memberId, 
-      agentId,
-      operation = 'add' // 'add' or 'remove'
-    } = body;
-    
-    // If not just account creation, update all counts
-    if (!isOnlyAccountCreate && memberData) {
-      await handleMemberCountUpdate(operation, memberData, memberId, agentId);
+    const { isOnlyAccountCreate = false, memberData, memberId, agentId, operation = 'add' } = body;
+
+    // Update counts (reads from member doc directly)
+    if (!isOnlyAccountCreate && memberId) {
+      await handleMemberCountUpdate(operation, memberId, agentId);
     }
-     await createMemberAccount({
-        memberId: memberData.id,
-        displayName: memberData.fullName,
-        photoURL: memberData.photoURL,
-        password: memberData.password || generatePassword(memberData.fullName, memberData.bobDate),
-        programIds: memberData.programIds,
-        registrationNumber: memberData.registrationNumber
-     })
+
+    // Create Firebase Auth account
+    await createMemberAccount({
+      memberId:           memberData?.id || memberId,
+      displayName:        memberData?.displayName || memberData?.fullName,
+      photoURL:           memberData?.photoURL,
+      password:           memberData?.password || generatePassword(memberData?.displayName || memberData?.fullName, memberData?.dobDate || memberData?.bobDate),
+      programId:          memberData?.programId  || '',    // ← single flat field
+      registrationNumber: memberData?.registrationNumber
+    });
+
     return NextResponse.json(
-      { 
-        success: true, 
-        message: operation === 'add' 
-          ? "Member counts increased successfully" 
-          : "Member counts decreased successfully" 
-      },
+      { success: true, message: operation === 'add' ? "Member counts increased" : "Member counts decreased" },
       { status: 201 }
     );
 
-  } catch (error) {
-    console.error("❌ Error in POST /api/agents:", error);
-    return NextResponse.json(
-      { success: false, message: "Internal Server Error", error: error.message },
-      { status: 500 }
-    );
+  } catch (e) {
+    console.error("❌ POST /api/agents error:", e);
+    return NextResponse.json({ success: false, message: "Internal Server Error", error: e.message }, { status: 500 });
   }
 }
 
-// New PATCH endpoint for updating member status
+// ─────────────────────────────────────────────────────────────────────────────
+// PATCH — update member status / counts
+// ─────────────────────────────────────────────────────────────────────────────
 export async function PATCH(req) {
   try {
-    // Verify token
     const authResult = await verifyToken(req);
-    if (!authResult.success) {
-      return NextResponse.json(
-        { success: false, message: authResult.error },
-        { status: authResult.status }
-      );
-    }
-    
-    const currentUser = authResult.user;
-    
-    // Check permission
-    if (!checkRole(['superadmin', 'admin'], currentUser.role)) {
-      return NextResponse.json(
-        { success: false, message: 'Insufficient permissions to update members' },
-        { status: 403 }
-      );
-    }
+    if (!authResult.success)
+      return NextResponse.json({ success: false, message: authResult.error }, { status: authResult.status });
+
+    if (!checkRole(['superadmin', 'admin'], authResult.user.role))
+      return NextResponse.json({ success: false, message: 'Insufficient permissions' }, { status: 403 });
 
     const body = await req.json();
-    const { 
-      memberId,
-      agentId,
-      operation, // 'add' or 'remove'
-      updateData // Optional: if you want to update member document too
-    } = body;
-    
-    if (!memberId || !agentId || !operation) {
-      return NextResponse.json(
-        { success: false, message: 'Missing required fields' },
-        { status: 400 }
-      );
-    }
-    
-    // Get member data first
+    const { memberId, agentId, operation, updateData } = body;
+
+    if (!memberId || !operation)
+      return NextResponse.json({ success: false, message: 'Missing required fields: memberId, operation' }, { status: 400 });
+
     const memberDoc = await db.collection('members').doc(memberId).get();
-    if (!memberDoc.exists) {
-      return NextResponse.json(
-        { success: false, message: 'Member not found' },
-        { status: 404 }
-      );
-    }
-    
-    const memberData = memberDoc.data();
-    
-    // Handle count update
-    await handleMemberCountUpdate(operation, memberData, memberId, agentId);
-    
-    // Update member document if needed
+    if (!memberDoc.exists)
+      return NextResponse.json({ success: false, message: 'Member not found' }, { status: 404 });
+
+    // Update counts using flat member doc
+    await handleMemberCountUpdate(operation, memberId, agentId);
+
+    // Optionally update the member document itself
     if (updateData) {
       await db.collection('members').doc(memberId).update({
         ...updateData,
-        updated_at: admin.firestore.FieldValue.serverTimestamp()
+        updated_at: STS()
       });
     }
-    
+
     return NextResponse.json(
-      { 
-        success: true, 
-        message: `Member ${operation === 'remove' ? 'deleted' : 'updated'} successfully` 
-      },
+      { success: true, message: `Member ${operation === 'remove' ? 'removed' : 'updated'} successfully` },
       { status: 200 }
     );
 
-  } catch (error) {
-    console.error("❌ Error in PATCH /api/agents:", error);
-    return NextResponse.json(
-      { success: false, message: "Internal Server Error", error: error.message },
-      { status: 500 }
-    );
+  } catch (e) {
+    console.error("❌ PATCH /api/agents error:", e);
+    return NextResponse.json({ success: false, message: "Internal Server Error", error: e.message }, { status: 500 });
   }
 }

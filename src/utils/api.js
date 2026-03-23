@@ -318,7 +318,13 @@ export const paymentApi={
       method: 'POST',
       body: JSON.stringify(data),
     });
-  }
+    
+  },
+  reverseClosing: (payload) =>
+    apiRequest(`/api/closed_payment_entry`, {
+      method: 'DELETE',
+      body: JSON.stringify(payload),
+    }),
 }
 // Export both APIs
 export default {

@@ -1,102 +1,89 @@
-import { Form, Input, message, Modal } from 'antd'
+import { Form, Input, message, Modal, Avatar, Tag } from 'antd'
 import React, { useState } from 'react'
-import { 
- CloseCircleOutlined
-
-} from '@ant-design/icons'
+import { CloseCircleOutlined, UserOutlined } from '@ant-design/icons'
 import { doc, serverTimestamp, updateDoc } from 'firebase/firestore'
 import { db } from '../../../../lib/firbase-client'
-const RejectModal = ({open,setOpen,selectedMember,setSelectedMember,getProgramNames,fetchAllData,programList,user }) => {
 
+const RejectModal = ({ open, setOpen, selectedMember, setSelectedMember, fetchAllData, programList, user }) => {
   const [rejectionReason, setRejectionReason] = useState('')
-  const [isLoading,setIsLoading]=useState(false)
-    console.log(user,"user")
+  const [isLoading, setIsLoading] = useState(false)
+
+  // Single program name from flat field
+  const progName = (() => {
+    if (!selectedMember?.programId || !programList) return selectedMember?.programName || '—'
+    return programList.find(p => p.id === selectedMember.programId)?.name || selectedMember.programName || '—'
+  })()
 
   const executeRejection = async () => {
     if (!selectedMember || !rejectionReason.trim()) {
-      message.error('Please provide a rejection reason')
-      return
+      message.error('Please provide a rejection reason'); return
     }
     try {
-        setIsLoading(true)
+      setIsLoading(true)
       await updateDoc(doc(db, 'members', selectedMember.id), {
-        status: 'rejected',
-        active_flag: false,
+        status:          'rejected',
+        active_flag:     false,
         rejectionReason: rejectionReason.trim(),
-        rejectedBy: user?.uid,
-        rejectedByName: user?.name || user?.email,
-        rejectedAt: serverTimestamp(),
-        updated_at: serverTimestamp()
+        rejectedBy:      user?.uid,
+        rejectedByName:  user?.name || user?.email,
+        rejectedAt:      serverTimestamp(),
+        updated_at:      serverTimestamp()
       })
-      
       message.success('Member request rejected')
-      setIsLoading(false)
-      setOpen(false)
-      setRejectionReason('')
-      setSelectedMember(null)
+      setOpen(false); setRejectionReason(''); setSelectedMember(null)
       fetchAllData()
-    } catch (error) {
-      console.error('Error rejecting member:', error)
-      message.error('Failed to reject member request')
-    }
+    } catch (e) {
+      console.error(e); message.error('Failed to reject member request')
+    } finally { setIsLoading(false) }
   }
 
   return (
-    <div>
-         <Modal
-        title="Reject Member Request"
-        open={open}
-        onOk={executeRejection}
-       okButtonProps={{
-        loading:isLoading
-       }}
-        onCancel={() => {
-          setOpen(false)
-          setRejectionReason('')
-        //   setSelectedMember(null)
-        }}
-        okText="Reject"
-        okType="danger"
-        cancelText="Cancel"
-      >
-        {selectedMember && (
-          <div>
-            <div className="flex items-center gap-3 mb-4 p-3 bg-red-50 rounded">
-              <CloseCircleOutlined className="text-red-500 text-xl" />
-              <div>
-                <div className="font-medium">Confirm Rejection</div>
-                <div className="text-sm text-gray-600">
-                  Please provide a reason for rejecting this member request
-                </div>
-              </div>
-            </div>
-            
-            <div className="mb-4">
-              <div><strong>Member:</strong> {selectedMember.displayName}</div>
-              <div><strong>Registration:</strong> {selectedMember.registrationNumber}</div>
-              <div><strong>Programs:</strong> {getProgramNames(selectedMember.programIds, programList).join(', ')}</div>
-            </div>
-            
-            <Form layout="vertical">
-              <Form.Item label="Rejection Reason" required>
-                <Input.TextArea
-                  rows={3}
-                  placeholder="Enter reason for rejection..."
-                  value={rejectionReason}
-                  onChange={(e) => setRejectionReason(e.target.value)}
-                  maxLength={500}
-                  showCount
-                />
-              </Form.Item>
-            </Form>
-            
-            <div className="text-gray-500 text-sm">
-              Note: Rejected members can be restored from the rejected members section.
+    <Modal
+      title={
+        <span className="flex items-center gap-2 text-red-600">
+          <CloseCircleOutlined /> Reject Member Request
+        </span>
+      }
+      open={open}
+      onOk={executeRejection}
+      okButtonProps={{ loading: isLoading, danger: true }}
+      okText="Reject Request"
+      onCancel={() => { setOpen(false); setRejectionReason('') }}
+      cancelText="Cancel"
+      width={480}
+    >
+      {selectedMember && (
+        <div className="space-y-4">
+          {/* Member summary */}
+          <div className="flex items-center gap-3 p-3 bg-red-50 rounded-lg border border-red-100">
+            <Avatar src={selectedMember.photoURL} icon={<UserOutlined />} size={44} />
+            <div>
+              <div className="font-semibold">{selectedMember.displayName} {selectedMember.fatherName}</div>
+              <div className="text-sm text-gray-500">{selectedMember.registrationNumber}</div>
+              <Tag color="geekblue" style={{ marginTop: 4 }}>{progName}</Tag>
             </div>
           </div>
-        )}
-      </Modal>
-    </div>
+
+          {/* Reason input */}
+          <Form layout="vertical">
+            <Form.Item label="Rejection Reason" required>
+              <Input.TextArea
+                rows={4}
+                placeholder="Enter a clear reason for rejection (e.g. incomplete documents, duplicate Aadhaar, incorrect details...)"
+                value={rejectionReason}
+                onChange={e => setRejectionReason(e.target.value)}
+                maxLength={500}
+                showCount
+              />
+            </Form.Item>
+          </Form>
+
+          <div className="text-xs text-gray-500 bg-gray-50 p-2 rounded">
+            The rejection reason will be visible to the agent and stored in the request history.
+          </div>
+        </div>
+      )}
+    </Modal>
   )
 }
 

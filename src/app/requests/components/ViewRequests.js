@@ -1,902 +1,458 @@
 import React, { useState, useEffect } from 'react'
-import { 
-  Button, Card, Space, Input, Tag, Avatar, 
-  Badge, Tooltip, Row, Col,
-  message, Modal, Drawer, Descriptions,
-  Divider, Tabs, Timeline, Alert,
-  Image, Typography, Empty, Collapse,
-  Table, Statistic, Progress,
-  Spin
+import {
+  Button, Card, Space, Tag, Avatar, Badge, Tooltip, Row, Col,
+  message, Modal, Drawer, Descriptions, Divider, Tabs, Timeline,
+  Alert, Typography, Empty, Statistic, Progress, Spin, Image
 } from 'antd'
-import { 
+import {
   CheckCircleOutlined, CloseCircleOutlined,
   UserOutlined, PhoneOutlined, IdcardOutlined,
   FileTextOutlined, CalendarOutlined,
   MailOutlined, HomeOutlined, EnvironmentOutlined,
-  SafetyCertificateOutlined, VerifiedOutlined,
-  EyeOutlined, DownloadOutlined, 
-  SwapOutlined, CheckOutlined,
-  WarningOutlined, InfoCircleOutlined,
-  UserSwitchOutlined, BankOutlined,
-  CreditCardOutlined, WalletOutlined,
-  PercentageOutlined,
-  HistoryOutlined,
-  LeftOutlined ,
-  RightOutlined, 
-  ClockCircleOutlined,
-  TeamOutlined
+  SafetyCertificateOutlined, EyeOutlined,
+  LeftOutlined, RightOutlined, ClockCircleOutlined,
+  UserSwitchOutlined, FilePdfOutlined, DownloadOutlined,
+  PercentageOutlined, WalletOutlined, TrophyOutlined
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
-import { collection, doc, getDocs, orderBy, query } from 'firebase/firestore'
-import { db } from '../../../../lib/firbase-client'
+import { useAuth } from '@/components/Base/AuthProvider'
 
-const { Text, Title, Paragraph } = Typography
-const { TabPane } = Tabs
-const { Panel } = Collapse
 
-const ViewRequests = ({
-  activeTab,
-  open,
-  setOpen,
-  selectedMember,
-  setSelectedMember,
-  handleApproveMember,
-  handleRejectMember,
-  getProgramNames,
-  programList,
-  getAgentName,
-  agentList
-}) => {
-  const [activeImageIndex, setActiveImageIndex] = useState(0)
-  const [imagePreviewVisible, setImagePreviewVisible] = useState(false)
-  const [previewImage, setPreviewImage] = useState('')
-  const [previewImages, setPreviewImages] = useState([])
-  const [selectedDocument, setSelectedDocument] = useState(null)
-  const [verificationNotes, setVerificationNotes] = useState({})
+const { Text, Title } = Typography
 
-  if (!selectedMember) return null
+// ─── helpers ──────────────────────────────────────────────────────────────────
+const fmtDate     = (d) => d ? dayjs(d, 'DD-MM-YYYY').format('DD MMM YYYY') : 'N/A'
+const fmtDateTime = (d) => d ? dayjs(d).format('DD MMM YYYY, hh:mm A')     : 'N/A'
 
-  // Helper function to format date
-  const formatDate = (date) => {
-    return date ? dayjs(date, 'DD-MM-YYYY').format('DD MMM YYYY') : 'N/A'
+const getProgramName = (member, programList) => {
+  if (!member?.programId || !programList) return member?.programName || '—'
+  return programList.find(p => p.id === member.programId)?.name || member.programName || '—'
+}
+
+// ─── Document section with info overlay ───────────────────────────────────────
+const DocumentSection = ({ member }) => {
+  const [activeIdx,     setActiveIdx]     = useState(0)
+  const [sliderVisible, setSliderVisible] = useState(false)
+
+  const docs = [
+    { key: 'front',    title: 'Aadhaar Front',  url: member?.documentFrontURL,    icon: <IdcardOutlined />, color: '#faad14' },
+    { key: 'back',     title: 'Aadhaar Back',   url: member?.documentBackURL,     icon: <IdcardOutlined />, color: '#fa8c16' },
+    { key: 'photo',    title: 'Member Photo',   url: member?.photoURL,            icon: <UserOutlined />,   color: '#1890ff' },
+    { key: 'guardian', title: 'Guardian Photo', url: member?.guardianPhotoURL,    icon: <SafetyCertificateOutlined />, color: '#52c41a' },
+    { key: 'guardDoc', title: 'Guardian Doc',   url: member?.guardianDocumentURL, icon: <FileTextOutlined />, color: '#722ed1' },
+  ].filter(d => d.url)
+
+  const openSlider = (idx) => { setActiveIdx(idx); setSliderVisible(true) }
+
+  // Info to overlay on the Aadhaar front card
+  const aadhaarInfo = {
+    name:    [member?.displayName, member?.fatherName, member?.surname].filter(Boolean).join(' '),
+    dob:     fmtDate(member?.dobDate),
+    aadhaar: member?.aadhaarNo,
+    age:     member?.age ? `${member.age} years` : null,
   }
-
-  // Helper function to format time
-  const formatDateTime = (date) => {
-    return date ? dayjs(date).format('DD MMM YYYY, hh:mm A') : 'N/A'
-  }
-
-  // Document verification with side-by-side comparison
-  const DocumentVerificationView = () => {
-    const documents = [
-      {
-        key: 'member',
-        title: 'Member Photo',
-        url: selectedMember.photoURL,
-        type: 'photo',
-        field: 'photo'
-      },
-      {
-        key: 'document',
-        title: 'ID Proof (Aadhaar Front)',
-        url: selectedMember.documentFrontURL,
-        type: 'document',
-        field: 'aadhaar'
-      },
-            {
-        key: 'document',
-        title: 'ID Proof (Aadhaar Back)',
-        url: selectedMember.documentBackURL,
-        type: 'document',
-        field: 'aadhaar'
-      },
-      {
-        key: 'guardian',
-        title: 'Guardian Photo',
-        url: selectedMember.guardianPhotoURL,
-        type: 'photo',
-        field: 'guardian'
-      }
-    ].filter(doc => doc.url)
-
-    // Extract info from document (simulated - in real app, you might use OCR)
-    const extractedInfo = {
-      name: selectedMember.displayName + ' ' + selectedMember.fatherName + ' ' + selectedMember.surname,
-      dob: formatDate(selectedMember.dobDate),
-      aadhaar: selectedMember.aadhaarNo,
-      guardian: selectedMember.guardian
-    }
-
-    const handleViewDocument = (doc) => {
-      setSelectedDocument(doc)
-      setPreviewImages(documents.map(d => d.url))
-      setActiveImageIndex(documents.findIndex(d => d.key === doc.key))
-      setImagePreviewVisible(true)
-    }
-
-    return (
-      <div className="document-verification">
-        <Row gutter={[16, 16]}>
-          {/* Document Images */}
-          <Col span={24}>
-            <Row gutter={[16, 16]}>
-              {documents.map((doc, index) => (
-                <Col span={8} key={doc.key}>
-                  <Card 
-                    size="small"
-                    className={`document-card cursor-pointer! ${selectedDocument?.key === doc.key ? 'selected' : ''}`}
-                    cover={
-                      <div 
-                        className="document-image-container"
-                        onClick={() => handleViewDocument(doc)}
-                      >
-                        <img 
-                          src={doc.url} 
-                          alt={doc.title}
-                          className="document-image"
-                        />
-                        <div className="image-overlay">
-                          <EyeOutlined /> Click to Inspect
-                        </div>
-                      </div>
-                    }
-                  >
-                    <Card.Meta 
-                      title={doc.title}
-                      description={
-                        <Tag color={doc.type === 'photo' ? 'blue' : 'green'}>
-                          {doc.type === 'photo' ? '📸 Photo' : '📄 Document'}
-                        </Tag>
-                      }
-                    />
-                  </Card>
-                </Col>
-              ))}
-            </Row>
-          </Col>
-
-          {/* Document Inspector */}
-          {selectedDocument && (
-            <Col span={24}>
-              <Card 
-                title={
-                  <Space>
-                    <FileTextOutlined />
-                    <span>Document Inspector: {selectedDocument.title}</span>
-                  </Space>
-                }
-                extra={
-                  <Button 
-                    type="link" 
-                    onClick={() => setSelectedDocument(null)}
-                  >
-                    Close Inspector
-                  </Button>
-                }
-                className="document-inspector"
-              >
-                <Row gutter={24}>
-                  <Col span={12}>
-                    <div className="inspector-image">
-                      <img 
-                        src={selectedDocument.url} 
-                        alt="Document" 
-                        style={{ width: '100%', maxHeight: 400, objectFit: 'contain' }}
-                      />
-                    </div>
-                  </Col>
-                  <Col span={12}>
-                    <div className="inspector-details">
-                      <Title level={5}>Verify Information</Title>
-                      
-                      {/* Name Verification */}
-                      <div className="verification-item">
-                        <div className="verification-label">
-                          <UserOutlined /> Name on Document:
-                        </div>
-                        <Input 
-                          placeholder="Enter name shown on document"
-                          defaultValue={extractedInfo.name}
-                          suffix={
-                            <Tooltip title="Verify if name matches">
-                              {extractedInfo.name ? (
-                                <CheckCircleOutlined style={{ color: '#52c41a' }} />
-                              ) : (
-                                <CloseCircleOutlined style={{ color: '#ff4d4f' }} />
-                              )}
-                            </Tooltip>
-                          }
-                        />
-                      </div>
-
-                      {/* DOB Verification */}
-                      <div className="verification-item">
-                        <div className="verification-label">
-                          <CalendarOutlined /> Date of Birth:
-                        </div>
-                        <Input 
-                          placeholder="Enter DOB from document"
-                          defaultValue={extractedInfo.dob}
-                          suffix={
-                            <Tooltip title="Verify if DOB matches">
-                              {extractedInfo.dob !== 'N/A' ? (
-                                <CheckCircleOutlined style={{ color: '#52c41a' }} />
-                              ) : (
-                                <CloseCircleOutlined style={{ color: '#ff4d4f' }} />
-                              )}
-                            </Tooltip>
-                          }
-                        />
-                      </div>
-
-                      {/* Aadhaar Verification (for ID proof) */}
-                      {selectedDocument.field === 'aadhaar' && (
-                        <div className="verification-item">
-                          <div className="verification-label">
-                            <IdcardOutlined /> Aadhaar Number:
-                          </div>
-                          <Input 
-                            placeholder="Enter Aadhaar number from document"
-                            defaultValue={extractedInfo.aadhaar}
-                            suffix={
-                              <Tooltip title="Verify if Aadhaar matches">
-                                {extractedInfo.aadhaar?.length === 12 ? (
-                                  <CheckCircleOutlined style={{ color: '#52c41a' }} />
-                                ) : (
-                                  <CloseCircleOutlined style={{ color: '#ff4d4f' }} />
-                                )}
-                              </Tooltip>
-                            }
-                          />
-                        </div>
-                      )}
-
-                      {/* Guardian Verification (for guardian photo) */}
-                      {selectedDocument.field === 'guardian' && (
-                        <div className="verification-item">
-                          <div className="verification-label">
-                            <SafetyCertificateOutlined /> Guardian Name:
-                          </div>
-                          <Input 
-                            placeholder="Enter guardian name from document"
-                            defaultValue={extractedInfo.guardian}
-                            suffix={
-                              <Tooltip title="Verify if guardian name matches">
-                                {extractedInfo.guardian ? (
-                                  <CheckCircleOutlined style={{ color: '#52c41a' }} />
-                                ) : (
-                                  <CloseCircleOutlined style={{ color: '#ff4d4f' }} />
-                                )}
-                              </Tooltip>
-                            }
-                          />
-                        </div>
-                      )}
-
-                      <Divider />
-
-                      {/* <div className="verification-actions">
-                        <Button 
-                          type="primary" 
-                          icon={<CheckOutlined />}
-                          onClick={() => {
-                            message.success('Document verified successfully')
-                            setSelectedDocument(null)
-                          }}
-                        >
-                          Mark as Verified
-                        </Button>
-                        <Button 
-                          danger 
-                          icon={<CloseCircleOutlined />}
-                          onClick={() => {
-                            message.warning('Document marked for review')
-                          }}
-                        >
-                          Report Issue
-                        </Button>
-                      </div> */}
-                    </div>
-                  </Col>
-                </Row>
-              </Card>
-            </Col>
-          )}
-        </Row>
-
-        {/* Image Slider Modal */}
-        <Modal
-          open={imagePreviewVisible}
-          footer={null}
-          onCancel={() => setImagePreviewVisible(false)}
-          width="90%"
-          centered
-          className="image-slider-modal"
-        >
-          <div className="image-slider-container">
-            <Button 
-              className="slider-nav prev"
-              icon={<LeftOutlined />}
-              onClick={() => setActiveImageIndex(prev => 
-                prev > 0 ? prev - 1 : previewImages.length - 1
-              )}
-              disabled={previewImages.length <= 1}
-            />
-            <div className="slider-image">
-              <img 
-                src={previewImages[activeImageIndex]} 
-                alt={`Document ${activeImageIndex + 1}`}
-                style={{ maxWidth: '100%', maxHeight: '80vh' }}
-              />
-            </div>
-            <Button 
-              className="slider-nav next"
-              icon={<RightOutlined />}
-              onClick={() => setActiveImageIndex(prev => 
-                prev < previewImages.length - 1 ? prev + 1 : 0
-              )}
-              disabled={previewImages.length <= 1}
-            />
-          </div>
-          <div className="image-counter">
-            {activeImageIndex + 1} / {previewImages.length}
-          </div>
-        </Modal>
-
-        <style jsx>{`
-          .document-card {
-            cursor: pointer;
-            transition: all 0.3s;
-            border: 2px solid transparent;
-          }
-          .document-card.selected {
-            border-color: #1890ff;
-            box-shadow: 0 4px 12px rgba(24,144,255,0.2);
-          }
-          .document-card:hover {
-            transform: translateY(-4px);
-            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-          }
-          .document-image-container {
-            position: relative;
-            height: 180px;
-            overflow: hidden;
-          }
-          .document-image {
-            width: 100%;
-            height: 100%;
-            object-fit: cover;
-          }
-          .image-overlay {
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: rgba(0,0,0,0.5);
-            color: white;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            opacity: 0;
-            transition: opacity 0.3s;
-          }
-          .document-card:hover .image-overlay {
-            opacity: 1;
-          }
-          .document-inspector {
-            margin-top: 16px;
-            background: #fafafa;
-          }
-          .verification-item {
-            margin-bottom: 16px;
-          }
-          .verification-label {
-            margin-bottom: 8px;
-            color: #666;
-          }
-          .verification-actions {
-            display: flex;
-            gap: 8px;
-          }
-          .image-slider-container {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 16px;
-          }
-          .slider-nav {
-            border: none;
-            background: rgba(0,0,0,0.5);
-            color: white;
-          }
-          .slider-nav:hover {
-            background: rgba(0,0,0,0.7);
-            color: white;
-          }
-          .image-counter {
-            text-align: center;
-            margin-top: 16px;
-            color: #999;
-          }
-        `}</style>
-      </div>
-    )
-  }
-
-// Program Details Component with your structure
-const ProgramDetailsView = () => {
-  const [memberPrograms, setMemberPrograms] = useState([])
-  const [loading, setLoading] = useState(false)
-
-  useEffect(() => {
-    const fetchMemberPrograms = async () => {
-      if (!selectedMember?.id) return
-      
-      setLoading(true)
-      try {
-        const memberRef = doc(db, 'members', selectedMember.id)
-        const memberProgramsRef = collection(memberRef, 'memberPrograms')
-        const q = query(memberProgramsRef, orderBy('joinDate', 'desc'))
-        const querySnapshot = await getDocs(q)
-        
-        const programs = querySnapshot.docs.map(doc => ({
-          id: doc.id,
-          ...doc.data()
-        }))
-        
-        setMemberPrograms(programs)
-      } catch (error) {
-        console.error('Error fetching member programs:', error)
-        message.error('Failed to load program details')
-      } finally {
-        setLoading(false)
-      }
-    }
-
-    fetchMemberPrograms()
-  }, [selectedMember?.id])
-
-  if (loading) {
-    return (
-      <div style={{ textAlign: 'center', padding: '40px' }}>
-        <Spin size="large" />
-      </div>
-    )
-  }
-
-  if (!memberPrograms || memberPrograms.length === 0) {
-    return (
-      <Empty 
-        description="No program details available" 
-        image={Empty.PRESENTED_IMAGE_SIMPLE}
-      />
-    )
-  }
-
-  const getPaymentStatusColor = (status) => {
-    switch(status) {
-      case 'paid': return 'success'
-      case 'partial': return 'warning'
-      case 'pending': return 'error'
-      default: return 'default'
-    }
-  }
-
-  // Calculate total payments
-  const totals = memberPrograms.reduce((acc, p) => ({
-    joinFees: acc.joinFees + (p.joinFees || 0),
-    paid: acc.paid + (p.paidAmount || 0),
-    pending: acc.pending + (p.pendingAmount || 0)
-  }), { joinFees: 0, paid: 0, pending: 0 })
-
-  const overallPercentage = totals.joinFees > 0 
-    ? Math.round((totals.paid / totals.joinFees) * 100) 
-    : 0
-
-  const columns = [
-    {
-      title: 'Program',
-      dataIndex: 'programName',
-      key: 'programName',
-      fixed: 'left',
-      width: 180,
-      render: (text, record) => (
-        <div>
-          <div style={{ fontWeight: 500 }}>{text}</div>
-          {record.ageGroupName && (
-            <Tag color="blue" style={{ marginTop: 4, fontSize: '11px' }}>
-              {record.ageGroupName}
-            </Tag>
-          )}
-        </div>
-      )
-    },
-    {
-      title: 'Period',
-      key: 'period',
-      width: 150,
-      render: (_, record) => (
-        record.periodStartDate && record.periodEndDate ? (
-          <span style={{ fontSize: '12px' }}>
-            {formatDate(record.periodStartDate)} - {formatDate(record.periodEndDate)}
-          </span>
-        ) : '—'
-      )
-    },
-     {
-      title: 'Pay Amount (₹)',
-      dataIndex: 'payAmount',
-      key: 'payAmount',
-      width: 100,
-      align: 'right',
-      render: (val) => val?.toLocaleString() || '0'
-    },
-    {
-      title: 'Join Fees (₹)',
-      dataIndex: 'joinFees',
-      key: 'joinFees',
-      width: 100,
-      align: 'right',
-      render: (val) => val?.toLocaleString() || '0'
-    },
-       
-    {
-      title: 'Paid (₹)',
-      dataIndex: 'paidAmount',
-      key: 'paidAmount',
-      width: 100,
-      align: 'right',
-      render: (val) => <span style={{ color: '#52c41a', fontWeight: 500 }}>₹{val?.toLocaleString() || 0}</span>
-    },
-    {
-      title: 'Pending (₹)',
-      dataIndex: 'pendingAmount',
-      key: 'pendingAmount',
-      width: 100,
-      align: 'right',
-      render: (val) => <span style={{ color: '#ff4d4f', fontWeight: 500 }}>₹{val?.toLocaleString() || 0}</span>
-    },
-    {
-      title: 'Status',
-      key: 'status',
-      width: 100,
-      align: 'center',
-      render: (_, record) => (
-        <Tag color={getPaymentStatusColor(record.paymentStatus)}>
-          {record.paymentStatus?.toUpperCase()}
-        </Tag>
-      )
-    },
-    {
-      title: 'Group',
-      key: 'group',
-      width: 120,
-      render: (_, record) => {
-        if (!record.memberGroupName) return '—'
-        
-        return (
-          <Tooltip title={`Group Code: ${record.memberGroupCode || 'N/A'}`}>
-            <Tag color="purple" style={{ cursor: 'pointer' }}>
-              <TeamOutlined /> {record.memberGroupName}
-            </Tag>
-          </Tooltip>
-        )
-      }
-    }
-  ]
-
-  // Group programs by member group
-  const groupWisePrograms = memberPrograms.reduce((acc, program) => {
-    const groupName = program.memberGroupName || 'Ungrouped'
-    if (!acc[groupName]) {
-      acc[groupName] = {
-        programs: [],
-        totalJoinFees: 0,
-        totalPaid: 0,
-        totalPending: 0
-      }
-    }
-    acc[groupName].programs.push(program)
-    acc[groupName].totalJoinFees += program.joinFees || 0
-    acc[groupName].totalPaid += program.paidAmount || 0
-    acc[groupName].totalPending += program.pendingAmount || 0
-    return acc
-  }, {})
 
   return (
     <div>
-      {/* Summary Cards */}
-      <Row gutter={16} style={{ marginBottom: 16 }}>
-        <Col span={8}>
-          <Card size="small">
-            <Statistic 
-              title="Total Join Fees" 
-              value={totals.joinFees} 
-              prefix="₹" 
-              precision={2}
-              valueStyle={{ fontSize: 18 }}
-            />
-          </Card>
-        </Col>
-        <Col span={8}>
-          <Card size="small">
-            <Statistic 
-              title="Total Paid" 
-              value={totals.paid} 
-              prefix="₹" 
-              precision={2}
-              valueStyle={{ color: '#52c41a', fontSize: 18 }}
-            />
-          </Card>
-        </Col>
-        <Col span={8}>
-          <Card size="small">
-            <Statistic 
-              title="Total Pending" 
-              value={totals.pending} 
-              prefix="₹" 
-              precision={2}
-              valueStyle={{ color: '#ff4d4f', fontSize: 18 }}
-            />
-          </Card>
-        </Col>
+      <Row gutter={[12, 12]}>
+        {docs.map((d, i) => (
+          <Col xs={24} sm={12} md={8} key={d.key}>
+            <Card
+              bodyStyle={{ padding: 0 }}
+              className="overflow-hidden"
+              style={{ border: `1px solid ${d.color}40`, borderRadius: 10 }}
+            >
+              {/* ── header ── */}
+              <div className="flex items-center gap-2 px-3 py-2" style={{ background: `${d.color}12`, borderBottom: `1px solid ${d.color}30` }}>
+                <span style={{ color: d.color }}>{d.icon}</span>
+                <span className="font-semibold text-sm">{d.title}</span>
+                <Button
+                  type="link" size="small" className="ml-auto p-0"
+                  icon={<EyeOutlined />}
+                  onClick={() => window.open(d.url, '_blank')}
+                >
+                  Open
+                </Button>
+              </div>
+
+              {/* ── image ── */}
+              <div
+                className="relative cursor-pointer group"
+                style={{ height: 170, overflow: 'hidden', background: '#f5f5f5' }}
+                onClick={() => openSlider(i)}
+              >
+                {d.url?.includes('.pdf') ? (
+                  <div className="w-full h-full flex flex-col items-center justify-center gap-2">
+                    <FilePdfOutlined style={{ fontSize: 40, color: '#ff4d4f' }} />
+                    <span className="text-sm text-gray-500">PDF Document</span>
+                    <Button size="small" icon={<DownloadOutlined />} href={d.url} target="_blank">Download</Button>
+                  </div>
+                ) : (
+                  <>
+                    <img src={d.url} alt={d.title} style={{ width:'100%', height:'100%', objectFit:'cover' }} />
+                    <div
+                      className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                      style={{ background:'rgba(0,0,0,0.45)' }}
+                    >
+                      <span className="text-white font-medium flex items-center gap-1"><EyeOutlined /> Inspect</span>
+                    </div>
+                  </>
+                )}
+              </div>
+
+              {/* ── info overlay for Aadhaar front ── */}
+              {d.key === 'front' && (
+                <div className="px-3 py-2 space-y-1 text-xs" style={{ background:'#fffbf0', borderTop:`1px solid ${d.color}30` }}>
+                  <div className="font-semibold text-gray-700 mb-1 flex items-center gap-1">
+                    <IdcardOutlined style={{ color: d.color }} /> Verify Against Document
+                  </div>
+                  <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+                    <div>
+                      <span className="text-gray-500">Name:</span>
+                      <div className="font-medium text-gray-800 truncate" title={aadhaarInfo.name}>{aadhaarInfo.name}</div>
+                    </div>
+                    <div>
+                      <span className="text-gray-500">DOB:</span>
+                      <div className="font-medium text-gray-800">{aadhaarInfo.dob}</div>
+                    </div>
+                    <div>
+                      <span className="text-gray-500">Aadhaar:</span>
+                      <div className="font-medium text-gray-800 font-mono">{aadhaarInfo.aadhaar}</div>
+                    </div>
+                    <div>
+                      <span className="text-gray-500">Age:</span>
+                      <div className="font-medium text-gray-800">{aadhaarInfo.age}</div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* ── info for member photo ── */}
+              {d.key === 'photo' && (
+                <div className="px-3 py-2 text-xs" style={{ background:'#f0f9ff', borderTop:`1px solid ${d.color}30` }}>
+                  <div className="font-semibold text-gray-700 mb-1">Member Details</div>
+                  <div><span className="text-gray-500">Name: </span><span className="font-medium">{aadhaarInfo.name}</span></div>
+                  <div><span className="text-gray-500">Phone: </span><span className="font-medium">{member?.phone}</span></div>
+                </div>
+              )}
+
+              {/* ── info for guardian photo ── */}
+              {d.key === 'guardian' && (
+                <div className="px-3 py-2 text-xs" style={{ background:'#f6ffed', borderTop:`1px solid ${d.color}30` }}>
+                  <div className="font-semibold text-gray-700 mb-1">Guardian Details</div>
+                  <div><span className="text-gray-500">Name: </span><span className="font-medium">{member?.guardian}</span></div>
+                  <div><span className="text-gray-500">Relation: </span><Tag color="cyan" style={{fontSize:10}}>{member?.guardianRelation}</Tag></div>
+                </div>
+              )}
+            </Card>
+          </Col>
+        ))}
       </Row>
 
-
-
-
-      {/* Programs Table */}
-      <Table
-        columns={columns}
-        dataSource={memberPrograms}
-        rowKey="id"
-        size="small"
-        pagination={false}
-        bordered
-        scroll={{ x: 1000 }}
-        summary={() => (
-          <Table.Summary.Row style={{ background: '#fafafa' }}>
-            <Table.Summary.Cell index={0} colSpan={3}>
-              <Text strong>Total</Text>
-            </Table.Summary.Cell>
-            <Table.Summary.Cell index={1} align="right">
-              <Text strong>₹{totals.joinFees.toLocaleString()}</Text>
-            </Table.Summary.Cell>
-            <Table.Summary.Cell index={2} align="right">
-              <Text strong style={{ color: '#52c41a' }}>₹{totals.paid.toLocaleString()}</Text>
-            </Table.Summary.Cell>
-            <Table.Summary.Cell index={3} align="right">
-              <Text strong style={{ color: '#ff4d4f' }}>₹{totals.pending.toLocaleString()}</Text>
-            </Table.Summary.Cell>
-            <Table.Summary.Cell index={4} align="center">
-              <Tag color={overallPercentage === 100 ? 'success' : 'processing'}>
-                {overallPercentage}%
-              </Tag>
-            </Table.Summary.Cell>
-            <Table.Summary.Cell index={5} align="center">
-              <Tag color="purple">{Object.keys(groupWisePrograms).length} Groups</Tag>
-            </Table.Summary.Cell>
-          </Table.Summary.Row>
-        )}
-      />
+      {/* Image slider */}
+      <Modal open={sliderVisible} footer={null} onCancel={() => setSliderVisible(false)} width={860} centered>
+        <div className="flex items-center gap-4 mt-4">
+          <Button icon={<LeftOutlined />} onClick={() => setActiveIdx(p => p > 0 ? p-1 : docs.length-1)} disabled={docs.length <= 1} />
+          <div className="flex-1 flex items-center justify-center" style={{ minHeight: 400 }}>
+            {docs[activeIdx]?.url?.includes('.pdf') ? (
+              <div className="text-center">
+                <FilePdfOutlined style={{ fontSize: 60, color:'#ff4d4f' }} />
+                <div className="mt-2"><Button href={docs[activeIdx].url} target="_blank">Open PDF</Button></div>
+              </div>
+            ) : (
+              <img src={docs[activeIdx]?.url} alt="" style={{ maxWidth:'100%', maxHeight:480, objectFit:'contain' }} />
+            )}
+          </div>
+          <Button icon={<RightOutlined />} onClick={() => setActiveIdx(p => p < docs.length-1 ? p+1 : 0)} disabled={docs.length <= 1} />
+        </div>
+        <div className="text-center mt-3 text-gray-500">
+          <span className="font-medium">{docs[activeIdx]?.title}</span> · {activeIdx+1}/{docs.length}
+        </div>
+        {/* Thumbnails */}
+        <div className="flex gap-2 justify-center mt-3">
+          {docs.map((d, i) => (
+            <div
+              key={d.key}
+              onClick={() => setActiveIdx(i)}
+              className="cursor-pointer rounded overflow-hidden transition-all"
+              style={{ width: 54, height: 40, border: i === activeIdx ? '2px solid #1890ff' : '2px solid transparent', opacity: i === activeIdx ? 1 : 0.6 }}
+            >
+              <img src={d.url} alt={d.title} style={{ width:'100%', height:'100%', objectFit:'cover' }} />
+            </div>
+          ))}
+        </div>
+      </Modal>
     </div>
   )
 }
 
+// ─── Program detail card ──────────────────────────────────────────────────────
+const ProgramDetailCard = ({ member, programList }) => {
+  if (!member?.programId) return <Empty description="No program enrolled" image={Empty.PRESENTED_IMAGE_SIMPLE} />
 
+  const pct      = member.paymentPercentage || 0
+  const progName = getProgramName(member, programList)
+
+  return (
+    <div className="space-y-4">
+      {/* Summary stats */}
+      <Row gutter={16}>
+        {[
+          { title:'Join Fees',  value: member.joinFees    || 0, color:'#1890ff', icon:<WalletOutlined /> },
+          { title:'Paid',       value: member.paidAmount  || 0, color:'#52c41a', icon:<CheckCircleOutlined /> },
+          { title:'Pending',    value: member.pendingAmount || 0, color: (member.pendingAmount||0) > 0 ? '#ff4d4f' : '#52c41a', icon:<ClockCircleOutlined /> },
+        ].map((s, i) => (
+          <Col span={8} key={i}>
+            <Card size="small">
+              <Statistic title={s.title} value={s.value} prefix={<span style={{color:s.color}}>{s.icon}</span>} valueStyle={{color:s.color, fontSize:18}}
+                formatter={v => `₹${Number(v).toLocaleString()}`} />
+            </Card>
+          </Col>
+        ))}
+      </Row>
+
+      {/* Program card */}
+      <Card size="small" style={{ borderLeft:'4px solid #1890ff' }}>
+        <div className="flex items-start gap-3">
+          <div className="w-10 h-10 rounded-lg bg-blue-50 flex items-center justify-center flex-shrink-0">
+            <TrophyOutlined style={{ color:'#1890ff', fontSize:18 }} />
+          </div>
+          <div className="flex-1">
+            <div className="flex items-center gap-2 mb-2">
+              <span className="font-bold text-base">{progName}</span>
+              {member.ageGroupName && <Tag color="blue" style={{fontSize:11}}>{member.ageGroupName}</Tag>}
+              <Tag color={pct===100?'green':pct>0?'orange':'red'} className="ml-auto">
+                {pct===100?'FULLY PAID':pct>0?'PARTIAL':'PENDING'}
+              </Tag>
+            </div>
+
+            <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-sm text-gray-600 mb-3">
+              {member.periodStartDate && (
+                <div><span className="font-medium text-gray-500">Period:</span> {member.periodStartDate} → {member.periodEndDate}</div>
+              )}
+              {member.memberGroupName && (
+                <div><span className="font-medium text-gray-500">Group:</span> <Tag color="cyan">{member.memberGroupName}</Tag></div>
+              )}
+              <div><span className="font-medium text-gray-500">Join Date:</span> {member.dateJoin}</div>
+              <div><span className="font-medium text-gray-500">Pay Amount:</span> ₹{member.payAmount || 0}/month</div>
+            </div>
+
+            <Progress
+              percent={pct}
+              strokeColor={pct===100?'#52c41a':pct>0?'#faad14':'#ff4d4f'}
+              size="small"
+            />
+            <div className="flex gap-6 mt-2 text-sm">
+              <span><Text type="secondary">Fees: </Text><Text strong>₹{(member.joinFees||0).toLocaleString()}</Text></span>
+              <span><Text type="secondary">Paid: </Text><Text strong style={{color:'#52c41a'}}>₹{(member.paidAmount||0).toLocaleString()}</Text></span>
+              <span><Text type="secondary">Due: </Text><Text strong style={{color:(member.pendingAmount||0)>0?'#ff4d4f':'#52c41a'}}>₹{(member.pendingAmount||0).toLocaleString()}</Text></span>
+            </div>
+          </div>
+        </div>
+      </Card>
+    </div>
+  )
+}
+
+// ─── Main Drawer ──────────────────────────────────────────────────────────────
+const ViewRequests = ({
+  activeTab, open, setOpen, selectedMember, setSelectedMember,
+  handleApproveMember, handleRejectMember,
+  programList, getAgentName, agentList
+}) => {
+  if (!selectedMember) return null
+  const { user }    = useAuth()
+const isSuperAdmin =  user?.role === 'superadmin';
+  const usersPermissions = user?.permissions || {};
+  const progName = getProgramName(selectedMember, programList)
   return (
     <Drawer
       title={
-        <div className="drawer-header">
-          <Space align="center">
-            <Avatar 
-              icon={<UserOutlined />} 
-              src={selectedMember.photoURL}
-              size={40}
-            />
-            <div>
-              <Title level={5} style={{ margin: 0 }}>
-                {selectedMember.displayName} {selectedMember.fatherName} {selectedMember.surname}
-              </Title>
-              <Space size={4} wrap>
-                <Badge 
-                  status={activeTab === 'pending' ? 'processing' : 'error'} 
-                  text={
-                    <Text type="secondary">
-                      {activeTab === 'pending' ? 'Pending Approval' : 'Rejected'}
-                    </Text>
-                  } 
-                />
-                <Divider type="vertical" />
-                <Text type="secondary" copyable>
-                  Reg: {selectedMember.registrationNumber}
-                </Text>
-              </Space>
-            </div>
-          </Space>
-        </div>
+        <Space align="center">
+          <Avatar icon={<UserOutlined />} src={selectedMember.photoURL} size={44} />
+          <div>
+            <Title level={5} style={{margin:0}}>
+              {selectedMember.displayName} {selectedMember.fatherName} {selectedMember.surname}
+            </Title>
+            <Space size={4}>
+              <Badge
+                status={activeTab === 'pending' ? 'processing' : 'error'}
+                text={<Text type="secondary">{activeTab === 'pending' ? 'Pending Approval' : 'Rejected'}</Text>}
+              />
+              <Divider type="vertical" />
+              <Text type="secondary" copyable={{ text: selectedMember.registrationNumber }}>
+                {selectedMember.registrationNumber}
+              </Text>
+            </Space>
+          </div>
+        </Space>
       }
-      placement="right"
-      width={1000}
-      onClose={() => {
-        setOpen(false)
-        setSelectedMember(null)
-      }}
+      placement="right" width={1000}
+      onClose={() => { setOpen(false); setSelectedMember(null) }}
       open={open}
       extra={
         activeTab === 'pending' ? (
           <Space>
-            <Button 
-              onClick={() => handleRejectMember(selectedMember)} 
-              danger
-              icon={<CloseCircleOutlined />}
-              size="large"
-            >
-              Reject
-            </Button>
-            <Button 
-              type="primary" 
-              onClick={() => handleApproveMember(selectedMember)}
-              icon={<CheckCircleOutlined />}
-              size="large"
-              style={{ background: '#52c41a', borderColor: '#52c41a' }}
-            >
-              Approve
-            </Button>
+        {(isSuperAdmin || usersPermissions?.actions?.reject) && (
+    <Button
+      danger
+      icon={<CloseCircleOutlined />}
+      onClick={() => handleRejectMember(selectedMember)}
+    >
+      Reject
+    </Button>
+  )}
+
+  {/* ✅ APPROVE */}
+  {(isSuperAdmin || usersPermissions?.actions?.approve) && (
+    <Button
+      type="primary"
+      icon={<CheckCircleOutlined />}
+      style={{ background: '#52c41a', borderColor: '#52c41a' }}
+      onClick={() => handleApproveMember(selectedMember)}
+    >
+      Approve
+    </Button>
+  )}
           </Space>
         ) : null
       }
-      className="member-request-drawer"
     >
-      {/* Main Content Tabs */}
-      <Tabs defaultActiveKey="details" type="card" size="large">
-        <TabPane 
-          tab={<span><UserOutlined />Personal Details</span>}
-          key="details"
-        >
-          {/* Personal details section remains same as before */}
-          <Card title="Basic Information" size="small">
-            <Descriptions column={2} bordered>
-              <Descriptions.Item label="Full Name" span={2}>
-                <Text strong>
-                  {selectedMember.displayName} {selectedMember.fatherName} {selectedMember.surname}
-                </Text>
-              </Descriptions.Item>
-              <Descriptions.Item label="Phone">
-                <PhoneOutlined /> {selectedMember.phone}
-                {selectedMember.phoneAlt && <>, {selectedMember.phoneAlt}</>}
-              </Descriptions.Item>
-              <Descriptions.Item label="Email">
-                <MailOutlined /> {selectedMember.email || 'N/A'}
-              </Descriptions.Item>
-              <Descriptions.Item label="Date of Birth">
-                <CalendarOutlined /> {formatDate(selectedMember.dobDate)} (Age: {selectedMember.age})
-              </Descriptions.Item>
-              <Descriptions.Item label="Aadhaar">
-                <IdcardOutlined /> {selectedMember.aadhaarNo}
-              </Descriptions.Item>
-              <Descriptions.Item label="Caste">
-                <Tag color="purple">{selectedMember.caste || 'N/A'}</Tag>
-              </Descriptions.Item>
-            </Descriptions>
-          </Card>
+      <Tabs
+        defaultActiveKey="details"
+        items={[
+          {
+            key: 'details',
+            label: <span><UserOutlined className="mr-1" />Personal</span>,
+            children: (
+              <div className="space-y-4">
+                {/* Personal */}
+                <Card title="Basic Information" size="small">
+                  <Descriptions column={2} bordered size="small">
+                    <Descriptions.Item label="Full Name" span={2}>
+                      <Text strong>{selectedMember.displayName} {selectedMember.fatherName} {selectedMember.surname}</Text>
+                    </Descriptions.Item>
+                    <Descriptions.Item label="Phone">
+                      <PhoneOutlined className="mr-1" />{selectedMember.phone}
+                      {selectedMember.phoneAlt && <span className="text-gray-500 ml-2">/ {selectedMember.phoneAlt}</span>}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="Email">
+                      <MailOutlined className="mr-1" />{selectedMember.email || 'N/A'}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="Date of Birth">
+                      <CalendarOutlined className="mr-1" />{fmtDate(selectedMember.dobDate)} (Age: {selectedMember.age})
+                    </Descriptions.Item>
+                    <Descriptions.Item label="Aadhaar">
+                      <IdcardOutlined className="mr-1" /><span className="font-mono">{selectedMember.aadhaarNo}</span>
+                    </Descriptions.Item>
+                    <Descriptions.Item label="Caste">
+                      <Tag color="purple">{selectedMember.caste || 'N/A'}</Tag>
+                    </Descriptions.Item>
+                    <Descriptions.Item label="Age Group">
+                      <Tag color="blue">{selectedMember.ageGroup?.toUpperCase() || 'N/A'}</Tag>
+                    </Descriptions.Item>
+                    <Descriptions.Item label="Agent" span={2}>
+                      <UserSwitchOutlined className="mr-1" style={{color:'#1890ff'}} />
+                      {getAgentName(selectedMember.agentId, agentList)}
+                    </Descriptions.Item>
+                  </Descriptions>
+                </Card>
 
-          <Card title="Address Information" size="small" style={{ marginTop: 16 }}>
-            <Descriptions column={2} bordered>
-              <Descriptions.Item label="Address" span={2}>
-                <EnvironmentOutlined /> {selectedMember.currentAddress}
-              </Descriptions.Item>
-              <Descriptions.Item label="Village">{selectedMember.village || 'N/A'}</Descriptions.Item>
-              <Descriptions.Item label="City">{selectedMember.city}</Descriptions.Item>
-              <Descriptions.Item label="District">{selectedMember.district}</Descriptions.Item>
-              <Descriptions.Item label="State">{selectedMember.state}</Descriptions.Item>
-              <Descriptions.Item label="PIN Code" span={2}>
-                {selectedMember.pinCode}
-              </Descriptions.Item>
-            </Descriptions>
-          </Card>
+                {/* Address */}
+                <Card title="Address" size="small">
+                  <Descriptions column={2} bordered size="small">
+                    <Descriptions.Item label="Address" span={2}>
+                      <EnvironmentOutlined className="mr-1" />{selectedMember.currentAddress}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="Village">{selectedMember.village || 'N/A'}</Descriptions.Item>
+                    <Descriptions.Item label="City">{selectedMember.city}</Descriptions.Item>
+                    <Descriptions.Item label="District">{selectedMember.district}</Descriptions.Item>
+                    <Descriptions.Item label="State">{selectedMember.state}</Descriptions.Item>
+                    <Descriptions.Item label="PIN">{selectedMember.pinCode}</Descriptions.Item>
+                  </Descriptions>
+                </Card>
 
-          <Card title="Guardian Information" size="small" style={{ marginTop: 16 }}>
-            <Descriptions column={2} bordered>
-              <Descriptions.Item label="Guardian Name" span={2}>
-                <SafetyCertificateOutlined /> {selectedMember.guardian}
-              </Descriptions.Item>
-              <Descriptions.Item label="Relation">
-                <Tag color="cyan">{selectedMember.guardianRelation}</Tag>
-              </Descriptions.Item>
-            </Descriptions>
-          </Card>
-        </TabPane>
-
-        <TabPane 
-          tab={<span><BankOutlined />Program Details</span>}
-          key="programs"
-        >
-          <ProgramDetailsView />
-        </TabPane>
-
-        <TabPane 
-          tab={<span><FileTextOutlined />Documents</span>}
-          key="documents"
-        >
-          <DocumentVerificationView />
-        </TabPane>
-
-        <TabPane 
-          tab={<span><HistoryOutlined />Request History</span>}
-          key="history"
-        >
-          <Card title="Request Timeline" size="small">
-            <Timeline mode="left">
-              <Timeline.Item 
-                dot={<UserSwitchOutlined style={{ color: '#1890ff' }} />}
-                color="blue"
-              >
-                <Text strong>Request Created</Text>
-                <br />
-                <Text type="secondary">
-                  By: {selectedMember.requestedByName} ({selectedMember.requestedByEmail})
-                </Text>
-                <br />
-                <Text type="secondary">{formatDateTime(selectedMember.requestedAt)}</Text>
-              </Timeline.Item>
-
-              {selectedMember.agentId && (
-                <Timeline.Item 
-                  dot={<UserOutlined style={{ color: '#52c41a' }} />}
-                  color="green"
-                >
-                  <Text strong>Assigned to Agent</Text>
-                  <br />
-                  <Text type="secondary">
-                    Agent: {getAgentName(selectedMember.agentId, agentList)}
-                  </Text>
-                </Timeline.Item>
-              )}
-
-              {selectedMember.status === 'rejected' && (
-                <Timeline.Item 
-                  dot={<CloseCircleOutlined style={{ color: '#ff4d4f' }} />}
-                  color="red"
-                >
-                  <Text strong type="danger">Request Rejected</Text>
-                  <br />
-                  <Text type="secondary">
-                    By: {selectedMember.rejectedByName || 'Unknown'}
-                  </Text>
-                  <br />
-                  <Text type="secondary">{formatDateTime(selectedMember.rejectedAt)}</Text>
-                  {selectedMember.rejectionReason && (
-                    <Alert
-                      message="Rejection Reason"
-                      description={selectedMember.rejectionReason}
-                      type="error"
-                      showIcon
-                      style={{ marginTop: 8 }}
-                    />
-                  )}
-                </Timeline.Item>
-              )}
-            </Timeline>
-          </Card>
-        </TabPane>
-      </Tabs>
-
-      <style jsx global>{`
-        .member-request-drawer .ant-drawer-body {
-          padding: 20px;
-          background: #f5f5f5;
-        }
-        .ant-descriptions-bordered .ant-descriptions-item-label {
-          background-color: #fafafa;
-          font-weight: 500;
-          width: 140px;
-        }
-        .ant-tabs-card.ant-tabs-large .ant-tabs-tab {
-          padding: 8px 16px;
-        }
-      `}</style>
+                {/* Guardian */}
+                <Card title="Guardian Information" size="small">
+                  <Descriptions column={2} bordered size="small">
+                    <Descriptions.Item label="Guardian Name" span={2}>
+                      <SafetyCertificateOutlined className="mr-1" /><Text strong>{selectedMember.guardian}</Text>
+                    </Descriptions.Item>
+                    <Descriptions.Item label="Relation">
+                      <Tag color="cyan">{selectedMember.guardianRelation}</Tag>
+                    </Descriptions.Item>
+                  </Descriptions>
+                </Card>
+              </div>
+            )
+          },
+          {
+            key: 'program',
+            label: <span><TrophyOutlined className="mr-1" />Program</span>,
+            children: (
+              <div className="mt-2">
+                <ProgramDetailCard member={selectedMember} programList={programList} />
+              </div>
+            )
+          },
+          {
+            key: 'documents',
+            label: <span><FileTextOutlined className="mr-1" />Documents</span>,
+            children: (
+              <div className="mt-2">
+                <Alert
+                  message="Document Verification"
+                  description="Compare the information below each document with what is visible in the image before approving."
+                  type="info" showIcon className="mb-4"
+                />
+                <DocumentSection member={selectedMember} />
+              </div>
+            )
+          },
+          {
+            key: 'history',
+            label: <span><ClockCircleOutlined className="mr-1" />History</span>,
+            children: (
+              <Card title="Request Timeline" size="small" className="mt-2">
+                <Timeline mode="left" items={[
+                  {
+                    dot: <UserSwitchOutlined style={{color:'#1890ff'}} />, color: 'blue',
+                    children: (
+                      <div>
+                        <Text strong>Request Created</Text><br />
+                        <Text type="secondary">By: {selectedMember.requestedByName} ({selectedMember.requestedByEmail})</Text><br />
+                        <Text type="secondary">{fmtDateTime(selectedMember.requestedAt)}</Text>
+                      </div>
+                    )
+                  },
+                  ...(selectedMember.agentId ? [{
+                    dot: <UserOutlined style={{color:'#52c41a'}} />, color: 'green',
+                    children: (
+                      <div>
+                        <Text strong>Submitted by Agent</Text><br />
+                        <Text type="secondary">{getAgentName(selectedMember.agentId, agentList)}</Text>
+                      </div>
+                    )
+                  }] : []),
+                  ...(selectedMember.status === 'rejected' ? [{
+                    dot: <CloseCircleOutlined style={{color:'#ff4d4f'}} />, color: 'red',
+                    children: (
+                      <div>
+                        <Text strong type="danger">Rejected</Text><br />
+                        <Text type="secondary">By: {selectedMember.rejectedByName || 'Unknown'}</Text><br />
+                        <Text type="secondary">{fmtDateTime(selectedMember.rejectedAt)}</Text>
+                        {selectedMember.rejectionReason && (
+                          <Alert message="Reason" description={selectedMember.rejectionReason} type="error" showIcon className="mt-2" />
+                        )}
+                      </div>
+                    )
+                  }] : [])
+                ]} />
+              </Card>
+            )
+          }
+        ]}
+      />
     </Drawer>
   )
 }

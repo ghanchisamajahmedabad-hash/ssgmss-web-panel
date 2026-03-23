@@ -3,1103 +3,518 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import { 
   Button, Card, Table, Space, Input, Tag, Avatar, 
   Badge, Tooltip, Row, Col, Statistic,
-  Menu, message, Popover,
-  Dropdown,
-  Modal,
-  Drawer,
-  Select,
-  Form,
-  DatePicker,
-  Descriptions,
-  Progress,
-  Divider,
-  Tabs
+  message, Dropdown, Modal, Select, Tabs
 } from 'antd'
 import { 
   SearchOutlined, EyeOutlined, 
   CheckCircleOutlined, CloseCircleOutlined,
   DeleteOutlined, MoreOutlined,
-  UserOutlined, PhoneOutlined, IdcardOutlined,
-  FileTextOutlined, FilterOutlined, DownloadOutlined,
-  ClockCircleOutlined, CalendarOutlined,
-  ReloadOutlined, MailOutlined,
+  UserOutlined, PhoneOutlined,
+  FileTextOutlined, CalendarOutlined,
+  ReloadOutlined, DownloadOutlined,
+  ClockCircleOutlined, HistoryOutlined,
   ExclamationCircleOutlined,
-  UserSwitchOutlined,
-  SafetyCertificateOutlined,
-  HistoryOutlined,
-  EditOutlined
+  UserSwitchOutlined, EditOutlined
 } from '@ant-design/icons'
 import { useAuth } from '@/components/Base/AuthProvider'
 import dayjs from 'dayjs'
-import {auth, db, storage } from '../../../lib/firbase-client'
+import { auth, db, storage } from '../../../lib/firbase-client'
 import { 
   collection, query, where, getDocs, 
-  doc, updateDoc, deleteDoc, serverTimestamp,
-  getDoc
+  doc, deleteDoc, serverTimestamp
 } from 'firebase/firestore'
 import { ref, deleteObject } from 'firebase/storage'
 import { useSelector } from 'react-redux'
-import EditMember from '../members/components/EditMember'
-import RejectModal from './components/RejectModal'
-import ApproveModal from './components/ApproveModal'
-import ViewRequests from './components/ViewRequests'
+import EditMember    from '../members/components/EditMember'
+import RejectModal   from './components/RejectModal'
+import ApproveModal  from './components/ApproveModal'
+import ViewRequests  from './components/ViewRequests'
 import { generateRegistrationNumber } from '../members/components/components/firebaseUtils'
 
 const { Search } = Input
-const { Option } = Select
-const { TabPane } = Tabs
+const { Option }  = Select
 
-// Firestore helper functions
-const fetchPendingMembers = async (agentId = null) => {
+// ─── Firestore helpers ────────────────────────────────────────────────────────
+const fetchPendingMembers = async () => {
   try {
-    let q
-    if (agentId) {
-      q = query(
-        collection(db, 'members'),
-        where('status', '==', 'pending_approval'),
-        where('agentId', '==', agentId),
-        where('delete_flag', '!=', true)
-      )
-    } else {
-      q = query(
-        collection(db, 'members'),
-        where('status', '==', 'pending_approval'),
-        where('delete_flag', '!=', true)
-      )
-    }
-    
-    const snapshot = await getDocs(q)
-    const pendingMembers = snapshot.docs.map(doc => ({
-      id: doc.id,
-      ...doc.data(),
-      createdAt: doc.data().createdAt?.toDate?.() || new Date(),
-      requestedAt: doc.data().requestedAt?.toDate?.() || new Date()
-    }))
-    
-    return pendingMembers.sort((a, b) => b.requestedAt - a.requestedAt)
-  } catch (error) {
-    console.error('Error fetching pending members:', error)
-    return []
-  }
+    const q = query(
+      collection(db, 'members'),
+      where('status',      '==', 'pending_approval'),
+      where('delete_flag', '!=', true)
+    )
+    const snap = await getDocs(q)
+    return snap.docs
+      .map(d => ({ id: d.id, ...d.data(), createdAt: d.data().createdAt?.toDate?.() || new Date(), requestedAt: d.data().requestedAt?.toDate?.() || new Date() }))
+      .sort((a, b) => b.requestedAt - a.requestedAt)
+  } catch (e) { console.error(e); return [] }
 }
 
-const fetchRejectedMembers = async (agentId = null) => {
+const fetchRejectedMembers = async () => {
   try {
-    let q
-    if (agentId) {
-      q = query(
-        collection(db, 'members'),
-        where('status', '==', 'rejected'),
-        where('agentId', '==', agentId),
-        where('delete_flag', '!=', true)
-      )
-    } else {
-      q = query(
-        collection(db, 'members'),
-        where('status', '==', 'rejected'),
-        where('delete_flag', '!=', true)
-      )
-    }
-    
-    const snapshot = await getDocs(q)
-    const rejectedMembers = snapshot.docs.map(doc => ({
-      id: doc.id,
-      ...doc.data(),
-      createdAt: doc.data().createdAt?.toDate?.() || new Date(),
-      requestedAt: doc.data().requestedAt?.toDate?.() || new Date(),
-      rejectedAt: doc.data().rejectedAt?.toDate?.() || new Date()
-    }))
-    
-    return rejectedMembers.sort((a, b) => b.rejectedAt - a.rejectedAt)
-  } catch (error) {
-    console.error('Error fetching rejected members:', error)
-    return []
-  }
+    const q = query(
+      collection(db, 'members'),
+      where('status',      '==', 'rejected'),
+      where('delete_flag', '!=', true)
+    )
+    const snap = await getDocs(q)
+    return snap.docs
+      .map(d => ({ id: d.id, ...d.data(), createdAt: d.data().createdAt?.toDate?.() || new Date(), requestedAt: d.data().requestedAt?.toDate?.() || new Date(), rejectedAt: d.data().rejectedAt?.toDate?.() || new Date() }))
+      .sort((a, b) => b.rejectedAt - a.rejectedAt)
+  } catch (e) { console.error(e); return [] }
 }
 
 const getAgentName = (agentId, agentList) => {
   if (!agentId) return 'Admin/System'
-  const agent = agentList?.find(a => a.id === agentId || a.uid === agentId)
-  return agent ? agent.name : 'Unknown Agent'
+  const a = agentList?.find(a => a.id === agentId || a.uid === agentId)
+  return a ? a.name : 'Unknown Agent'
 }
 
-const getProgramNames = (programIds, programList) => {
-  if (!programIds || !programList) return []
-  return programIds
-    .map(id => {
-      const program = programList.find(p => p.id === id)
-      return program ? program.name : null
-    })
-    .filter(Boolean)
+// Single program name (flat field)
+const getProgramName = (member, programList) => {
+  if (!member?.programId || !programList) return member?.programName || '—'
+  return programList.find(p => p.id === member.programId)?.name || member.programName || '—'
 }
 
-// Delete member files from storage
 const deleteMemberFiles = async (member) => {
   try {
-    const filesToDelete = []
-    
-    if (member.photoURL && member.photoURL.includes('firebasestorage')) {
-      const photoRef = ref(storage, member.photoURL)
-      filesToDelete.push(deleteObject(photoRef))
-    }
-    
-    if (member.guardianPhotoURL && member.guardianPhotoURL.includes('firebasestorage')) {
-      const guardianPhotoRef = ref(storage, member.guardianPhotoURL)
-      filesToDelete.push(deleteObject(guardianPhotoRef))
-    }
-    
-    if (member.documentFrontURL && member.documentFrontURL.includes('firebasestorage')) {
-      const docFrontRef = ref(storage, member.documentFrontURL)
-      filesToDelete.push(deleteObject(docFrontRef))
-    }
-    
-    if (member.documentBackURL && member.documentBackURL.includes('firebasestorage')) {
-      const docBackRef = ref(storage, member.documentBackURL)
-      filesToDelete.push(deleteObject(docBackRef))
-    }
-    
-    if (member.guardianDocumentURL && member.guardianDocumentURL.includes('firebasestorage')) {
-      const guardianDocRef = ref(storage, member.guardianDocumentURL)
-      filesToDelete.push(deleteObject(guardianDocRef))
-    }
-    
-    await Promise.allSettled(filesToDelete)
-  } catch (error) {
-    console.error('Error deleting files:', error)
-    // Don't throw error, continue with member deletion
-  }
+    const urls = [member.photoURL, member.guardianPhotoURL, member.documentFrontURL, member.documentBackURL, member.guardianDocumentURL].filter(u => u?.includes('firebasestorage'))
+    await Promise.allSettled(urls.map(u => deleteObject(ref(storage, u))))
+  } catch (e) { console.error(e) }
 }
 
+// ─── Page ─────────────────────────────────────────────────────────────────────
 const Page = () => {
-  const [loading, setLoading] = useState(true)
-  const [activeTab, setActiveTab] = useState('pending')
-  const [pendingMembers, setPendingMembers] = useState([])
-  const [rejectedMembers, setRejectedMembers] = useState([])
-  const [selectedMember, setSelectedMember] = useState(null)
-  const [detailDrawerVisible, setDetailDrawerVisible] = useState(false)
-  const [approvalModalVisible, setApprovalModalVisible] = useState(false)
-  const [rejectionModalVisible, setRejectionModalVisible] = useState(false)
-  const [selectedAction, setSelectedAction] = useState(null)
-  const [openEditMember, setOpenEditMember] = useState(false)
-  const [editMemberId, setEditMemberId] = useState(null)
-  const [rejectionReason, setRejectionReason] = useState('')
-  const [filters, setFilters] = useState({
-    search: '',
-    agentId: 'all',
-    programId: 'all'
+  const [loading,                setLoading]                = useState(true)
+  const [activeTab,              setActiveTab]              = useState('pending')
+  const [pendingMembers,         setPendingMembers]         = useState([])
+  const [rejectedMembers,        setRejectedMembers]        = useState([])
+  const [selectedMember,         setSelectedMember]         = useState(null)
+  const [detailDrawerVisible,    setDetailDrawerVisible]    = useState(false)
+  const [approvalModalVisible,   setApprovalModalVisible]   = useState(false)
+  const [rejectionModalVisible,  setRejectionModalVisible]  = useState(false)
+  const [openEditMember,         setOpenEditMember]         = useState(false)
+  const [editMemberId,           setEditMemberId]           = useState(null)
+  const [filters, setFilters] = useState({ search: '', agentId: 'all', programId: 'all' })
+  const [stats,   setStats]   = useState({
+    pending:  { total: 0, todayRequests: 0, weekRequests: 0, agentRequests: {} },
+    rejected: { total: 0, todayRequests: 0, weekRequests: 0, agentRequests: {} }
   })
-  const [stats, setStats] = useState({
-    pending: {
-      total: 0,
-      todayRequests: 0,
-      weekRequests: 0,
-      agentRequests: {}
-    },
-    rejected: {
-      total: 0,
-      todayRequests: 0,
-      weekRequests: 0,
-      agentRequests: {}
-    }
-  })
-  const programList = useSelector((state) => state.data.programList)
-  const agentList = useSelector((state) => state.data.agentList)
 
-  const { user } = useAuth()
-
-  // Fetch all data
-  useEffect(() => {
-    fetchAllData()
-    generateRegistrationNumber()
-  }, [])
+  const programList = useSelector((s) => s.data.programList)
+  const agentList   = useSelector((s) => s.data.agentList)
+  const { user }    = useAuth()
+const isSuperAdmin = (user) => user?.role === 'superadmin';
+  const usersPermissions = user?.permissions || {};
+  useEffect(() => { fetchAllData(); generateRegistrationNumber() }, [])
 
   const fetchAllData = async () => {
-    setLoading(true)
-     setDetailDrawerVisible(false)
+    setLoading(true); setDetailDrawerVisible(false)
     try {
-      // Fetch pending and rejected members
-      const [pending, rejected] = await Promise.all([
-        fetchPendingMembers(),
-        fetchRejectedMembers()
-      ])
-      
-      setPendingMembers(pending)
-      setRejectedMembers(rejected)
-      
-      // Calculate stats for pending
-      const today = dayjs().startOf('day')
+      const [pending, rejected] = await Promise.all([fetchPendingMembers(), fetchRejectedMembers()])
+      setPendingMembers(pending); setRejectedMembers(rejected)
+
+      const today   = dayjs().startOf('day')
       const weekAgo = dayjs().subtract(7, 'day')
-      
-      const pendingTodayRequests = pending.filter(m => 
-        dayjs(m.requestedAt).isSame(today, 'day')
-      ).length
-      
-      const pendingWeekRequests = pending.filter(m => 
-        dayjs(m.requestedAt).isAfter(weekAgo)
-      ).length
-      
-      const pendingAgentRequests = {}
-      pending.forEach(member => {
-        if (member.agentId) {
-          pendingAgentRequests[member.agentId] = (pendingAgentRequests[member.agentId] || 0) + 1
-        }
+      const mkStats = (arr, dateKey) => ({
+        total:          arr.length,
+        todayRequests:  arr.filter(m => dayjs(m[dateKey]).isSame(today, 'day')).length,
+        weekRequests:   arr.filter(m => dayjs(m[dateKey]).isAfter(weekAgo)).length,
+        agentRequests:  arr.reduce((acc, m) => { if (m.agentId) acc[m.agentId] = (acc[m.agentId]||0)+1; return acc }, {})
       })
-      
-      // Calculate stats for rejected
-      const rejectedTodayRequests = rejected.filter(m => 
-        dayjs(m.rejectedAt).isSame(today, 'day')
-      ).length
-      
-      const rejectedWeekRequests = rejected.filter(m => 
-        dayjs(m.rejectedAt).isAfter(weekAgo)
-      ).length
-      
-      const rejectedAgentRequests = {}
-      rejected.forEach(member => {
-        if (member.agentId) {
-          rejectedAgentRequests[member.agentId] = (rejectedAgentRequests[member.agentId] || 0) + 1
-        }
-      })
-      
-      setStats({
-        pending: {
-          total: pending.length,
-          todayRequests: pendingTodayRequests,
-          weekRequests: pendingWeekRequests,
-          agentRequests: pendingAgentRequests
-        },
-        rejected: {
-          total: rejected.length,
-          todayRequests: rejectedTodayRequests,
-          weekRequests: rejectedWeekRequests,
-          agentRequests: rejectedAgentRequests
-        }
-      })
-      
-    } catch (error) {
-      console.error('Error fetching data:', error)
-      message.error('Failed to load data')
-    } finally {
-      setLoading(false)
-    }
+      setStats({ pending: mkStats(pending,'requestedAt'), rejected: mkStats(rejected,'rejectedAt') })
+    } catch (e) { console.error(e); message.error('Failed to load data') }
+    finally    { setLoading(false) }
   }
 
-  // Get current members based on active tab
-  const getCurrentMembers = () => {
-    return activeTab === 'pending' ? pendingMembers : rejectedMembers
-  }
+  const currentMembers = activeTab === 'pending' ? pendingMembers : rejectedMembers
+  const currentStats   = activeTab === 'pending' ? stats.pending  : stats.rejected
 
-  // Get current stats based on active tab
-  const getCurrentStats = () => {
-    return activeTab === 'pending' ? stats.pending : stats.rejected
-  }
-
-  // Filter members - based on active tab
   const filteredMembers = useMemo(() => {
-    const members = getCurrentMembers()
-    let filtered = [...members]
-    
-    // Search filter
+    let list = [...currentMembers]
     if (filters.search) {
-      const searchTerm = filters.search.toLowerCase()
-      filtered = filtered.filter(member => 
-        member.displayName?.toLowerCase().includes(searchTerm) ||
-        member.fatherName?.toLowerCase().includes(searchTerm) ||
-        member.surname?.toLowerCase().includes(searchTerm) ||
-        member.phone?.includes(searchTerm) ||
-        member.aadhaarNo?.includes(searchTerm) ||
-        member.registrationNumber?.toLowerCase().includes(searchTerm) ||
-        member.village?.toLowerCase().includes(searchTerm) ||
-        member.city?.toLowerCase().includes(searchTerm)
+      const s = filters.search.toLowerCase()
+      list = list.filter(m =>
+        m.displayName?.toLowerCase().includes(s) ||
+        m.fatherName?.toLowerCase().includes(s)  ||
+        m.surname?.toLowerCase().includes(s)     ||
+        m.phone?.includes(s) || m.aadhaarNo?.includes(s) ||
+        m.registrationNumber?.toLowerCase().includes(s) ||
+        m.village?.toLowerCase().includes(s) || m.city?.toLowerCase().includes(s)
       )
     }
-    
-    // Agent filter
-    if (filters.agentId !== 'all') {
-      filtered = filtered.filter(member => member.agentId === filters.agentId)
-    }
-    
-    // Program filter
-    if (filters.programId !== 'all') {
-      filtered = filtered.filter(member => 
-        member.programIds && member.programIds.includes(filters.programId)
-      )
-    }
-    
-    return filtered
+    if (filters.agentId !== 'all')   list = list.filter(m => m.agentId === filters.agentId)
+    if (filters.programId !== 'all') list = list.filter(m => m.programId === filters.programId)
+    return list
   }, [activeTab, pendingMembers, rejectedMembers, filters])
 
-  // Handle view member details
-  const handleViewMember = (member) => {
-    setSelectedMember(member)
-    setDetailDrawerVisible(true)
-  }
+  const handleViewMember    = (m) => { setSelectedMember(m); setDetailDrawerVisible(true) }
+  const handleApproveMember = (m) => { setSelectedMember(m); setApprovalModalVisible(true) }
+  const handleRejectMember  = (m) => { setSelectedMember(m); setRejectionModalVisible(true) }
+  const handleEditMember    = (m) => { setEditMemberId(m.id); setOpenEditMember(true) }
 
-  // Handle approve member
-  const handleApproveMember = (member) => {
-    setSelectedMember(member)
-    setSelectedAction('approve')
-    setApprovalModalVisible(true)
-
-  }
-
-  // Handle reject member
-  const handleRejectMember = (member) => {
-    setSelectedMember(member)
-    setRejectionModalVisible(true)
-  }
-
-  // Handle delete member (permanent)
-  const handleDeleteMember = async (member) => {
+  const handleDeleteMember = (member) => {
     Modal.confirm({
       title: 'Permanently Delete Request',
+      icon: <ExclamationCircleOutlined style={{ color: '#ff4d4f' }} />,
       content: (
         <div>
-          <div className="text-red-600 mb-2">
-            <ExclamationCircleOutlined className="mr-2" />
-            This action cannot be undone!
-          </div>
-          <p>Are you sure you want to permanently delete this member request?</p>
-          <p className="text-gray-500 text-sm mt-2">
-            This will delete all uploaded files and remove the request completely from the system.
-          </p>
+          <p className="text-red-600 mb-2">This action cannot be undone!</p>
+          <p>Delete <b>{member.displayName}</b>'s request and all uploaded files?</p>
         </div>
       ),
-      okText: 'Yes, Delete Permanently',
-      okType: 'danger',
-      cancelText: 'Cancel',
+      okText: 'Yes, Delete Permanently', okType: 'danger', cancelText: 'Cancel',
       onOk: async () => {
         try {
-          // Delete all uploaded files
           await deleteMemberFiles(member)
-          
-          // Delete member document
           await deleteDoc(doc(db, 'members', member.id))
-          
-          // Delete member programs subcollection
-          const programsRef = collection(db, 'members', member.id, 'memberPrograms')
-          const programsSnap = await getDocs(programsRef)
-          const deletePromises = programsSnap.docs.map(doc => deleteDoc(doc.ref))
-          await Promise.all(deletePromises)
-          
-          // Delete payment summary if exists
-          try {
-            const paymentSummaryQuery = query(
-              collection(db, 'memberPaymentSummaries'),
-              where('memberId', '==', member.id)
-            )
-            const paymentSummarySnap = await getDocs(paymentSummaryQuery)
-            paymentSummarySnap.forEach(async (doc) => {
-              await deleteDoc(doc.ref)
-            })
-          } catch (error) {
-            console.error('Error deleting payment summary:', error)
-          }
-          
-          message.success('Member request permanently deleted')
+          // Clean up payment summaries
+          const psSnap = await getDocs(query(collection(db,'memberPaymentSummaries'), where('memberId','==',member.id)))
+          await Promise.all(psSnap.docs.map(d => deleteDoc(d.ref)))
+          message.success('Request deleted permanently')
           fetchAllData()
-        } catch (error) {
-          console.error('Error deleting member:', error)
-          message.error('Failed to delete member request')
-        }
+        } catch (e) { console.error(e); message.error('Failed to delete') }
       }
     })
   }
 
-  // Execute approval
-
-
-
-
-  // Generate final registration number
-  const generateFinalRegistrationNumber = async () => {
-    try {
-      const year = dayjs().format('YYYY')
-      const month = dayjs().format('MM')
-      const prefix = 'MEM'
-      
-      // Count active members for current month
-      const startDate = `01-${month}-${year}`
-      const endDate = `31-${month}-${year}`
-      
-      const q = query(
-        collection(db, 'members'),
-        where('dateJoin', '>=', startDate),
-        where('dateJoin', '<=', endDate),
-        where('status', '==', 'active')
-      )
-      
-      const snapshot = await getDocs(q)
-      const count = snapshot.size + 1
-      
-      return `${prefix}${year}${month}${count.toString().padStart(4, '0')}`
-    } catch (error) {
-      console.error('Error generating registration number:', error)
-      return `MEM${dayjs().format('YYYYMMDDHHmmss')}`
-    }
-  }
-
-  // Export to CSV
   const exportToCSV = () => {
-    const members = filteredMembers
     const status = activeTab === 'pending' ? 'Pending' : 'Rejected'
-    
-    const headers = [
-      'Sr No', 'Registration No', 'Name', 'Phone', 'Aadhaar',
-      'Village', 'City', 'Agent', 'Programs', 
+    const headers = ['Sr No','Reg No','Name','Phone','Aadhaar','Village','City','Program','Agent',
       activeTab === 'pending' ? 'Requested Date' : 'Rejected Date',
-      activeTab === 'pending' ? 'Days Pending' : 'Rejection Reason'
-    ]
-    
-    const csvData = members.map((member, index) => [
-      index + 1,
-      member.registrationNumber,
-      `${member.displayName} ${member.fatherName} ${member.surname}`,
-      member.phone,
-      member.aadhaarNo,
-      member.village,
-      member.city,
-      getAgentName(member.agentId, agentList),
-      getProgramNames(member.programIds, programList).join(', '),
-      activeTab === 'pending' 
-        ? dayjs(member.requestedAt).format('DD-MM-YYYY HH:mm')
-        : dayjs(member.rejectedAt).format('DD-MM-YYYY HH:mm'),
-      activeTab === 'pending'
-        ? dayjs().diff(dayjs(member.requestedAt), 'day')
-        : member.rejectionReason || 'No reason provided'
+      activeTab === 'pending' ? 'Days Pending'  : 'Rejection Reason']
+    const rows = filteredMembers.map((m, i) => [
+      i+1, m.registrationNumber,
+      `${m.displayName} ${m.fatherName} ${m.surname}`,
+      m.phone, m.aadhaarNo, m.village, m.city,
+      getProgramName(m, programList),
+      getAgentName(m.agentId, agentList),
+      activeTab === 'pending' ? dayjs(m.requestedAt).format('DD-MM-YYYY HH:mm') : dayjs(m.rejectedAt).format('DD-MM-YYYY HH:mm'),
+      activeTab === 'pending' ? dayjs().diff(dayjs(m.requestedAt),'day') : (m.rejectionReason || 'No reason')
     ])
-    
-    const csvContent = [
-      headers.join(','),
-      ...csvData.map(row => row.map(cell => 
-        typeof cell === 'string' && cell.includes(',') ? `"${cell}"` : cell
-      ).join(','))
-    ].join('\n')
-    
-    const blob = new Blob([csvContent], { type: 'text/csv' })
-    const url = window.URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `${status.toLowerCase()}_members_${dayjs().format('YYYY-MM-DD')}.csv`
-    a.click()
+    const csv  = [headers, ...rows].map(r => r.map(c => typeof c === 'string' && c.includes(',') ? `"${c}"` : c).join(',')).join('\n')
+    const url  = window.URL.createObjectURL(new Blob([csv], { type:'text/csv' }))
+    const a    = document.createElement('a'); a.href = url; a.download = `${status.toLowerCase()}_${dayjs().format('YYYY-MM-DD')}.csv`; a.click()
   }
 
-  // Reset filters
-  const resetFilters = () => {
-    setFilters({
-      search: '',
-      agentId: 'all',
-      programId: 'all'
-    })
+  // ── Shared columns ──────────────────────────────────────────────────────────
+  const memberCol = {
+    title: 'Member', key: 'member', width: 180,
+    render: (_, r) => (
+      <div className="flex items-center gap-2">
+        <Avatar src={r.photoURL} icon={<UserOutlined />} size="small" />
+        <div>
+          <div className="font-medium text-sm">{r.displayName}</div>
+          <div className="text-xs text-gray-500">{r.fatherName} • {r.surname}</div>
+          <div className="text-xs text-gray-400">Age: {r.age || 'N/A'}</div>
+        </div>
+      </div>
+    ),
+  }
+  const contactCol = {
+    title: 'Contact', key: 'contact', width: 130,
+    render: (_, r) => (
+      <div>
+        <div className="flex items-center gap-1 text-sm"><PhoneOutlined style={{fontSize:11}} />{r.phone}</div>
+        {r.phoneAlt && <div className="text-xs text-gray-500">Alt: {r.phoneAlt}</div>}
+      </div>
+    ),
+  }
+  const agentCol = {
+    title: 'Agent', key: 'agent', width: 120,
+    render: (_, r) => (
+      <div className="text-xs flex items-center gap-1">
+        <UserSwitchOutlined style={{fontSize:11, color:'#1890ff'}} />
+        <span className="font-medium truncate">{getAgentName(r.agentId, agentList)}</span>
+      </div>
+    ),
+  }
+  // Single program tag
+  const programCol = {
+    title: 'Yojna', key: 'program', width: 130,
+    render: (_, r) => {
+      const name = getProgramName(r, programList)
+      return name !== '—' ? <Tag color="geekblue">{name}</Tag> : <span className="text-gray-400 text-xs">—</span>
+    },
   }
 
-  // Check if any filter is active
-  const isFilterActive = () => {
-    return filters.search || 
-           filters.agentId !== 'all' || 
-           filters.programId !== 'all'
-  }
-
-  const handleEditMember = (member) => {
-    setEditMemberId(member.id)
-    setOpenEditMember(true)
-  }
-
-  // Columns for pending members
+  // ── Pending columns ─────────────────────────────────────────────────────────
   const pendingColumns = [
+    { title: '#', key: 'idx', width: 50, render: (_, __, i) => i+1 },
+    memberCol, contactCol,
+    { title: 'Aadhaar', key: 'aadhaar', width: 130, render: (_, r) => <span className="text-sm">{r.aadhaarNo}</span> },
+    agentCol, programCol,
     {
-      title: 'Sr No.',
-      dataIndex: 'id',
-      key: 'id',
-      width: 60,
-      render: (_, record, index) => index + 1
+      title: 'Requested', key: 'requestedAt', width: 120,
+      render: (_, r) => <div className="text-sm"><div>{dayjs(r.requestedAt).format('DD-MM-YYYY')}</div><div className="text-xs text-gray-500">{dayjs(r.requestedAt).format('hh:mm A')}</div></div>,
     },
     {
-      title: 'Member',
-      key: 'member',
-      width: 180,
-      render: (_, record) => (
-        <div className="flex items-center gap-2">
-          <Avatar 
-            src={record.photoURL} 
-            icon={<UserOutlined />}
-            size="small"
-          />
-          <div>
-            <div className="font-medium text-sm">{record.displayName}</div>
-            <div className="text-xs text-gray-500">
-              {record.fatherName} • {record.surname}
-            </div>
-            <div className="text-xs text-gray-400">
-              Age: {record.age || 'N/A'}
-            </div>
-          </div>
-        </div>
-      ),
-    },
-    {
-      title: 'Contact',
-      key: 'contact',
-      width: 140,
-      render: (_, record) => (
-        <div>
-          <div className="flex items-center gap-1 text-sm">
-            <PhoneOutlined style={{ fontSize: '11px' }} />
-            <span>{record.phone}</span>
-          </div>
-          {record.phoneAlt && (
-            <div className="text-xs text-gray-500">
-              Alt: {record.phoneAlt}
-            </div>
-          )}
-        </div>
-      ),
-    },
-    {
-      title: 'Aadhaar No.',
-      key: 'aadhaarNo',
-      width: 140,
-      render: (_, record) => (
-        <div>
-          <div className="flex items-center gap-1 text-sm">
-            <UserOutlined style={{ fontSize: '11px' }} />
-            <span>{record.aadhaarNo}</span>
-          </div>
-        </div>
-      ),
-    },
-    {
-      title: 'Agent',
-      key: 'agent',
-      width: 120,
-      render: (_, record) => {
-        const agentName = getAgentName(record.agentId, agentList)
-        return (
-          <div className="text-xs">
-            <div className="flex items-center gap-1">
-              <UserSwitchOutlined style={{ fontSize: '11px', color: '#1890ff' }} />
-              <span className="font-medium truncate" title={agentName}>
-                {agentName}
-              </span>
-            </div>
-          </div>
-        )
+      title: 'Pending', key: 'days', width: 90,
+      render: (_, r) => {
+        const d = dayjs().diff(dayjs(r.requestedAt),'day')
+        return <Tag color={d > 14 ? 'red' : d > 7 ? 'orange' : 'green'}>{d}d</Tag>
       },
     },
     {
-      title: 'Yojna',
-      key: 'programs',
-      width: 140,
-      render: (_, record) => (
-        <div className=''>
-          {record.programIds?.map((id, idx) => {
-            const program = programList?.find(p => p.id === id)
-            return program ? (
-              <Tag key={idx} color={'geekblue'}>{program.name}</Tag>
-            ) : null
-          })}
-        </div>
-      ),
-    },
-    {
-      title: 'Requested',
-      key: 'requestedAt',
-      width: 140,
-      render: (_, record) => (
-        <div className="text-sm">
-          <div>{dayjs(record.requestedAt).format('DD-MM-YYYY')}</div>
-          <div className="text-xs text-gray-500">
-            {dayjs(record.requestedAt).format('hh:mm A')}
-          </div>
-        </div>
-      ),
-    },
-    {
-      title: 'Days Pending',
-      key: 'daysPending',
-      width: 100,
-      render: (_, record) => {
-        const days = dayjs().diff(dayjs(record.requestedAt), 'day')
-        let color = 'green'
-        if (days > 7) color = 'orange'
-        if (days > 14) color = 'red'
-        
-        return (
-          <Tag color={color}>
-            {days} day{days !== 1 ? 's' : ''}
-          </Tag>
-        )
-      },
-    },
-    {
-      title: 'Actions',
-      key: 'actions',
-      width: 120,
-      fixed: 'right',
-      render: (_, record) => (
-        <Space>
-          <Tooltip title="View Details">
-            <Button 
-              type="text" 
-              icon={<EyeOutlined />} 
-              onClick={() => handleViewMember(record)}
-              size="small"
-            />
-          </Tooltip>
-          
-          <Dropdown
-            menu={{
-              items: [
-                {
-                  key: 'approve',
-                  label: 'Approve',
-                  icon: <CheckCircleOutlined style={{ color: '#52c41a' }} />,
-                  onClick: () => handleApproveMember(record),
-                },
-                {
-                  key: 'reject',
-                  label: 'Reject',
-                  icon: <CloseCircleOutlined style={{ color: '#ff4d4f' }} />,
-                  onClick: () => handleRejectMember(record),
-                },
-                { type: 'divider' },
-                {
-                  key: 'edit',
-                  label: 'Edit',
-                  icon: <EditOutlined />,
-                  onClick: () => handleEditMember(record),
-                },
-                {
-                  key: 'delete',
-                  label: 'Delete Permanently',
-                  icon: <DeleteOutlined style={{ color: '#ff4d4f' }} />,
-                  danger: true,
-                  onClick: () => handleDeleteMember(record),
-                },
-              ]
-            }}
-            trigger={['click']}
-          >
-            <Tooltip title="More Actions">
-              <Button
-                type="text"
-                icon={<MoreOutlined />}
-                size="small"
-              />
-            </Tooltip>
-          </Dropdown>
-        </Space>
-      ),
+      title: 'Actions', key: 'actions', width: 110, fixed: 'right',
+    render: (_, r) => (
+  <Space>
+
+    {/* 👁 VIEW */}
+    {(isSuperAdmin || usersPermissions?.actions?.view) && (
+      <Tooltip title="View">
+        <Button
+          type="text"
+          icon={<EyeOutlined />}
+          size="small"
+          onClick={() => handleViewMember(r)}
+        />
+      </Tooltip>
+    )}
+
+    {/* ✅ APPROVE */}
+    {usersPermissions?.actions?.approve && (
+      <Tooltip title="Approve">
+        <Button
+          type="text"
+          icon={<CheckCircleOutlined style={{ color: '#52c41a' }} />}
+          size="small"
+          onClick={() => handleApproveMember(r)}
+        />
+      </Tooltip>
+    )}
+
+    {/* ⋮ MORE OPTIONS */}
+    {(usersPermissions?.actions?.edit ||
+      usersPermissions?.actions?.delete ||
+      usersPermissions?.actions?.reject) && (
+      <Dropdown
+        trigger={['click']}
+        menu={{
+          items: [
+            usersPermissions?.actions?.reject && {
+              key: 'reject',
+              label: 'Reject',
+              icon: <CloseCircleOutlined style={{ color: '#ff4d4f' }} />,
+              onClick: () => handleRejectMember(r),
+            },
+
+            usersPermissions?.actions?.edit && {
+              key: 'edit',
+              label: 'Edit',
+              icon: <EditOutlined />,
+              onClick: () => handleEditMember(r),
+            },
+
+            (usersPermissions?.actions?.edit &&
+              usersPermissions?.actions?.delete) && { type: 'divider' },
+
+            usersPermissions?.actions?.delete && {
+              key: 'delete',
+              label: 'Delete',
+              danger: true,
+              icon: <DeleteOutlined style={{ color: '#ff4d4f' }} />,
+              onClick: () => handleDeleteMember(r),
+            },
+          ].filter(Boolean), // 🚀 remove false/null items
+        }}
+      >
+        <Button type="text" icon={<MoreOutlined />} size="small" />
+      </Dropdown>
+    )}
+  </Space>
+)
     },
   ]
-
-  // Columns for rejected members
+const can = (key) => isSuperAdmin || usersPermissions?.actions?.[key];
+  // ── Rejected columns ────────────────────────────────────────────────────────
   const rejectedColumns = [
+    { title: '#', key: 'idx', width: 50, render: (_, __, i) => i+1 },
+    memberCol, contactCol, agentCol, programCol,
     {
-      title: 'Sr No.',
-      dataIndex: 'id',
-      key: 'id',
-      width: 60,
-      render: (_, record, index) => index + 1
+      title: 'Rejected On', key: 'rejectedAt', width: 120,
+      render: (_, r) => <div className="text-sm"><div>{dayjs(r.rejectedAt).format('DD-MM-YYYY')}</div><div className="text-xs text-gray-500">{dayjs(r.rejectedAt).format('hh:mm A')}</div></div>,
     },
     {
-      title: 'Member',
-      key: 'member',
-      width: 180,
-      render: (_, record) => (
-        <div className="flex items-center gap-2">
-          <Avatar 
-            src={record.photoURL} 
-            icon={<UserOutlined />}
-            size="small"
-          />
-          <div>
-            <div className="font-medium text-sm">{record.displayName}</div>
-            <div className="text-xs text-gray-500">
-              {record.fatherName} • {record.surname}
-            </div>
-            <div className="text-xs text-gray-400">
-              Age: {record.age || 'N/A'}
-            </div>
-          </div>
-        </div>
-      ),
+      title: 'Rejected By', key: 'rejectedBy', width: 120,
+      render: (_, r) => <div className="text-xs font-medium">{r.rejectedByName || 'Unknown'}</div>,
     },
     {
-      title: 'Contact',
-      key: 'contact',
-      width: 140,
-      render: (_, record) => (
-        <div>
-          <div className="flex items-center gap-1 text-sm">
-            <PhoneOutlined style={{ fontSize: '11px' }} />
-            <span>{record.phone}</span>
-          </div>
-          {record.phoneAlt && (
-            <div className="text-xs text-gray-500">
-              Alt: {record.phoneAlt}
-            </div>
-          )}
-        </div>
-      ),
-    },
-    {
-      title: 'Rejection Reason',
-      key: 'rejectionReason',
-      width: 200,
-      render: (_, record) => (
-        <Tooltip title={record.rejectionReason}>
+      title: 'Reason', key: 'reason', width: 200,
+      render: (_, r) => (
+        <Tooltip title={r.rejectionReason}>
           <div className="text-sm text-red-600 max-w-[180px] truncate">
-            <CloseCircleOutlined className="mr-1" />
-            {record.rejectionReason || 'No reason provided'}
+            <CloseCircleOutlined className="mr-1" />{r.rejectionReason || 'No reason'}
           </div>
         </Tooltip>
       ),
     },
-    {
-      title: 'Rejected By',
-      key: 'rejectedBy',
-      width: 120,
-      render: (_, record) => (
-        <div className="text-xs">
-          <div className="font-medium">{record.rejectedByName || 'Unknown'}</div>
-        </div>
-      ),
-    },
-    {
-      title: 'Rejected On',
-      key: 'rejectedAt',
-      width: 140,
-      render: (_, record) => (
-        <div className="text-sm">
-          <div>{dayjs(record.rejectedAt).format('DD-MM-YYYY')}</div>
-          <div className="text-xs text-gray-500">
-            {dayjs(record.rejectedAt).format('hh:mm A')}
-          </div>
-        </div>
-      ),
-    },
-    {
-      title: 'Agent',
-      key: 'agent',
-      width: 120,
-      render: (_, record) => {
-        const agentName = getAgentName(record.agentId, agentList)
-        return (
-          <div className="text-xs">
-            <div className="flex items-center gap-1">
-              <UserSwitchOutlined style={{ fontSize: '11px', color: '#1890ff' }} />
-              <span className="font-medium truncate" title={agentName}>
-                {agentName}
-              </span>
-            </div>
-          </div>
-        )
+   {
+  title: 'Actions',
+  key: 'actions',
+  width: 90,
+  fixed: 'right',
+  render: (_, r) => {
+    
+    const menuItems = [
+      can('edit') && {
+        key: 'edit',
+        label: 'Edit',
+        icon: <EditOutlined />,
+        onClick: () => handleEditMember(r),
       },
-    },
-    {
-      title: 'Yojna',
-      key: 'programs',
-      width: 140,
-      render: (_, record) => (
-        <div className=''>
-          {record.programIds?.map((id, idx) => {
-            const program = programList?.find(p => p.id === id)
-            return program ? (
-              <Tag key={idx} color={'geekblue'}>{program.name}</Tag>
-            ) : null
-          })}
-        </div>
-      ),
-    },
-    {
-      title: 'Actions',
-      key: 'actions',
-      width: 100,
-      fixed: 'right',
-      render: (_, record) => (
-        <Space>
-          <Tooltip title="View Details">
-            <Button 
-              type="text" 
-              icon={<EyeOutlined />} 
-              onClick={() => handleViewMember(record)}
+
+      can('edit') && can('delete') && { type: 'divider' },
+
+      can('delete') && {
+        key: 'delete',
+        label: 'Delete',
+        danger: true,
+        icon: <DeleteOutlined style={{ color: '#ff4d4f' }} />,
+        onClick: () => handleDeleteMember(r),
+      },
+    ].filter(Boolean); // 🔥 remove false items
+
+    return (
+      <Space>
+        
+        {/* 👁 VIEW */}
+        {can('view') && (
+          <Tooltip title="View">
+            <Button
+              type="text"
+              icon={<EyeOutlined />}
               size="small"
+              onClick={() => handleViewMember(r)}
             />
           </Tooltip>
-          
+        )}
+
+        {/* ⋮ DROPDOWN (only if items exist) */}
+        {menuItems.length > 0 && (
           <Dropdown
-            menu={{
-              items: [
-                {
-                  key: 'edit',
-                  label: 'Edit',
-                  icon: <EditOutlined />,
-                  onClick: () => handleEditMember(record),
-                },
-                {
-                  key: 'delete',
-                  label: 'Delete Permanently',
-                  icon: <DeleteOutlined style={{ color: '#ff4d4f' }} />,
-                  danger: true,
-                  onClick: () => handleDeleteMember(record),
-                },
-              ]
-            }}
             trigger={['click']}
+            menu={{ items: menuItems }}
           >
-            <Tooltip title="More Actions">
-              <Button
-                type="text"
-                icon={<MoreOutlined />}
-                size="small"
-              />
-            </Tooltip>
+            <Button type="text" icon={<MoreOutlined />} size="small" />
           </Dropdown>
-        </Space>
-      ),
-    },
+        )}
+
+      </Space>
+    );
+  },
+}
   ]
 
   return (
-    <div className="">
-      <Card className="mb-4">
+    <div>
+      <Card>
+        {/* Header */}
         <div className="flex justify-between items-center mb-4">
           <div>
             <h1 className="text-2xl font-bold flex items-center gap-2">
-              <ClockCircleOutlined className="text-orange-500" />
-              Member Requests Management
+              <ClockCircleOutlined className="text-orange-500" /> Member Requests
             </h1>
-            <p className="text-gray-500">
-              Manage pending and rejected member registration requests
-            </p>
+            <p className="text-gray-500">Manage pending and rejected member registration requests</p>
           </div>
-          <div className="flex gap-2">
-            <Button 
-              icon={<ReloadOutlined />} 
-              onClick={fetchAllData}
-              loading={loading}
-            >
-              Refresh
-            </Button>
-            <Button 
-              icon={<DownloadOutlined />} 
-              onClick={exportToCSV}
-              disabled={filteredMembers.length === 0}
-            >
-              Export CSV
-            </Button>
-          </div>
+          <Space>
+            <Button icon={<ReloadOutlined />} onClick={fetchAllData} loading={loading}>Refresh</Button>
+            <Button icon={<DownloadOutlined />} onClick={exportToCSV} disabled={!filteredMembers.length}>Export CSV</Button>
+          </Space>
         </div>
 
         {/* Tabs */}
-        <Tabs 
-          activeKey={activeTab} 
-          onChange={setActiveTab}
-          className="mb-4"
-        >
-          <TabPane 
-            tab={
-              <span>
-                <ClockCircleOutlined />
-                Pending Requests ({stats.pending.total})
-              </span>
-            } 
-            key="pending"
-          />
-          <TabPane 
-            tab={
-              <span>
-                <CloseCircleOutlined />
-                Rejected Requests ({stats.rejected.total})
-              </span>
-            } 
-            key="rejected"
-          />
-        </Tabs>
+        <Tabs activeKey={activeTab} onChange={setActiveTab} className="mb-4" items={[
+          { key: 'pending',  label: <span><ClockCircleOutlined className="mr-1" />Pending ({stats.pending.total})</span> },
+          { key: 'rejected', label: <span><CloseCircleOutlined className="mr-1" />Rejected ({stats.rejected.total})</span> },
+        ]} />
 
-        {/* Stats Row - Dynamic based on active tab */}
+        {/* Stats */}
         <Row gutter={16} className="mb-4">
-          <Col span={8}>
-            <Card size="small">
-              <Statistic
-                title={`Total ${activeTab === 'pending' ? 'Pending' : 'Rejected'} Requests`}
-                value={activeTab === 'pending' ? stats.pending.total : stats.rejected.total}
-                prefix={activeTab === 'pending' ? <ClockCircleOutlined /> : <CloseCircleOutlined />}
-                valueStyle={{ color: activeTab === 'pending' ? '#fa8c16' : '#ff4d4f' }}
-              />
-            </Card>
-          </Col>
-          <Col span={8}>
-            <Card size="small">
-              <Statistic
-                title="Today's Requests"
-                value={activeTab === 'pending' ? stats.pending.todayRequests : stats.rejected.todayRequests}
-                prefix={<CalendarOutlined />}
-                valueStyle={{ color: '#52c41a' }}
-              />
-            </Card>
-          </Col>
-          <Col span={8}>
-            <Card size="small">
-              <Statistic
-                title="Last 7 Days"
-                value={activeTab === 'pending' ? stats.pending.weekRequests : stats.rejected.weekRequests}
-                prefix={<HistoryOutlined />}
-              />
-            </Card>
-          </Col>
+          {[
+            { title: `Total ${activeTab === 'pending' ? 'Pending' : 'Rejected'}`, value: currentStats.total, icon: activeTab === 'pending' ? <ClockCircleOutlined /> : <CloseCircleOutlined />, color: activeTab === 'pending' ? '#fa8c16' : '#ff4d4f' },
+            { title: "Today's Requests", value: currentStats.todayRequests, icon: <CalendarOutlined />, color: '#52c41a' },
+            { title: 'Last 7 Days',      value: currentStats.weekRequests,  icon: <HistoryOutlined />,  color: '#1890ff' },
+          ].map((s, i) => (
+            <Col span={8} key={i}>
+              <Card size="small"><Statistic title={s.title} value={s.value} prefix={s.icon} valueStyle={{ color: s.color }} /></Card>
+            </Col>
+          ))}
         </Row>
 
-        {/* Filters Bar */}
-        <div className="flex justify-between items-center mb-4">
-          <div className="flex gap-2 items-center flex-wrap">
-            <Search
-              placeholder={`Search ${activeTab} requests...`}
-              prefix={<SearchOutlined />}
-              style={{ width: 300 }}
-              onChange={(e) => setFilters(prev => ({ ...prev, search: e.target.value }))}
-              value={filters.search}
-              allowClear
-            />
-            
-            {/* Agent Filter */}
-            <Select
-              placeholder="Filter by Agent"
-              style={{ width: 200 }}
-              value={filters.agentId}
-              onChange={(value) => setFilters(prev => ({ ...prev, agentId: value || 'all' }))}
-              allowClear
-              showSearch
-              optionFilterProp="children"
-              filterOption={(input, option) =>
-                option.children.toLowerCase().indexOf(input.toLowerCase()) >= 0
-              }
-            >
-              <Option value="all">All Agents</Option>
-              {agentList && agentList.map(agent => (
-                <Option key={agent.id} value={agent.uid}>
-                  {agent.name} ({
-                    activeTab === 'pending' 
-                      ? (stats.pending.agentRequests[agent.uid] || 0)
-                      : (stats.rejected.agentRequests[agent.uid] || 0)
-                  })
-                </Option>
-              ))}
-            </Select>
-            
-            {/* Program Filter */}
-            <Select
-              placeholder="Filter by Program"
-              style={{ width: 200 }}
-              value={filters.programId}
-              onChange={(value) => setFilters(prev => ({ ...prev, programId: value || 'all' }))}
-              allowClear
-              showSearch
-              optionFilterProp="children"
-              filterOption={(input, option) =>
-                option.children.toLowerCase().indexOf(input.toLowerCase()) >= 0
-              }
-            >
-              <Option value="all">All Programs</Option>
-              {programList && programList.map(program => (
-                <Option key={program.id} value={program.id}>
-                  {program.name}
-                </Option>
-              ))}
-            </Select>
-            
-            {/* Clear Filters Button */}
-            {isFilterActive() && (
-              <Button 
-                type="link" 
-                onClick={resetFilters}
-                icon={<ReloadOutlined />}
-              >
-                Clear Filters
-              </Button>
-            )}
-          </div>
-          
-          <div className="flex gap-2">
-            <span className="text-gray-500 text-sm">
-              Showing {filteredMembers.length} of {getCurrentMembers().length} {activeTab} requests
-            </span>
-          </div>
+        {/* Filters */}
+        <div className="flex flex-wrap gap-2 items-center mb-4">
+          <Search
+            placeholder={`Search ${activeTab} requests...`}
+            prefix={<SearchOutlined />} style={{ width: 280 }}
+            onChange={e => setFilters(p => ({...p, search: e.target.value}))}
+            value={filters.search} allowClear
+          />
+          <Select
+            placeholder="All Agents" style={{ width: 180 }}
+            value={filters.agentId}
+            onChange={v => setFilters(p => ({...p, agentId: v||'all'}))}
+            allowClear showSearch optionFilterProp="children"
+          >
+            <Option value="all">All Agents</Option>
+            {agentList?.map(a => (
+              <Option key={a.id} value={a.uid}>
+                {a.name} ({(activeTab === 'pending' ? stats.pending : stats.rejected).agentRequests[a.uid] || 0})
+              </Option>
+            ))}
+          </Select>
+          <Select
+            placeholder="All Programs" style={{ width: 180 }}
+            value={filters.programId}
+            onChange={v => setFilters(p => ({...p, programId: v||'all'}))}
+            allowClear showSearch optionFilterProp="children"
+          >
+            <Option value="all">All Programs</Option>
+            {programList?.map(p => <Option key={p.id} value={p.id}>{p.name}</Option>)}
+          </Select>
+          {(filters.search || filters.agentId !== 'all' || filters.programId !== 'all') && (
+            <Button type="link" onClick={() => setFilters({ search:'', agentId:'all', programId:'all' })} icon={<ReloadOutlined />}>Clear</Button>
+          )}
+          <span className="text-gray-500 text-sm ml-auto">Showing {filteredMembers.length} of {currentMembers.length}</span>
         </div>
 
-        {/* Main Table - Dynamic columns based on active tab */}
+        {/* Table */}
         <Table
           columns={activeTab === 'pending' ? pendingColumns : rejectedColumns}
-          dataSource={filteredMembers}
-          rowKey="id"
-          loading={loading}
-          pagination={{
-            pageSize: 10,
-            showSizeChanger: true,
-            showTotal: (total, range) => 
-              `${range[0]}-${range[1]} of ${total} ${activeTab} requests`,
-            pageSizeOptions: ['10', '20', '50', '100'],
-          }}
-          scroll={{ x: 1400 }}
-          size="small"
+          dataSource={filteredMembers} rowKey="id" loading={loading}
+          pagination={{ pageSize: 10, showSizeChanger: true, showTotal: (t, r) => `${r[0]}-${r[1]} of ${t}`, pageSizeOptions: ['10','20','50'] }}
+          scroll={{ x: 1300 }} size="small"
         />
       </Card>
-<ViewRequests 
-activeTab={activeTab}
-open={detailDrawerVisible}
-setOpen={setDetailDrawerVisible}
-handleRejectMember={handleRejectMember}
-handleApproveMember={handleApproveMember}
-selectedMember={selectedMember}
-     getProgramNames={getProgramNames}
-      setSelectedMember={setSelectedMember}
-          fetchAllData={fetchAllData}
-          programList={programList}
-          user={user}
-          getAgentName={getAgentName}
-          agentList={agentList}
-/>
-      {/* Member Detail Drawer */}
 
-  {approvalModalVisible && <ApproveModal
-  open={approvalModalVisible}
-  setOpen={setApprovalModalVisible}
-  selectedMember={selectedMember}
-     getProgramNames={getProgramNames}
-      setSelectedMember={setSelectedMember}
-          fetchAllData={fetchAllData}
-          programList={programList}
-          user={user}
-  />}
- 
+      <ViewRequests
+        activeTab={activeTab} open={detailDrawerVisible} setOpen={setDetailDrawerVisible}
+        handleRejectMember={handleRejectMember} handleApproveMember={handleApproveMember}
+        selectedMember={selectedMember} setSelectedMember={setSelectedMember}
+        fetchAllData={fetchAllData} programList={programList} user={user}
+        getAgentName={getAgentName} agentList={agentList}
+      />
 
-      {/* Rejection Modal */}
-      {rejectionModalVisible && (
-        <RejectModal
-          open={rejectionModalVisible}
-          setOpen={setRejectionModalVisible}
-          setSelectedMember={setSelectedMember}
-          selectedMember={selectedMember}
-          getProgramNames={getProgramNames}
-          fetchAllData={fetchAllData}
-          programList={programList}
-          user={user}
+      {approvalModalVisible && (
+        <ApproveModal
+          open={approvalModalVisible} setOpen={setApprovalModalVisible}
+          selectedMember={selectedMember} setSelectedMember={setSelectedMember}
+          fetchAllData={fetchAllData} programList={programList} user={user}
         />
       )}
-     
-      {/* Edit Member Modal */}
+
+      {rejectionModalVisible && (
+        <RejectModal
+          open={rejectionModalVisible} setOpen={setRejectionModalVisible}
+          selectedMember={selectedMember} setSelectedMember={setSelectedMember}
+          fetchAllData={fetchAllData} programList={programList} user={user}
+        />
+      )}
+
       <EditMember
-        programs={programList || []}
-        agents={agentList || []}
-        open={openEditMember}
-        setOpen={setOpenEditMember}
-        currentUser={user}
-        memberId={editMemberId}
-        onSuccess={() => {
-          fetchAllData()
-             
-        }}
+        programs={programList||[]} agents={agentList||[]}
+        open={openEditMember} setOpen={setOpenEditMember}
+        currentUser={user} memberId={editMemberId}
+        onSuccess={fetchAllData}
       />
     </div>
   )

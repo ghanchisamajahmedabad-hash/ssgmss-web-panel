@@ -1,4 +1,4 @@
-// lib/firebase-helpers.js - UPDATED WITH AGENT FILTER
+// lib/firebase-helpers.js
 
 import {
   collection,
@@ -16,186 +16,125 @@ import { db } from "../../../../lib/firbase-client";
 
 /* =====================================================
    BUILD MEMBERS QUERY (SEARCH + FILTER + PAGINATION)
+   Program is now a flat field (programId) on member doc
 ===================================================== */
 export const buildMembersQuery = (filters = {}) => {
   const {
-    search = "",
-    programId = null,
-    agentId = null, // NEW: Agent filter
-    status = "all",
+    search        = "",
+    programId     = null,
+    agentId       = null,
+    status        = "all",
     paymentStatus = "all",
-    fromDate = null,
-    toDate = null,
-    pageSize = 10,
-    lastDoc = null,
-    sortField = "createdAt",
-    sortOrder = "desc"
+    fromDate      = null,
+    toDate        = null,
+    pageSize      = 10,
+    lastDoc       = null,
+    sortField     = "createdAt",
+    sortOrder     = "desc"
   } = filters;
 
   const membersRef = collection(db, "members");
-    const conditions = [where("delete_flag", "==", false),where("status", "==", 'active')];
+  const conditions = [
+    where("delete_flag", "==", false),
+    where("status",      "==", "active")
+  ];
 
-
-  /* =====================
-     PROGRAM FILTER
-  ===================== */
+  // ── Program filter (flat field, not array-contains) ───────────────────────
   if (programId && programId !== "all") {
-    conditions.push(
-      where("programIds", "array-contains", programId)
-    );
+    conditions.push(where("programId", "==", programId));
   }
 
-  /* =====================
-     AGENT FILTER - NEW
-  ===================== */
+  // ── Agent filter ──────────────────────────────────────────────────────────
   if (agentId && agentId !== "all") {
-    // Direct agentId filter
     conditions.push(where("agentId", "==", agentId));
   }
 
-  /* =====================
-     STATUS FILTER
-  ===================== */
+  // ── Status filter ─────────────────────────────────────────────────────────
   if (status === "active") {
     conditions.push(where("active_flag", "==", true));
   } else if (status === "inactive") {
     conditions.push(where("active_flag", "==", false));
   }
 
-  /* =====================
-     PAYMENT STATUS FILTER
-  ===================== */
+  // ── Payment status filter ─────────────────────────────────────────────────
   if (paymentStatus === "paid") {
     conditions.push(where("paymentPercentage", "==", 100));
   } else if (paymentStatus === "pending") {
     conditions.push(where("paymentPercentage", "==", 0));
   }
-  // For 'partial', we'll filter client-side
+  // "partial" handled client-side
 
-  /* =====================
-     DATE RANGE FILTER
-  ===================== */
-  if (fromDate) {
-    const fromTimestamp = Timestamp.fromDate(new Date(fromDate));
-    conditions.push(where("createdAt", ">=", fromTimestamp));
-  }
-  
-  if (toDate) {
-    const toTimestamp = Timestamp.fromDate(new Date(toDate));
-    conditions.push(where("createdAt", "<=", toTimestamp));
-  }
+  // ── Date range ────────────────────────────────────────────────────────────
+  if (fromDate) conditions.push(where("createdAt", ">=", Timestamp.fromDate(new Date(fromDate))));
+  if (toDate)   conditions.push(where("createdAt", "<=", Timestamp.fromDate(new Date(toDate))));
 
-  /* =====================
-     SEARCH - Using search_keywords array
-  ===================== */
+  // ── Search ────────────────────────────────────────────────────────────────
   if (search && search.trim()) {
-    const rawSearch = search.trim().toLowerCase();
-    const normalizedSearch = rawSearch.replace(/[^a-z0-9]/g, "");
-    conditions.push(
-      where("search_keywords", "array-contains", normalizedSearch)
-    );
+    const normalized = search.trim().toLowerCase().replace(/[^a-z0-9]/g, "");
+    conditions.push(where("search_keywords", "array-contains", normalized));
   }
 
-  /* =====================
-     SORTING
-  ===================== */
+  // ── Sort ──────────────────────────────────────────────────────────────────
   let orderByClause;
   switch (sortField) {
     case "registrationNumber":
-      orderByClause = orderBy("search_registrationNumber", sortOrder);
-      break;
-
+      orderByClause = orderBy("search_registrationNumber", sortOrder); break;
     case "payment":
-      orderByClause = orderBy("paymentPercentage", sortOrder);
-      break;
-
+      orderByClause = orderBy("paymentPercentage", sortOrder); break;
     case "dateJoin":
-      orderByClause = orderBy("createdAt", sortOrder);
-      break;
-
+      orderByClause = orderBy("createdAt", sortOrder); break;
     default:
       orderByClause = orderBy(sortField, sortOrder);
   }
 
-  /* =====================
-     QUERY BUILD
-  ===================== */
   const queryConstraints = [...conditions, orderByClause, limit(pageSize)];
-  
-  if (lastDoc) {
-    queryConstraints.push(startAfter(lastDoc));
-  }
+  if (lastDoc) queryConstraints.push(startAfter(lastDoc));
 
-  const q = query(membersRef, ...queryConstraints);
-
-  return q;
+  return query(membersRef, ...queryConstraints);
 };
 
 /* =====================================================
-   TOTAL MEMBERS COUNT (FOR PAGINATION) - UPDATED WITH AGENT FILTER
+   TOTAL COUNT (for pagination)
 ===================================================== */
 export const getTotalMembersCount = async (filters = {}) => {
   const {
-    search = "",
-    programId = null,
-    agentId = null, // NEW: Agent filter
-    status = "all",
+    search        = "",
+    programId     = null,
+    agentId       = null,
+    status        = "all",
     paymentStatus = "all",
-    fromDate = null,
-    toDate = null
+    fromDate      = null,
+    toDate        = null
   } = filters;
 
   const membersRef = collection(db, "members");
-    const conditions = [where("delete_flag", "==", false),where("status", "==", 'active')];
+  const conditions = [
+    where("delete_flag", "==", false),
+    where("status",      "==", "active")
+  ];
 
+  if (programId && programId !== "all")
+    conditions.push(where("programId", "==", programId));   // ← flat field
 
-  // Apply same filters as query (without pagination)
-  if (programId && programId !== "all") {
-    conditions.push(
-      where("programIds", "array-contains", programId)
-    );
-  }
-
-  // NEW: Agent filter
-  if (agentId && agentId !== "all") {
+  if (agentId && agentId !== "all")
     conditions.push(where("agentId", "==", agentId));
-  }
 
-  if (status === "active") {
-    conditions.push(where("active_flag", "==", true));
-  } else if (status === "inactive") {
-    conditions.push(where("active_flag", "==", false));
-  }
+  if (status === "active")   conditions.push(where("active_flag", "==", true));
+  if (status === "inactive") conditions.push(where("active_flag", "==", false));
 
-  if (paymentStatus === "paid") {
-    conditions.push(where("paymentPercentage", "==", 100));
-  } else if (paymentStatus === "pending") {
-    conditions.push(where("paymentPercentage", "==", 0));
-  }
+  if (paymentStatus === "paid")    conditions.push(where("paymentPercentage", "==", 100));
+  if (paymentStatus === "pending") conditions.push(where("paymentPercentage", "==", 0));
 
-  if (fromDate) {
-    const fromTimestamp = Timestamp.fromDate(new Date(fromDate));
-    conditions.push(where("createdAt", ">=", fromTimestamp));
-  }
-  
-  if (toDate) {
-    const toTimestamp = Timestamp.fromDate(new Date(toDate));
-    conditions.push(where("createdAt", "<=", toTimestamp));
-  }
+  if (fromDate) conditions.push(where("createdAt", ">=", Timestamp.fromDate(new Date(fromDate))));
+  if (toDate)   conditions.push(where("createdAt", "<=", Timestamp.fromDate(new Date(toDate))));
 
-  // Search by keywords
   if (search && search.trim()) {
-    const rawSearch = search.trim().toLowerCase();
-    const normalizedSearch = rawSearch.replace(/[^a-z0-9]/g, "");
-    conditions.push(
-      where("search_keywords", "array-contains", normalizedSearch)
-    );
+    const normalized = search.trim().toLowerCase().replace(/[^a-z0-9]/g, "");
+    conditions.push(where("search_keywords", "array-contains", normalized));
   }
 
-  const q = query(membersRef, ...conditions);
-  
   try {
-    const snapshot = await getCountFromServer(q);
+    const snapshot = await getCountFromServer(query(membersRef, ...conditions));
     return snapshot.data().count;
   } catch (error) {
     console.error("❌ Error getting count:", error);
@@ -208,17 +147,17 @@ export const getTotalMembersCount = async (filters = {}) => {
 ===================================================== */
 export const fetchMembersPaginated = async (filters = {}) => {
   try {
-    const q = buildMembersQuery(filters);
+    const q             = buildMembersQuery(filters);
     const querySnapshot = await getDocs(q);
 
     let members = querySnapshot.docs.map((doc) => ({
       id: doc.id,
       ...doc.data(),
-      createdAt: doc.data().createdAt?.toDate?.() || null,
+      createdAt:  doc.data().createdAt?.toDate?.()  || null,
       updated_at: doc.data().updated_at?.toDate?.() || null
     }));
 
-    // Client-side filter for partial payment
+    // Client-side filter for partial
     if (filters.paymentStatus === "partial") {
       members = members.filter(m => m.paymentPercentage > 0 && m.paymentPercentage < 100);
     }
@@ -227,7 +166,7 @@ export const fetchMembersPaginated = async (filters = {}) => {
 
     return {
       members,
-      lastDoc: lastVisible,
+      lastDoc:     lastVisible,
       hasNextPage: querySnapshot.docs.length === filters.pageSize
     };
   } catch (error) {
@@ -237,66 +176,44 @@ export const fetchMembersPaginated = async (filters = {}) => {
 };
 
 /* =====================================================
-   FETCH ALL MEMBERS (FOR SEARCH - WITHOUT PAGINATION)
+   SEARCH (without pagination)
 ===================================================== */
 export const fetchAllMembersForSearch = async (searchTerm, agentId = null) => {
-  if (!searchTerm || !searchTerm.trim()) {
-    return [];
-  }
+  if (!searchTerm || !searchTerm.trim()) return [];
 
   try {
     const membersRef = collection(db, "members");
-    const conditions = [where("delete_flag", "==", false),where("status", "==", 'active')];
-    
-    // NEW: Agent filter for search
-    if (agentId && agentId !== "all") {
+    const conditions = [
+      where("delete_flag", "==", false),
+      where("status",      "==", "active")
+    ];
+
+    if (agentId && agentId !== "all")
       conditions.push(where("agentId", "==", agentId));
-    }
-    
-    const term = searchTerm.trim().toLowerCase();
-    
-    // Search by keywords
-    if (searchTerm && searchTerm.trim()) {
-      const rawSearch = searchTerm.trim().toLowerCase();
-      const normalizedSearch = rawSearch.replace(/[^a-z0-9]/g, "");
-      conditions.push(
-        where("search_keywords", "array-contains", normalizedSearch)
-      );
-    }
 
-    const q = query(
-      membersRef,
-      ...conditions,
-      orderBy("createdAt", "desc"),
-      limit(100) // Limit to 100 for performance
-    );
+    const normalized = searchTerm.trim().toLowerCase().replace(/[^a-z0-9]/g, "");
+    conditions.push(where("search_keywords", "array-contains", normalized));
 
+    const q             = query(membersRef, ...conditions, orderBy("createdAt", "desc"), limit(100));
     const querySnapshot = await getDocs(q);
 
     const members = querySnapshot.docs.map((doc) => ({
       id: doc.id,
       ...doc.data(),
-      createdAt: doc.data().createdAt?.toDate?.() || null,
+      createdAt:  doc.data().createdAt?.toDate?.()  || null,
       updated_at: doc.data().updated_at?.toDate?.() || null
     }));
 
-    // Client-side filter for additional keywords
-    const keywords = term.split(" ").filter(w => w.length >= 2);
+    // Multi-word client-side filter
+    const keywords = searchTerm.trim().toLowerCase().split(" ").filter(w => w.length >= 2);
     if (keywords.length > 1) {
       return members.filter(member => {
-        const searchableText = [
-          member.displayName,
-          member.registrationNumber,
-          member.phone,
-          member.phoneAlt,
-          member.aadhaarNo,
-          member.village,
-          member.city,
-          member.fatherName,
-          member.surname
+        const text = [
+          member.displayName, member.registrationNumber, member.phone,
+          member.phoneAlt, member.aadhaarNo, member.village, member.city,
+          member.fatherName, member.surname, member.programName  // ← programName now searchable
         ].join(" ").toLowerCase();
-
-        return keywords.every(keyword => searchableText.includes(keyword));
+        return keywords.every(k => text.includes(k));
       });
     }
 
@@ -307,34 +224,28 @@ export const fetchAllMembersForSearch = async (searchTerm, agentId = null) => {
   }
 };
 
-
+/* =====================================================
+   FETCH BY AGENT
+===================================================== */
 export const fetchMembersByAgent = async (agentId) => {
-  if (!agentId || agentId === "all") {
-    return [];
-  }
+  if (!agentId || agentId === "all") return [];
 
   try {
-    const membersRef = collection(db, "members");
-
     const q = query(
-      membersRef,
+      collection(db, "members"),
       where("delete_flag", "==", false),
-      where("status", "==", "active"),
-      where("agentId", "==", agentId),
+      where("status",      "==", "active"),
+      where("agentId",     "==", agentId),
       orderBy("createdAt", "desc")
-        );
+    );
 
     const querySnapshot = await getDocs(q);
-
-    const members = querySnapshot.docs.map((doc) => ({
+    return querySnapshot.docs.map((doc) => ({
       id: doc.id,
       ...doc.data(),
-      createdAt: doc.data().createdAt?.toDate?.() || null,
-      updated_at: doc.data().updated_at?.toDate?.() || null,
+      createdAt:  doc.data().createdAt?.toDate?.()  || null,
+      updated_at: doc.data().updated_at?.toDate?.() || null
     }));
-
-    return members;
-
   } catch (error) {
     console.error("❌ Error fetching agent members:", error);
     return [];

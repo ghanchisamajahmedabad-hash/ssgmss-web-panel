@@ -72,8 +72,9 @@ const ClosingPaymentConfirmationDrawer = ({
         </Space>
       }
       placement="right"
-      width={600}
+      size={600}
       onClose={onClose}
+      destroyOnHidden
       open={visible}
       extra={
         <Space>

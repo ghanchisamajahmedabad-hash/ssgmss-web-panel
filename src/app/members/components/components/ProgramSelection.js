@@ -1,92 +1,31 @@
-import React, { useEffect } from 'react'
-import { Card, Row, Col, Form, DatePicker, Select, Alert, Typography, Table } from 'antd'
+import React from 'react'
+import { Card, Row, Col, Form, DatePicker, Select, Alert, Tag, Progress } from 'antd'
+import { CheckCircleOutlined, ClockCircleOutlined, TrophyOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 
-const { Text } = Typography
-
-const ProgramSelection = ({ 
-  joinDate, 
-  handleJoinDateChange, 
-  programs, 
-  selectedPrograms, 
-  handleProgramChange,
+const ProgramSelection = ({
+  joinDate,
+  handleJoinDateChange,
+  programs,
+  selectedProgram,       // ← single string ID (was selectedPrograms[])
+  handleProgramChange,   // ← sets single ID (was toggling array)
   dobDate,
-  programDetails,
-  calculateTotalJoinFees,
+  programDetail,         // ← single object (was programDetails[])
   isEditMode = false,
-  existingMember
+  existingMember         // member doc with flat programId field
 }) => {
-  const programManu = programs?.map((item) => ({
-    label: item.name,
-    value: item.id,
-    disabled: existingMember?.programIds?.includes(item.id) || false
-  })) || []
 
-  const programDetailColumns = [
-    {
-      title: 'Program',
-      dataIndex: 'programName',
-      key: 'programName',
-    },
-    {
-      title: 'Age Group',
-      dataIndex: 'ageGroupName',
-      key: 'ageGroupName',
-      render: (text, record) => text || record.ageRange || '-',
-    },
-    {
-      title: 'On Join Fees',
-      dataIndex: 'joinFees',
-      key: 'joinFees',
-      render: (fees) => fees ? `₹${fees}` : '-',
-    },
-     {
-      title: 'Fixed Join Fees',
-      dataIndex: 'fixedJoinFees',
-      key: 'fixedJoinFees',
-      render: (fees) => fees ? `₹${fees}` : '-',
-    },
-    {
-      title: 'Pay Amount',
-      dataIndex: 'payAmount',
-      key: 'payAmount',
-      render: (amount) => amount ? `₹${amount}` : '-',
-    },
-    {
-      title: 'Period',
-      key: 'period',
-      render: (_, record) => 
-        record.periodStartDate && record.periodEndDate 
-          ? `${record.periodStartDate} to ${record.periodEndDate}` 
-          : '-',
-    },
-    {
-      title: 'Status',
-      key: 'status',
-      render: (_, record) => 
-        record.error ? (
-          <span style={{ color: 'red' }}>Error</span>
-        ) : record.hasPeriod ? (
-          <span style={{ color: 'green' }}>Active</span>
-        ) : (
-          <span style={{ color: 'orange' }}>No Period</span>
-        ),
-    },
-  ]
- 
-  // Debug logging
-  useEffect(() => {
-    console.log('ProgramSelection props:', {
-      selectedPrograms,
-      dobDate: dobDate?.format('DD-MM-YYYY'),
-      programDetailsCount: programDetails?.length,
-      programsCount: programs?.length
-    })
-  }, [selectedPrograms, dobDate, programDetails, programs])
+  // Build options — disable the program already joined (existing member)
+  const programOptions = programs?.map(p => ({
+    label: p.name,
+    value: p.id,
+    disabled: existingMember?.programId === p.id   // flat field check
+  })) || []
 
   return (
     <Card title="Join Date & Program Selection" size="small" className="mb-4">
       <Row gutter={16}>
+        {/* Join date */}
         <Col span={12}>
           <Form.Item
             label="Join Date"
@@ -98,85 +37,126 @@ const ProgramSelection = ({
               style={{ width: '100%' }}
               value={joinDate}
               onChange={handleJoinDateChange}
-              disabledDate={(current) => current && current > dayjs().endOf('day')}
+              disabledDate={current => current && current > dayjs().endOf('day')}
             />
           </Form.Item>
         </Col>
+
+        {/* Single-select program */}
         <Col span={12}>
           <Form.Item
-            label="Select Programs"
-            name="programs"
-            rules={[{ required: true, message: 'Please select at least one program' }]}
+            label="Select Program"
+            name="program"
+            rules={[{ required: true, message: 'Please select a program' }]}
           >
             <Select
-              mode="multiple"
-              placeholder="Select programs"
-              options={programManu}
+              placeholder="Select a program"
+              options={programOptions}
               onChange={handleProgramChange}
-              value={selectedPrograms}
+              value={selectedProgram || undefined}
               style={{ width: '100%' }}
+              allowClear
+              showSearch
+              optionFilterProp="label"
             />
           </Form.Item>
         </Col>
       </Row>
 
-      {selectedPrograms.length > 0 && dobDate && programDetails.length > 0 ? (
-        <div className="mt-4">
-          <Alert
-            title="Program Details"
-            description={
-              <div>
-                <Table
-                  columns={programDetailColumns}
-                  dataSource={programDetails}
-                  rowKey="programId"
-                  size="small"
-                  pagination={false}
-                />
-                <div className="mt-4">
-                  <div className="flex justify-between items-center mb-2">
-                    <Text strong>Total Join Fees:</Text>
-                    <Text strong>₹{calculateTotalJoinFees()}</Text>
-                  </div>
-                  {programDetails.some(p => p.error) && (
-                    <Alert
-                      title="Errors Detected"
-                      description={
-                        <ul>
-                          {programDetails.filter(p => p.error).map((p, idx) => (
-                            <li key={idx} style={{ color: 'red' }}>{p.error}</li>
-                          ))}
-                        </ul>
-                      }
-                      type="error"
-                      showIcon
-                      className="mt-2"
-                    />
+      {/* ── State: no program selected ── */}
+      {!selectedProgram && (
+        <Alert message="Please select a program" type="info" showIcon className="mt-2" />
+      )}
+
+      {/* ── State: program selected but no DOB ── */}
+      {selectedProgram && !dobDate && (
+        <Alert message="Please enter Date of Birth to calculate program fees" type="warning" showIcon className="mt-2" />
+      )}
+
+      {/* ── State: program + DOB → show detail card ── */}
+      {selectedProgram && dobDate && programDetail && (
+        <div className="mt-3">
+          {programDetail.error ? (
+            // Error card
+            <Alert
+              message={`Program Error: ${programDetail.programName}`}
+              description={programDetail.error}
+              type="error"
+              showIcon
+            />
+          ) : (
+            // Success detail card
+            <div
+              style={{
+                border: '1px solid #e6f4ff',
+                borderLeft: '4px solid #1890ff',
+                borderRadius: 8,
+                padding: '14px 16px',
+                background: '#f0f8ff',
+              }}
+            >
+              {/* Header row */}
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-2">
+                  <TrophyOutlined style={{ color: '#1890ff', fontSize: 16 }} />
+                  <span className="font-bold text-base">{programDetail.programName}</span>
+                  {programDetail.ageGroupName && (
+                    <Tag color="blue" style={{ fontSize: 11 }}>{programDetail.ageGroupName}</Tag>
                   )}
                 </div>
+                <Tag
+                  color="green"
+                  icon={<CheckCircleOutlined />}
+                  style={{ fontWeight: 600 }}
+                >
+                  Active
+                </Tag>
               </div>
-            }
-            type="info"
-            showIcon
-          />
+
+              {/* Fee + period grid */}
+              <Row gutter={[12, 8]} className="mb-3">
+                <Col span={8}>
+                  <div style={{ background: '#fff', borderRadius: 6, padding: '8px 10px', textAlign: 'center' }}>
+                    <div style={{ fontSize: 11, color: '#888', marginBottom: 2 }}>Join Fees</div>
+                    <div style={{ fontSize: 16, fontWeight: 800, color: '#1890ff' }}>
+                      ₹{(programDetail.joinFees || 0).toLocaleString()}
+                    </div>
+                  </div>
+                </Col>
+                <Col span={8}>
+                  <div style={{ background: '#fff', borderRadius: 6, padding: '8px 10px', textAlign: 'center' }}>
+                    <div style={{ fontSize: 11, color: '#888', marginBottom: 2 }}>Fixed Join Fees</div>
+                    <div style={{ fontSize: 16, fontWeight: 800, color: '#722ed1' }}>
+                      ₹{(programDetail.fixedJoinFees || 0).toLocaleString()}
+                    </div>
+                  </div>
+                </Col>
+                <Col span={8}>
+                  <div style={{ background: '#fff', borderRadius: 6, padding: '8px 10px', textAlign: 'center' }}>
+                    <div style={{ fontSize: 11, color: '#888', marginBottom: 2 }}>Pay Amount/mo</div>
+                    <div style={{ fontSize: 16, fontWeight: 800, color: '#52c41a' }}>
+                      ₹{(programDetail.payAmount || 0).toLocaleString()}
+                    </div>
+                  </div>
+                </Col>
+              </Row>
+
+              {/* Period & group row */}
+              <div className="flex flex-wrap gap-3 text-sm text-gray-600">
+                {programDetail.periodStartDate && (
+                  <span>
+                    <ClockCircleOutlined className="mr-1 text-gray-400" />
+                    Period: <b>{programDetail.periodStartDate}</b> → <b>{programDetail.periodEndDate}</b>
+                  </span>
+                )}
+                {programDetail.memberGroupName && (
+                  <Tag color="cyan">{programDetail.memberGroupName}</Tag>
+                )}
+              </div>
+            </div>
+          )}
         </div>
-      ) : selectedPrograms.length > 0 && !dobDate ? (
-        <Alert
-          title="Date of Birth Required"
-          description="Please select Date of Birth to calculate program fees"
-          type="warning"
-          showIcon
-          className="mt-4"
-        />
-      ) : selectedPrograms.length === 0 ? (
-        <Alert
-          title="No Programs Selected"
-          description="Please select at least one program"
-          type="info"
-          showIcon
-          className="mt-4"
-        />
-      ) : null}
+      )}
     </Card>
   )
 }

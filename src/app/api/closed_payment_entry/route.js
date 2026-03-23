@@ -1,258 +1,453 @@
 import { NextResponse } from "next/server";
 import admin from "../db/firebaseAdmin";
-import { checkRole, verifyToken } from "../../../../middleware/authMiddleware";
+import { verifyToken } from "../../../../middleware/authMiddleware";
 
 const db = admin.firestore();
+const INC = admin.firestore.FieldValue.increment;
+const DEL = admin.firestore.FieldValue.delete;
+const STS = admin.firestore.FieldValue.serverTimestamp;
 
-const getMembersGenrateEntry = async (body) => {
-  const { programId, ageGroups = [], memberGroups = [], memberClosingList = [] } = body;
+// ─── helpers ──────────────────────────────────────────────────────────────────
+const chunkArr = (arr, n) =>
+  Array.from({ length: Math.ceil(arr.length / n) }, (_, i) =>
+    arr.slice(i * n, i * n + n)
+  );
 
-  const parseDDMMYYYY = (dateStr) => {
-    if (!dateStr || typeof dateStr !== 'string') return null;
-    const [day, month, year] = dateStr.split('-').map(Number);
-    return new Date(year, month - 1, day);
-  };
+const parseDate = (d) => {
+  if (!d) return null;
+  if (typeof d !== "string") return new Date(d);
+  if (d.includes("T") || /^\d{4}-\d{2}-\d{2}$/.test(d)) return new Date(d);
+  const [day, month, year] = d.split("-").map(Number);
+  return new Date(year, month - 1, day);
+};
 
-  try {
-    let q = db.collectionGroup("memberPrograms").where("programId", "==", programId);
-    if (ageGroups.length) q = q.where("ageGroupId", "in", ageGroups.slice(0, 10));
-    if (memberGroups.length) q = q.where("memberGroupId", "in", memberGroups.slice(0, 10));
+// Fetch member docs in parallel batches of 10, return id→data map
+const fetchMemberMap = async (ids) => {
+  const unique = [...new Set(ids)];
+  if (!unique.length) return {};
+  const snaps = await Promise.all(
+    chunkArr(unique, 10).map((ch) =>
+      db.collection("members")
+        .where(admin.firestore.FieldPath.documentId(), "in", ch)
+        .get()
+    )
+  );
+  const map = {};
+  snaps.forEach((s) => s.forEach((d) => { if (d.exists) map[d.id] = { id: d.id, ...d.data() }; }));
+  return map;
+};
 
-    const snap = await q.get();
-    if (snap.empty) return [];
-
-    const result = {};
-
-    for (const doc of snap.docs) {
-      const program = { id: doc.id, ...doc.data() };
-      const memberId = program.memberId;
-      if (!memberId) continue;
-
-      if (!result[memberId]) {
-        const memberDoc = await db.collection("members").doc(memberId).get();
-        if (!memberDoc.exists) continue;
-
-        const memberData = memberDoc.data();
-        const joinDateObj = parseDDMMYYYY(memberData.dateJoin);
-        
-        // Member ki apni purani closing date (agar hai toh)
-        const memberSelfClosedDate = memberData.closed_date ? new Date(memberData.closed_date) : null;
-
-        // 1️⃣ Filter the closing list
-        const allowedClosings = memberClosingList.filter(closing => {
-          // Note: Here we don't check closing.memberId !== memberId because this list
-          // represents the people getting married NOW, but we use their dates to 
-          // calculate entries for ALL members.
-          
-          const closingDateStr = closing.closed_date || closing.marriageDate;
-          if (!closingDateStr) return false;
-          const currentClosingDateObj = new Date(closingDateStr);
-          
-          // ✅ Condition A: Join Date must be on or before this closing date
-          const isJoined = joinDateObj.getTime() <= currentClosingDateObj.getTime();
-
-          // ✅ Condition B: If member is already closed, they must have closed 
-          // ON or AFTER this specific closing date to be included.
-          let isStillActive = true;
-          if (memberData.member_closed === true && memberSelfClosedDate) {
-             // Agar member pehle hi close ho gaya tha is date se, toh skip
-             if (memberSelfClosedDate.getTime() < currentClosingDateObj.getTime()) {
-               isStillActive = false;
-             }
-          }
-
-          return isJoined && isStillActive;
-        });
-
-        // 2️⃣ Skip member if no records in the list match their timeline
-        if (allowedClosings.length === 0) continue;
-
-        // 3️⃣ Final Calculation
-        const calculate_Amout = allowedClosings.length * (memberData.payAmount || 0);
-
-        result[memberId] = {
-          id: memberDoc.id,
-          ...memberData,
-          memberPrograms: [],
-          allowedClosings,
-          calculate_Amout,
-          validClosingsCount: allowedClosings.length
-        };
-      }
-      result[memberId].memberPrograms.push(program);
-    }
-
-    return Object.values(result);
-
-  } catch (error) {
-    console.error("Error:", error);
-    throw error;
+// Multi-batch helper — auto-splits at 490 ops, commits all in parallel
+class MultiBatch {
+  constructor() { this._batches = [db.batch()]; this._ops = 0; }
+  _cur() {
+    if (this._ops >= 490) { this._batches.push(db.batch()); this._ops = 0; }
+    return this._batches[this._batches.length - 1];
   }
+  set(ref, data, opts) { this._cur().set(ref, data, opts || {}); this._ops++; }
+  update(ref, data) { this._cur().update(ref, data); this._ops++; }
+  commit() { return Promise.all(this._batches.map((b) => b.commit())); }
 }
 
-
+// ─────────────────────────────────────────────────────────────────────────────
+// POST — Process closing + distribute payments
+// Program data is now FLAT on the member doc — no memberPrograms subcollection.
+//
+// PAYMENT RULES (unchanged):
+//   open member        → joinDate <= eventDate
+//   closing-now member → joinDate <= eventDate AND eventDate <= own closed_date
+//   previously-closed  → joinDate <= eventDate AND eventDate > prevClosedDate
+// ─────────────────────────────────────────────────────────────────────────────
 export async function POST(req) {
-  const authResult = await verifyToken(req);
-  if (!authResult.success) {
-    return NextResponse.json({ success: false, message: authResult.error }, { status: authResult.status });
-  }
+  const auth = await verifyToken(req);
+  if (!auth.success)
+    return NextResponse.json({ success: false, message: auth.error }, { status: auth.status });
 
   const body = await req.json();
-  const { programId, groupId,memberClosingList } = body;
+  const {
+    programId,
+    groupId,
+    memberClosingList = [],
+    memberIds = [],
+    closedBy,
+    closedByName,
+    ageGroups = [],
+    memberGroups = [],
+  } = body;
 
-  if (!groupId || !programId) {
-    return NextResponse.json({ success: false, message: "groupId and programId are required" }, { status: 400 });
+  if (!programId || !memberIds.length || !memberClosingList.length) {
+    return NextResponse.json(
+      { success: false, message: "Missing required fields (programId, memberIds, or memberClosingList)" },
+      { status: 400 }
+    );
   }
 
   try {
-    const membersList = await getMembersGenrateEntry(body);
+    const groupRef = db.collection("groupClosings").doc(groupId || undefined);
+    const closingGroupId = groupRef.id;
+    const ts = STS();
+    const now = new Date().toISOString();
+    const mb = new MultiBatch();
 
-    if (!membersList.length) {
-      return NextResponse.json({ success: false, message: "No eligible members found" });
-    }
+    // ── 1. Fetch all members in this program ──────────────────────────────
+    // Members now store programId as a flat field — query the members collection directly.
+    let membersQuery = db.collection("members")
+      .where("programId", "==", programId)
+      .where("status", "==", "active");
 
-    const batch = db.batch();
-    const timestamp = admin.firestore.FieldValue.serverTimestamp();
-    const paymentColRef = db.collection("closing_payment");
+    if (ageGroups.length) membersQuery = membersQuery.where("ageGroupId", "in", ageGroups.slice(0, 10));
+    if (memberGroups.length) membersQuery = membersQuery.where("memberGroupId", "in", memberGroups.slice(0, 10));
 
-    let totalGlobalAmount = 0;
-    let totalGlobalClosingCount = 0;
-    const agentStatsUpdates = {}; 
+    const membersSnap = await membersQuery.get();
+    const allProgramDocs = {};
+    membersSnap.forEach(d => { if (d.exists) allProgramDocs[d.id] = { id: d.id, ...d.data() }; });
+    const programMemberIds = Object.keys(allProgramDocs);
 
-    for (const member of membersList) {
-      const amount = Number(member.calculate_Amout || 0);
-      const closingCount = Number(member.validClosingsCount || 0);
-      console.log(amount,"amount")
-      console.log(closingCount,"closingCount")
-
-      if (amount <= 0 || closingCount <= 0) continue;
-
-      totalGlobalAmount += amount;
-      totalGlobalClosingCount += closingCount;
-      console.log(member.allowedClosings," member.allowedClosings")
-      // 1. Create Individual Closing Payment Entry
-      const entryRef = paymentColRef.doc();
-      batch.set(entryRef, {
-        memberId: member.id,
-        memberName: member.displayName || '',
-        agentId: member.agentId || '',
-        amount: amount,
-        validClosingsCount: closingCount,
-        closingMemberIds: member.allowedClosings.map(c => c.closed_memberId || c.memberId || 'unknown'),
-        programId: programId,
-        closingGroupId: groupId,  
-        status: "pending", // Payment is currently pending
-        createdAt: timestamp,
-        updatedAt: timestamp,
-        active_flag: true,
-        deleted_flag: false,
-        generatedBy: authResult.user.uid
-      });
-
-      // 2. Update Member Main Document Counters
-      console.log(member.id,'member.id')
-      const memberRef = db.collection('members').doc(member.id);
-      batch.update(memberRef, {
-        // Financials
-        closing_totalAmount: admin.firestore.FieldValue.increment(amount),
-        closing_pendingAmount: admin.firestore.FieldValue.increment(amount),
-        // Counts
-        totalClosingCount: admin.firestore.FieldValue.increment(closingCount),
-        pendingClosingCount: admin.firestore.FieldValue.increment(closingCount),
-        updated_at: timestamp
-      });
-
-      // 3. Update Member Sub-collection Program
-      const memberProgramRef = memberRef.collection('memberPrograms').doc(programId);
-      batch.set(memberProgramRef, {
-        closing_totalAmount: admin.firestore.FieldValue.increment(amount),
-        closing_pendingAmount: admin.firestore.FieldValue.increment(amount),
-        totalClosingCount: admin.firestore.FieldValue.increment(closingCount),
-        pendingClosingCount: admin.firestore.FieldValue.increment(closingCount),
-        updated_at: timestamp
-      }, { merge: true });
-
-      // 4. Track Agent Aggregate Data
-      if (member.agentId) {
-        if (!agentStatsUpdates[member.agentId]) {
-          agentStatsUpdates[member.agentId] = { amount: 0, count: 0 };
-        }
-        agentStatsUpdates[member.agentId].amount += amount;
-        agentStatsUpdates[member.agentId].count += closingCount;
+    // ── 2. Build lookup: closingMemberId → their closed_date ──────────────
+    const closingDateMap = {};
+    for (const event of memberClosingList) {
+      if (event.closed_memberId) {
+        closingDateMap[event.closed_memberId] = parseDate(event.closed_date || event.marriageDate);
       }
     }
 
-    // 5. Update the Closing Group Summary (groupClosings)
-    const groupRef = db.collection('groupClosings').doc(groupId);
-    batch.set(groupRef, {
-      totalAmount: admin.firestore.FieldValue.increment(totalGlobalAmount),
-      totalPendingAmount: admin.firestore.FieldValue.increment(totalGlobalAmount),
-      totalPaidAmount: admin.firestore.FieldValue.increment(0),
-      totalClosingCount: admin.firestore.FieldValue.increment(totalGlobalClosingCount),
-      pendingClosingCount: admin.firestore.FieldValue.increment(totalGlobalClosingCount), // Total members' closings pending in this group
-      paidClosingCount: admin.firestore.FieldValue.increment(0),
-      totalMembersProcessed: admin.firestore.FieldValue.increment(membersList.length),
-      status: 'generated',
-      updated_at: timestamp
-    }, { merge: true });
+    // ── 3. Trackers ───────────────────────────────────────────────────────
+    let totalPaymentAmount = 0;
+    let totalPaymentCount = 0;
+    const agentStats = {};
+    const paymentUpdatedIds = [];
+    const paymentPerMember = {};
+    const closedIds = [];
+    const skippedClose = [];
 
-    for (const [agentId, stats] of Object.entries(agentStatsUpdates)) {
-      const agentRef = db.collection('agents').doc(agentId);
-      
-      // We use dot notation to update specific fields inside the programStats map
-      // This prevents overwriting other programs' data
-      const updateData = {
-        // Global Agent Stats
-        closing_pendingAmount: admin.firestore.FieldValue.increment(stats.amount),
-        closing_totalAmount: admin.firestore.FieldValue.increment(stats.amount),
-        totalClosingCount: admin.firestore.FieldValue.increment(stats.count),
-        closedCount: admin.firestore.FieldValue.increment(memberClosingList.length), // No change in closed count at generation time
-        pendingClosingCount: admin.firestore.FieldValue.increment(stats.count),
-        updated_at: timestamp,
-        // Program-Specific Stats (using dot notation for safety)
-        [`programStats.${programId}.totalClosingPendingAmount`]: admin.firestore.FieldValue.increment(stats.amount),
-        [`programStats.${programId}.closedCount`]: admin.firestore.FieldValue.increment(memberClosingList.length),
-        [`programStats.${programId}.totalClosingAmount`]: admin.firestore.FieldValue.increment(stats.amount),
-        [`programStats.${programId}.totalClosingCount`]: admin.firestore.FieldValue.increment(stats.count),
-        [`programStats.${programId}.pendingClosingCount`]: admin.firestore.FieldValue.increment(stats.count),
-        [`programStats.${programId}.lastUpdated`]: timestamp
+    // ── 4. Main loop ──────────────────────────────────────────────────────
+    for (const memberId of programMemberIds) {
+      const m = allProgramDocs[memberId];
+      if (!m) continue;
+
+      const memberRef = db.collection("members").doc(memberId);
+      const isBeingClosedNow = memberIds.includes(memberId);
+      const payAmount = Number(m.payAmount || 0);
+
+      // ── JOB 1: Mark as closed (only for selected memberIds) ──────────────
+      if (isBeingClosedNow) {
+        const alreadyClosed = (m.closedStatus || []).some(cs => cs.programId === programId);
+
+        if (alreadyClosed) {
+          skippedClose.push({ memberId, name: m.displayName || m.name, reason: "Already closed" });
+        } else {
+          const detail = memberClosingList.find(c => c.closed_memberId === memberId) || {};
+          const newStatusEntry = {
+            programId,
+            closingGroupId,
+            member_closed_at: now,
+            member_closed_by: closedBy || null,
+            closed_date: detail.closed_date || null,
+            closed_note: detail.closed_note || "",
+          };
+
+          mb.update(memberRef, {
+            closedStatus: [...(m.closedStatus || []), newStatusEntry],
+            member_closed: true,
+            updated_at: ts,
+          });
+
+          closedIds.push(memberId);
+        }
+      }
+
+      // ── JOB 2: Calculate payment ──────────────────────────────────────────
+      if (payAmount <= 0) continue;
+
+      const joinDate = parseDate(m.dateJoin);
+      if (!joinDate) continue;
+
+      const prevClosedEntry = (m.closedStatus || []).find(cs => cs.programId === programId);
+      const prevClosedDate = prevClosedEntry ? parseDate(prevClosedEntry.closed_date) : null;
+      const ownClosedDate = isBeingClosedNow
+        ? (closingDateMap[memberId] || null)
+        : prevClosedDate;
+
+      const matchingClosings = memberClosingList.filter(event => {
+        const eventDate = parseDate(event.closed_date || event.marriageDate);
+        if (!eventDate) return false;
+        if (joinDate > eventDate) return false;
+        if (prevClosedDate && eventDate <= prevClosedDate) return false;
+        if (ownClosedDate && eventDate > ownClosedDate) return false;
+        return true;
+      });
+
+      if (matchingClosings.length === 0) continue;
+
+      const memberPayment = matchingClosings.length * payAmount;
+      const memberCount = matchingClosings.length;
+
+      totalPaymentAmount += memberPayment;
+      totalPaymentCount += memberCount;
+      paymentUpdatedIds.push(memberId);
+      paymentPerMember[memberId] = { amount: memberPayment, count: memberCount };
+
+      if (m.agentId) {
+        agentStats[m.agentId] ??= { amount: 0, count: 0, memberCount: 0 };
+        agentStats[m.agentId].amount += memberPayment;
+        agentStats[m.agentId].count += memberCount;
+        agentStats[m.agentId].memberCount += isBeingClosedNow ? 1 : 0;
+      }
+
+      // Update member doc only (no subcollection)
+      const paymentUpdates = {
+        closing_totalAmount: INC(memberPayment),
+        closing_pendingAmount: INC(memberPayment),
+        totalClosingCount: INC(memberCount),
+        pendingClosingCount: INC(memberCount),
+        updated_at: ts,
+        closingGroupIds: admin.firestore.FieldValue.arrayUnion(closingGroupId),
+        [`closingGroupAmounts.${closingGroupId}`]: memberPayment,
+        [`closingGroupCounts.${closingGroupId}`]: memberCount,
       };
 
-      batch.update(agentRef, updateData);
+      mb.update(memberRef, paymentUpdates);
     }
-console.log(programId,"programId")
-    // 7. Update Global Program & Org Stats
-    const globalProgramRef = db.collection('programs').doc(programId);
-    batch.set(globalProgramRef, {
-        closedCount: admin.firestore.FieldValue.increment(memberClosingList.length), // No change in closed count at generation time
-      totalClosingPendingAmount: admin.firestore.FieldValue.increment(totalGlobalAmount),
-      totalClosingAmount: admin.firestore.FieldValue.increment(totalGlobalAmount),
-      totalClosingCount: admin.firestore.FieldValue.increment(totalGlobalClosingCount),
-      pendingClosingCount: admin.firestore.FieldValue.increment(totalGlobalClosingCount),
-      updated_at: timestamp
-    }, { merge: true });
 
-    // 7. Update Organization Stats
-    const orgRef = db.collection('organizationStats').doc('current');
-    batch.set(orgRef, {
-        closedCount: admin.firestore.FieldValue.increment(memberClosingList.length), // No change in closed count at generation time
-          totalClosingPendingAmount: admin.firestore.FieldValue.increment(totalGlobalAmount),
-      totalClosingAmount: admin.firestore.FieldValue.increment(totalGlobalAmount),
-      totalClosingCount: admin.firestore.FieldValue.increment(totalGlobalClosingCount),
-      pendingClosingCount: admin.firestore.FieldValue.increment(totalGlobalClosingCount),
-      updated_at: timestamp
-    }, { merge: true });
+    // ── 5. Write group doc ────────────────────────────────────────────────
+    mb.set(groupRef, {
+      id: closingGroupId,
+      programId,
+      closedMemberIds: closedIds,
+      paymentMemberIds: paymentUpdatedIds,
+      paymentBreakdown: paymentPerMember,
+      totalAmount: totalPaymentAmount,
+      totalClosingCount: totalPaymentCount,
+      status: "active",
+      closedAt: ts,
+    });
 
-    await batch.commit();
+    // ── 6. Agent / Program / Org stats ────────────────────────────────────
+    for (const [agentId, s] of Object.entries(agentStats)) {
+      mb.update(db.collection("agents").doc(agentId), {
+        closing_pendingAmount: INC(s.amount),
+        closing_totalAmount: INC(s.amount),
+        totalClosingCount: INC(s.count),
+        pendingClosingCount: INC(s.count),
+        [`programStats.${programId}.totalClosingAmount`]: INC(s.amount),
+        updated_at: ts,
+      });
+    }
+
+    const globalStats = {
+      totalClosingPendingAmount: INC(totalPaymentAmount),
+      totalClosingAmount: INC(totalPaymentAmount),
+      totalClosingCount: INC(totalPaymentCount),
+      pendingClosingCount: INC(totalPaymentCount),
+      updated_at: ts,
+    };
+    mb.set(db.collection("programs").doc(programId), globalStats, { merge: true });
+    mb.set(db.collection("organizationStats").doc("current"), globalStats, { merge: true });
+
+    await mb.commit();
 
     return NextResponse.json({
       success: true,
-      message: `Processed ${membersList.length} members for Group: ${groupId}`,
-      summary: { totalGlobalAmount, totalGlobalClosingCount }
+      summary: {
+        totalPaymentAmount,
+        paymentUpdatedCount: paymentUpdatedIds.length,
+        closedCount: closedIds.length,
+        skippedCount: skippedClose.length,
+        skipped: skippedClose,
+      },
     });
 
   } catch (err) {
-    console.error("Critical Processing Error:", err);
+    console.error("POST Error:", err);
+    return NextResponse.json({ success: false, message: err.message }, { status: 500 });
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DELETE — Reverse a closing group
+// Reads exact per-group amounts from closingGroupAmounts.{groupId} on member doc.
+// No subcollection reads needed.
+// ─────────────────────────────────────────────────────────────────────────────
+export async function DELETE(req) {
+  const auth = await verifyToken(req);
+  if (!auth.success)
+    return NextResponse.json({ success: false, message: auth.error }, { status: auth.status });
+
+  const { closingGroupId, programId, reason = "Manual reversal", reversedBy, reversedByName } =
+    await req.json();
+
+  if (!closingGroupId || !programId)
+    return NextResponse.json(
+      { success: false, message: "closingGroupId and programId are required" },
+      { status: 400 }
+    );
+
+  try {
+    const groupDoc = await db.collection("groupClosings").doc(closingGroupId).get();
+    if (!groupDoc.exists)
+      return NextResponse.json({ success: false, message: "Closing group not found" }, { status: 404 });
+
+    const groupData = groupDoc.data();
+    if (groupData.status === "reversed")
+      return NextResponse.json({ success: false, message: "Already reversed" }, { status: 400 });
+
+    const closedMemberIds = groupData.closedMemberIds || groupData.memberIds || [];
+    const paymentMemberIds = groupData.paymentMemberIds || groupData.memberIds || [];
+    const storedMemberCount = groupData.closedMemberCount || groupData.memberCount || closedMemberIds.length;
+    const paymentBreakdown = groupData.paymentBreakdown || {};
+
+    const ts = STS();
+    const mb = new MultiBatch();
+    const agentStats = {};
+    let totalRevAmount = 0;
+    let totalRevCount = 0;
+
+    // ── Step 1: Un-close selected members ────────────────────────────────
+    if (closedMemberIds.length) {
+      const closedDocs = await fetchMemberMap(closedMemberIds);
+
+      for (const memberId of closedMemberIds) {
+        const m = closedDocs[memberId];
+        if (!m) continue;
+
+        const closedStatus = m.closedStatus || [];
+        const entryIdx = closedStatus.findIndex(
+          cs => cs.programId === programId && cs.closingGroupId === closingGroupId
+        );
+        if (entryIdx === -1) continue;
+
+        const updatedStatus = closedStatus.filter((_, i) => i !== entryIdx);
+        const stillClosed = updatedStatus.length > 0;
+        const latestEntry = stillClosed ? updatedStatus[updatedStatus.length - 1] : null;
+
+        const memberRef = db.collection("members").doc(memberId);
+        const memberUpdate = { closedStatus: updatedStatus, updated_at: ts };
+
+        if (!stillClosed) {
+          Object.assign(memberUpdate, {
+            member_closed: false,
+            member_closed_at: DEL(),
+            member_closed_by: DEL(),
+            member_closed_program: DEL(),
+            closed_date: DEL(),
+            closed_note: DEL(),
+            closed_invitation_url: DEL(),
+            closingGroupId: DEL(),
+          });
+        } else {
+          Object.assign(memberUpdate, {
+            member_closed: true,
+            member_closed_program: latestEntry.programId,
+            closed_date: latestEntry.closed_date || null,
+            closingGroupId: latestEntry.closingGroupId,
+          });
+        }
+
+        mb.update(memberRef, memberUpdate);
+      }
+    }
+
+    // ── Step 2: Reverse payments ──────────────────────────────────────────
+    if (paymentMemberIds.length) {
+      const paymentDocs = await fetchMemberMap(paymentMemberIds);
+
+      for (const memberId of paymentMemberIds) {
+        const m = paymentDocs[memberId];
+        if (!m) continue;
+
+        // Read exact amount from per-group ledger on the member doc
+        let amount = Number((m)[`closingGroupAmounts.${closingGroupId}`] || 0);
+        let count = Number((m)[`closingGroupCounts.${closingGroupId}`] || 0);
+
+        // Fallback: paymentBreakdown written at POST time on groupDoc
+        if (!amount && paymentBreakdown[memberId]) {
+          amount = Number(paymentBreakdown[memberId].amount || 0);
+          count = Number(paymentBreakdown[memberId].count || 0);
+        }
+
+        // Legacy fallback
+        if (!amount) {
+          amount = Number(m.closing_pendingAmount || 0);
+          count = Number(m.pendingClosingCount || 0);
+          console.warn(`[DELETE] Legacy fallback for member ${memberId}`);
+        }
+
+        if (!amount && !count) continue;
+
+        totalRevAmount += amount;
+        totalRevCount += count;
+
+        const memberRef = db.collection("members").doc(memberId);
+
+        mb.update(memberRef, {
+          closing_totalAmount: INC(-amount),
+          closing_pendingAmount: INC(-amount),
+          totalClosingCount: INC(-count),
+          pendingClosingCount: INC(-count),
+          updated_at: ts,
+          closingGroupIds: admin.firestore.FieldValue.arrayRemove(closingGroupId),
+          [`closingGroupAmounts.${closingGroupId}`]: DEL(),
+          [`closingGroupCounts.${closingGroupId}`]: DEL(),
+        });
+
+        if (m.agentId) {
+          agentStats[m.agentId] ??= { amount: 0, count: 0, memberCount: 0 };
+          agentStats[m.agentId].amount += amount;
+          agentStats[m.agentId].count += count;
+          agentStats[m.agentId].memberCount += 1;
+        }
+      }
+    }
+
+    // ── Step 3: Mark group reversed ───────────────────────────────────────
+    mb.update(db.collection("groupClosings").doc(closingGroupId), {
+      status: "reversed",
+      reversedAt: ts,
+      reversedBy: reversedBy || null,
+      reversedByName: reversedByName || "Unknown",
+      reversalReason: reason,
+    });
+
+    // ── Step 4: Agent stats reversal ──────────────────────────────────────
+    for (const [agentId, s] of Object.entries(agentStats)) {
+      mb.update(db.collection("agents").doc(agentId), {
+        closing_pendingAmount: INC(-s.amount),
+        closing_totalAmount: INC(-s.amount),
+        totalClosingCount: INC(-s.count),
+        closedCount: INC(-s.memberCount),
+        pendingClosingCount: INC(-s.count),
+        updated_at: ts,
+        [`programStats.${programId}.totalClosingPendingAmount`]: INC(-s.amount),
+        [`programStats.${programId}.closedCount`]: INC(-s.memberCount),
+        [`programStats.${programId}.totalClosingAmount`]: INC(-s.amount),
+        [`programStats.${programId}.totalClosingCount`]: INC(-s.count),
+        [`programStats.${programId}.pendingClosingCount`]: INC(-s.count),
+        [`programStats.${programId}.lastUpdated`]: ts,
+      });
+    }
+
+    // ── Step 5 & 6: Program + Org stats reversal ──────────────────────────
+    const reverseStats = {
+      closedCount: INC(-storedMemberCount),
+      totalClosingPendingAmount: INC(-totalRevAmount),
+      totalClosingAmount: INC(-totalRevAmount),
+      totalClosingCount: INC(-totalRevCount),
+      pendingClosingCount: INC(-totalRevCount),
+      updated_at: ts,
+    };
+    mb.set(db.collection("programs").doc(programId), reverseStats, { merge: true });
+    mb.set(db.collection("organizationStats").doc("current"), reverseStats, { merge: true });
+
+    await mb.commit();
+
+    return NextResponse.json({
+      success: true,
+      message: `Reversed: ${closedMemberIds.length} members un-closed, ${paymentMemberIds.length} payments reversed`,
+      summary: { closingGroupId, membersUnClosed: closedMemberIds.length, paymentReversedFor: paymentMemberIds.length, reversedAmount: totalRevAmount, reversedCount: totalRevCount, reason },
+    });
+
+  } catch (err) {
+    console.error("DELETE /closing error:", err);
     return NextResponse.json({ success: false, message: err.message }, { status: 500 });
   }
 }

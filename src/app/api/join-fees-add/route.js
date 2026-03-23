@@ -7,160 +7,156 @@ const db = admin.firestore();
 export async function POST(req) {
   try {
     const authResult = await verifyToken(req);
-    if (!authResult.success) return NextResponse.json({ success: false, message: authResult.error }, { status: authResult.status });
+    if (!authResult.success)
+      return NextResponse.json({ success: false, message: authResult.error }, { status: authResult.status });
 
-         const currentUser = authResult.user;
-    
-    // Check permission
+    const currentUser = authResult.user;
+
     if (!checkRole(['superadmin', 'admin'], currentUser.role)) {
       return NextResponse.json(
         { success: false, message: 'Insufficient permissions to create payment entry' },
         { status: 403 }
       );
     }
+
     const body = await req.json();
-    const { 
-      memberPayments, paymentDate, paymentMethod, paymentNote, 
-      totalAmount, transactionId, fileUrl, agentId, programId 
+    const {
+      memberPayments, paymentDate, paymentMethod, paymentNote,
+      totalAmount, transactionId, fileUrl, agentId
     } = body;
 
-    const batch = db.batch();
+    const batch        = db.batch();
     const numTotalAmount = Number(totalAmount);
 
+    // ── Agent doc ─────────────────────────────────────────────────────────────
     const agentRef = db.collection('agents').doc(agentId);
     const agentDoc = await agentRef.get();
     if (!agentDoc.exists) throw new Error("Agent not found");
-    
+
     let updatedProgramStats = { ...(agentDoc.data().programStats || {}) };
 
+    // ── Payment group (one record per batch) ──────────────────────────────────
     const paymentGroupRef = db.collection('paymentGroups').doc();
     batch.set(paymentGroupRef, {
       agentId,
-      totalAmount: numTotalAmount,
+      totalAmount:   numTotalAmount,
       paymentMethod,
       transactionId,
-      paymentDate: new Date(paymentDate),
-      createdBy: authResult.user.uid,
+      paymentDate:   new Date(paymentDate),
+      createdBy:     authResult.user.uid,
       paymentNote,
-      fileUrl: fileUrl || '',
-      paymentType:'joinFees',
-      createdAt: admin.firestore.FieldValue.serverTimestamp()
+      fileUrl:       fileUrl || '',
+      paymentType:   'joinFees',
+      createdAt:     admin.firestore.FieldValue.serverTimestamp()
     });
 
+    // ── Process each member ───────────────────────────────────────────────────
     for (const payment of memberPayments) {
-      const { memberId, memberName, amount, programIds } = payment;
-      let remainingAmount = Number(amount);
+      const { memberId, memberName, amount } = payment;
 
       const memberRef = db.collection('members').doc(memberId);
       const memberDoc = await memberRef.get();
-      if (!memberDoc.exists) continue;
-
-      // --- WATERFALL PROGRAM SELECTION ---
-      // If programId is provided, we put it at the front of the list.
-      // Then we add the rest of the member's programs so the surplus flows into them.
-      let sortedPrograms = [...programIds];
-      if (programId && programId !== 'all') {
-        sortedPrograms = [programId, ...programIds.filter(id => id !== programId)];
+      if (!memberDoc.exists) {
+        console.warn(`Member ${memberId} not found — skipping`);
+        continue;
       }
 
-      for (const pId of sortedPrograms) {
-        if (remainingAmount <= 0) break;
+      const memberData = memberDoc.data();
 
-        const memberProgramRef = memberRef.collection('memberPrograms').doc(pId);
-        const mpDoc = await memberProgramRef.get();
-        
-        if (!mpDoc.exists) continue;
-        const mpData = mpDoc.data();
-        const pendingForThisProgram = mpData.pendingAmount || 0;
+      // ── Single-program fields live flat on the member doc ─────────────────
+      const programId      = memberData.programId      || '';
+      const programName    = memberData.programName    || '';
+      const pendingAmount  = memberData.pendingAmount  || 0;
+      const currentPaid    = memberData.paidAmount     || 0;
+      const joinFees       = memberData.joinFees       || 0;
 
-        // Calculate how much to apply to this specific program
-        let deduction = 0;
-        
-        if (pendingForThisProgram > 0) {
-          // If there is debt, pay up to the debt amount
-          deduction = Math.min(remainingAmount, pendingForThisProgram);
-        } else if (pId === sortedPrograms[sortedPrograms.length - 1]) {
-          // If this is the VERY LAST program and there's still money, 
-          // apply the surplus here (even if pending is 0) to avoid losing track of the money.
-          deduction = remainingAmount;
-        }
-
-        if (deduction > 0) {
-          // Update Member Sub-collection Program
-          batch.set(memberProgramRef, {
-            paidAmount: admin.firestore.FieldValue.increment(deduction),
-            pendingAmount: admin.firestore.FieldValue.increment(-deduction),
-            updated_at: admin.firestore.FieldValue.serverTimestamp()
-          }, { merge: true });
-
-          // Update Global Program Stats
-          const globalProgramRef = db.collection('programs').doc(pId);
-          batch.set(globalProgramRef, {
-            totalJoinFeesPaid: admin.firestore.FieldValue.increment(deduction),
-            totalJoinFeesPending: admin.firestore.FieldValue.increment(-deduction),
-            updated_at: admin.firestore.FieldValue.serverTimestamp()
-          }, { merge: true });
-
-          // Update Agent local stats
-          if (!updatedProgramStats[pId]) {
-            updatedProgramStats[pId] = { totalJoinFeesPaid: 0, totalJoinFeesPending: 0 };
-          }
-          updatedProgramStats[pId].totalJoinFeesPaid = (updatedProgramStats[pId].totalJoinFeesPaid || 0) + deduction;
-          updatedProgramStats[pId].totalJoinFeesPending = (updatedProgramStats[pId].totalJoinFeesPending || 0) - deduction;
-          updatedProgramStats[pId].lastUpdated = new Date();
-
-          remainingAmount -= deduction;
-        }
+      // Guard: nothing to pay
+      if (pendingAmount <= 0) {
+        console.warn(`Member ${memberId} already fully paid — skipping`);
+        continue;
       }
 
-      // Update Member Main Document
-      const currentMemberData = memberDoc.data();
-      const newPaid = (currentMemberData.paidAmount || 0) + Number(amount);
-      const totalFees = currentMemberData.totalJoinFees || (newPaid + (currentMemberData.pendingAmount || 0));
-      const paymentPercentage = totalFees > 0 ? (newPaid / totalFees) * 100 : 0;
+      // ── Deduction = min(what they sent, what is actually pending) ─────────
+      const requestedAmount  = Number(amount);
+      const deduction        = Math.min(requestedAmount, pendingAmount);
 
+      if (deduction <= 0) {
+        console.warn(`Deduction is 0 for member ${memberId} — skipping`);
+        continue;
+      }
+
+      const newPaid        = currentPaid + deduction;
+      const newPending     = Math.max(0, pendingAmount - deduction);
+      const paymentPct     = joinFees > 0 ? Math.min((newPaid / joinFees) * 100, 100) : 0;
+      const paymentStatus  = paymentPct >= 100 ? 'paid' : paymentPct > 0 ? 'partial' : 'pending';
+
+      // ── Update member doc (all financial + payment status fields) ──────────
       batch.update(memberRef, {
-        paidAmount: admin.firestore.FieldValue.increment(Number(amount)),
-        pendingAmount: admin.firestore.FieldValue.increment(-Number(amount)),
-        paymentPercentage: Number(paymentPercentage.toFixed(2)),
-        updated_at: admin.firestore.FieldValue.serverTimestamp()
+        paidAmount:         admin.firestore.FieldValue.increment(deduction),
+        pendingAmount:      admin.firestore.FieldValue.increment(-deduction),
+        paymentPercentage:  Number(paymentPct.toFixed(2)),
+        paymentStatus,
+        hasPendingPayments: newPending > 0,
+        updated_at:         admin.firestore.FieldValue.serverTimestamp()
       });
 
-      // Record Transaction
+      // ── Update global program stats ────────────────────────────────────────
+      if (programId) {
+        const globalProgramRef = db.collection('programs').doc(programId);
+        batch.set(globalProgramRef, {
+          totalJoinFeesPaid:    admin.firestore.FieldValue.increment(deduction),
+          totalJoinFeesPending: admin.firestore.FieldValue.increment(-deduction),
+          updated_at:           admin.firestore.FieldValue.serverTimestamp()
+        }, { merge: true });
+
+        // ── Update agent program stats ───────────────────────────────────────
+        if (!updatedProgramStats[programId]) {
+          updatedProgramStats[programId] = { totalJoinFeesPaid: 0, totalJoinFeesPending: 0 };
+        }
+        updatedProgramStats[programId].totalJoinFeesPaid    = (updatedProgramStats[programId].totalJoinFeesPaid    || 0) + deduction;
+        updatedProgramStats[programId].totalJoinFeesPending = (updatedProgramStats[programId].totalJoinFeesPending || 0) - deduction;
+        updatedProgramStats[programId].lastUpdated          = new Date();
+      }
+
+      // ── Transaction record ────────────────────────────────────────────────
       const feeRef = db.collection('memberJoinFees').doc();
       batch.set(feeRef, {
-        memberId, memberName,
-        amount: Number(amount),
-        paymentMode: paymentMethod,
-        transactionId: transactionId || '',
-        transactionDate: paymentDate,
-        programIds: sortedPrograms, // Now shows the order of payment
-        status: 'completed',
-        createdBy: authResult.user.uid,
+        memberId,
+        memberName,
+        programId,
+        programName,
+        amount:           deduction,          // actual applied amount
+        requestedAmount,                       // original requested amount
+        paymentMode:      paymentMethod,
+        transactionId:    transactionId || '',
+        transactionDate:  paymentDate,
+        status:           'completed',
+        createdBy:        authResult.user.uid,
         paymentNote,
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
-        search_memberName: memberName.toLowerCase(),
-        groupId: paymentGroupRef.id 
+        groupId:          paymentGroupRef.id,
+        createdAt:        admin.firestore.FieldValue.serverTimestamp(),
+        search_memberName: memberName.toLowerCase()
       });
     }
 
-    // 4. Final Global Updates
+    // ── Agent totals ──────────────────────────────────────────────────────────
     batch.set(agentRef, {
-      totalJoinFeesPaid: admin.firestore.FieldValue.increment(numTotalAmount),
+      totalJoinFeesPaid:    admin.firestore.FieldValue.increment(numTotalAmount),
       totalJoinFeesPending: admin.firestore.FieldValue.increment(-numTotalAmount),
-      programStats: updatedProgramStats,
-      updated_at: admin.firestore.FieldValue.serverTimestamp()
+      programStats:         updatedProgramStats,
+      updated_at:           admin.firestore.FieldValue.serverTimestamp()
     }, { merge: true });
 
+    // ── Org totals ────────────────────────────────────────────────────────────
     const orgRef = db.collection('organizationStats').doc('current');
     batch.set(orgRef, {
-      totalJoinFeesPaid: admin.firestore.FieldValue.increment(numTotalAmount),
+      totalJoinFeesPaid:    admin.firestore.FieldValue.increment(numTotalAmount),
       totalJoinFeesPending: admin.firestore.FieldValue.increment(-numTotalAmount),
-      updated_at: admin.firestore.FieldValue.serverTimestamp()
+      updated_at:           admin.firestore.FieldValue.serverTimestamp()
     }, { merge: true });
 
     await batch.commit();
-    return NextResponse.json({ success: true, message: "Waterfall payment processed successfully" });
+    return NextResponse.json({ success: true, message: "Payment processed successfully" });
 
   } catch (error) {
     console.error("❌ Error:", error);

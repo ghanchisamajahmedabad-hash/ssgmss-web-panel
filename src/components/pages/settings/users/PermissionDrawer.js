@@ -1,672 +1,520 @@
-// app/settings/users/components/PermissionDrawer.tsx
+// components/pages/settings/users/PermissionDrawer.tsx
 "use client"
 import React, { useState, useEffect } from 'react'
 import {
-  Drawer,
-  Button,
-  Space,
-  Typography,
-  Card,
-  Row,
-  Col,
-  Switch,
-  Checkbox,
-  Tag,
-  Tabs,
-  Tree,
-  message,
-  Modal,
-  Alert
+  Drawer, Button, Space, Typography, Switch, Checkbox,
+  Tag, Tabs, message, Modal, Alert, Avatar,
 } from 'antd'
 import {
-  SecurityScanOutlined,
-  CheckCircleOutlined,
-  AppstoreOutlined,
-  TeamOutlined,
-  SettingOutlined,
-  DashboardOutlined,
-  FileProtectOutlined,
-  CreditCardOutlined,
-  DatabaseOutlined,
-  UserSwitchOutlined,
-  InboxOutlined,
-  TagOutlined,
-  DeleteOutlined,
-  ExclamationCircleOutlined,
-  ClearOutlined,
-  SaveOutlined,
-  CloseOutlined
+  SecurityScanOutlined, CheckCircleOutlined, AppstoreOutlined,
+  TeamOutlined, SettingOutlined, DashboardOutlined, CreditCardOutlined,
+  DatabaseOutlined, UserSwitchOutlined, InboxOutlined, TagOutlined,
+  DeleteOutlined, ExclamationCircleOutlined, ClearOutlined, SaveOutlined,
+  CloseOutlined, UserOutlined, CrownOutlined, EyeOutlined, EditOutlined,
+  PlusOutlined, DownloadOutlined,
 } from '@ant-design/icons'
 import { userApi } from '@/utils/api'
 
 const { Title, Text, Paragraph } = Typography
-const { TabPane } = Tabs
+const ROLES = { SUPER_ADMIN: 'superadmin' }
 
-const ROLES = {
-  SUPER_ADMIN: 'super_admin',
-  ADMIN: 'admin',
-  AGENT: 'agent',
-  MEMBER: 'member'
+// ── Pink/rose theme — matches existing sidebar ──────────────────────────────
+const T = {
+  primary:      '#db2777',
+  primaryHover: '#be185d',
+  primaryBg:    '#fce7f3',
+  primaryLight: '#fdf2f8',
+  border:       '#fde2d8',
+  gradient:     'linear-gradient(135deg, #db2777 0%, #be185d 100%)',
 }
 
-// Menu tree data - synced with actual menu
-const menuTreeData = [
-  {
-    title: 'Dashboard',
-    key: '/',
-    icon: <DashboardOutlined />,
-    permissions: ['view']
-  },
-  {
-    title: 'Programs',
-    key: '/programs',
-    icon: <AppstoreOutlined />,
+// ── Module config ────────────────────────────────────────────────────────────
+const MODULE_CONFIG = {
+  '/':         { label: 'Dashboard',  icon: <DashboardOutlined />,  module: 'dashboard' },
+  '/programs': { label: 'Programs',   icon: <AppstoreOutlined />,   module: 'programs',
     children: [
-      { 
-        title: 'Members', 
-        key: '/programs/members',
-        permissions: ['view', 'create', 'edit', 'delete', 'download']
-      },
-      { 
-        title: 'Closing Forms', 
-        key: '/programs/closing-forms',
-        permissions: ['view', 'create', 'edit', 'delete', 'download']
-      },
-      { 
-        title: 'Yojnas', 
-        key: '/programs/yojnas',
-        permissions: ['view', 'create', 'edit', 'delete', 'download']
-      }
-    ]
+      { key: '/programs/closing-forms', label: 'Closing Forms' },
+      { key: '/programs/yojnas',        label: 'Yojnas' },
+    ],
   },
-  {
-    title: 'Agents',
-    key: '/agents',
-    icon: <UserSwitchOutlined />,
-    permissions: ['view', 'create', 'edit', 'delete', 'download']
-  },
-  {
-    title: 'Members',
-    key: '/members',
-    icon: <TeamOutlined />,
-    permissions: ['view', 'create', 'edit', 'delete', 'download']
-  },
-  {
-    title: 'Requests',
-    key: '/requests',
-    icon: <InboxOutlined />,
-    permissions: ['view', 'create', 'edit', 'delete', 'download']
-  },
-  {
-    title: 'Payments',
-    key: '/payments',
-    icon: <CreditCardOutlined />,
+  '/agents':   { label: 'Agents',     icon: <UserSwitchOutlined />, module: 'agents' },
+  '/members':  { label: 'Members',    icon: <TeamOutlined />,       module: 'members' },
+  '/requests': { label: 'Requests',   icon: <InboxOutlined />,      module: 'requests' },
+  '/payments': { label: 'Payments',   icon: <CreditCardOutlined />, module: 'payments',
     children: [
-      { 
-        title: 'Join Fees', 
-        key: '/payments/join-fees',
-        permissions: ['view', 'create', 'edit', 'delete', 'download']
-      },
-      { 
-        title: 'Closing Payment', 
-        key: '/payments/closing-payment',
-        permissions: ['view', 'create', 'edit', 'delete', 'download']
-      }
-    ]
+      { key: '/payments/join-fees',       label: 'Join Fees' },
+      { key: '/payments/closing-payment', label: 'Closing Payment' },
+    ],
   },
-  {
-    title: 'Master',
-    key: '/master',
-    icon: <DatabaseOutlined />,
+  '/master':   { label: 'Master',     icon: <DatabaseOutlined />,   module: 'master',
     children: [
-      { 
-        title: 'Users', 
-        key: '/master/users',
-        permissions: ['view', 'create', 'edit', 'delete', 'download']
-      },
-      { 
-        title: 'State', 
-        key: '/master/state',
-        permissions: ['view', 'create', 'edit', 'delete', 'download']
-      },
-      { 
-        title: 'District', 
-        key: '/master/district',
-        permissions: ['view', 'create', 'edit', 'delete', 'download']
-      },
-      { 
-        title: 'City', 
-        key: '/master/city',
-        permissions: ['view', 'create', 'edit', 'delete', 'download']
-      },
-      { 
-        title: 'Cast', 
-        key: '/master/cast',
-        permissions: ['view', 'create', 'edit', 'delete', 'download']
-      },
-      { 
-        title: 'Relations', 
-        key: '/master/relations',
-        permissions: ['view', 'create', 'edit', 'delete', 'download']
-      }
-    ]
+      { key: '/master/users',     label: 'Users' },
+      { key: '/master/state',     label: 'State' },
+      { key: '/master/district',  label: 'District' },
+      { key: '/master/city',      label: 'City' },
+      { key: '/master/cast',      label: 'Cast' },
+      { key: '/master/relations', label: 'Relations' },
+    ],
   },
-  {
-    title: 'Rule & Policy',
-    key: '/rule-policy',
-    icon: <FileProtectOutlined />,
-    permissions: ['view', 'edit']
-  },
-  {
-    title: 'Expenses',
-    key: '/expenses',
-    icon: <TagOutlined />,
-    permissions: ['view', 'create', 'edit', 'delete', 'download']
-  },
-  {
-    title: 'Settings',
-    key: '/settings',
-    icon: <SettingOutlined />,
+  '/expenses': { label: 'Expenses',   icon: <TagOutlined />,        module: 'expenses' },
+  '/settings': { label: 'Settings',   icon: <SettingOutlined />,    module: 'settings',
     children: [
-      { 
-        title: 'About', 
-        key: '/settings/about',
-        permissions: ['view', 'edit']
-      },
-      { 
-        title: 'Contact', 
-        key: '/settings/contact',
-        permissions: ['view', 'edit']
-      },
-      {
-        title: 'Security',
-        key: '/settings/security',
-        children: [
-          { 
-            title: 'Password Change', 
-            key: '/settings/security/change-password',
-            permissions: ['view']
-          },
-          { 
-            title: 'Sessions', 
-            key: '/settings/security/sessions',
-            permissions: ['view', 'delete']
-          }
-        ]
-      }
-    ]
+      { key: '/settings/about',                    label: 'About' },
+      { key: '/settings/contact',                  label: 'Contact' },
+      { key: '/settings/security/change-password', label: 'Password Change' },
+      { key: '/settings/security/sessions',        label: 'Sessions' },
+    ],
   },
-  {
-    title: 'Trash',
-    key: '/trash',
-    icon: <DeleteOutlined />,
-    permissions: ['view', 'delete']
-  }
+  '/trash':    { label: 'Trash',      icon: <DeleteOutlined />,     module: 'trash' },
+}
+
+const BASIC_ACTIONS = [
+  { key: 'view',     label: 'View',     icon: <EyeOutlined />,      desc: 'View records & data' },
+  { key: 'create',   label: 'Create',   icon: <PlusOutlined />,     desc: 'Add new records' },
+  { key: 'edit',     label: 'Edit',     icon: <EditOutlined />,     desc: 'Modify existing records' },
+  { key: 'delete',   label: 'Delete',   icon: <DeleteOutlined />,   desc: 'Remove records' },
+  { key: 'download', label: 'Download', icon: <DownloadOutlined />, desc: 'Export & download data' },
 ]
 
+const ADVANCED_ACTIONS = [
+  { key: 'approve',    label: 'Approve Requests', icon: <CheckCircleOutlined /> },
+  // { key: 'request',    label: 'Make Requests',    icon: <InboxOutlined /> },
+  {key:"reject", label:"Reject Requests", icon:<CloseOutlined />},
+  { key: 'add_agent',  label: 'Add Agents',       icon: <UserSwitchOutlined /> },
+  { key: 'add_yojna',  label: 'Add Yojnas',       icon: <AppstoreOutlined /> },
+
+  { key: 'add_member', label: 'Add Members',      icon: <TeamOutlined /> },
+]
+
+// ── Module card ──────────────────────────────────────────────────────────────
+function ModuleCard({ pageKey, config, checkedPages, onToggle, onSubToggle }) {
+  const on = checkedPages.includes(pageKey)
+  const hasChildren = config.children?.length > 0
+  const enabledCount = hasChildren ? config.children.filter(c => checkedPages.includes(c.key)).length : 0
+
+  return (
+    <div style={{
+      border: `1.5px solid ${on ? T.primary + '35' : T.border}`,
+      borderRadius: 10,
+      overflow: 'hidden',
+      background: on ? T.primaryLight : '#fff',
+      transition: 'all 0.2s',
+    }}>
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        padding: '10px 14px',
+        background: on ? T.primaryBg + 'cc' : '#fafafa',
+        borderBottom: hasChildren && on ? `1px solid ${T.primary}18` : 'none',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div style={{
+            width: 32, height: 32, borderRadius: 8, flexShrink: 0,
+            background: on ? T.gradient : '#f1f5f9',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            color: on ? '#fff' : '#94a3b8', fontSize: 14, transition: 'all 0.2s',
+          }}>
+            {config.icon}
+          </div>
+          <div>
+            <Text strong style={{ fontSize: 13, color: on ? '#1e293b' : '#64748b' }}>
+              {config.label}
+            </Text>
+            {hasChildren && (
+              <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 1 }}>
+                {on ? `${enabledCount}/${config.children.length} sub-pages` : 'Has sub-pages'}
+              </div>
+            )}
+          </div>
+        </div>
+        <Switch
+          checked={on}
+          onChange={checked => onToggle(pageKey, checked, config)}
+          style={on ? { background: T.primary } : {}}
+        />
+      </div>
+
+      {hasChildren && on && (
+        <div style={{ padding: '8px 14px 10px', display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+          {config.children.map(child => {
+            const childOn = checkedPages.includes(child.key)
+            return (
+              <label key={child.key} style={{
+                display: 'flex', alignItems: 'center', gap: 5,
+                padding: '3px 10px', borderRadius: 20, cursor: 'pointer',
+                userSelect: 'none', transition: 'all 0.15s',
+                border: `1px solid ${childOn ? T.primary + '55' : '#e2e8f0'}`,
+                background: childOn ? T.primaryBg : '#f8fafc',
+              }}>
+                <Checkbox
+                  checked={childOn}
+                  onChange={e => onSubToggle(child.key, e.target.checked)}
+                  style={{ margin: 0 }}
+                />
+                <span style={{ fontSize: 12, fontWeight: 500, color: childOn ? T.primary : '#64748b' }}>
+                  {child.label}
+                </span>
+              </label>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Action card ──────────────────────────────────────────────────────────────
+function ActionCard({ actionKey, config, checked, onChange }) {
+  return (
+    <div
+      onClick={() => onChange(actionKey, !checked)}
+      style={{
+        border: `1.5px solid ${checked ? T.primary + '45' : T.border}`,
+        borderRadius: 10, padding: '10px 12px', cursor: 'pointer',
+        background: checked ? T.primaryLight : '#fff', transition: 'all 0.2s',
+        display: 'flex', alignItems: 'center', gap: 10,
+      }}
+    >
+      <div style={{
+        width: 32, height: 32, borderRadius: 8, flexShrink: 0,
+        background: checked ? T.gradient : '#f1f5f9',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        color: checked ? '#fff' : '#94a3b8', fontSize: 14, transition: 'all 0.2s',
+      }}>
+        {config.icon}
+      </div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <Text strong style={{ fontSize: 13, display: 'block', color: checked ? '#1e293b' : '#64748b' }}>
+          {config.label}
+        </Text>
+        <Text style={{ fontSize: 11, color: '#94a3b8' }}>{config.desc}</Text>
+      </div>
+      <Switch
+        checked={checked}
+        size="small"
+        style={checked ? { background: T.primary } : {}}
+        onClick={e => e.stopPropagation()}
+        onChange={val => onChange(actionKey, val)}
+      />
+    </div>
+  )
+}
+
+// ── Main ─────────────────────────────────────────────────────────────────────
 const PermissionDrawer = ({ visible, onClose, selectedUser, onSuccess }) => {
-  const [loading, setLoading] = useState(false)
-  const [permissions, setPermissions] = useState({
-    pages: [],
-    actions: {
-      create: false,
-      edit: false,
-      delete: false,
-      view: false,
-      download: false
-    },
+  const [loading, setLoading]       = useState(false)
+  const [activeTab, setActiveTab]   = useState('pages')
+  const [checkedPages, setCheckedPages] = useState(['/'])
+  const [permissions, setPermissions]   = useState({
+    pages: ['/'],
+    actions: { create: false, edit: false, delete: false, view: false, download: false },
     moduleAccess: {},
-    pagePermissions: {}
+    pagePermissions: {},
   })
-  const [checkedPages, setCheckedPages] = useState([])
-  const [expandedKeys, setExpandedKeys] = useState([])
 
   useEffect(() => {
     if (visible && selectedUser) {
-      const userPermissions = selectedUser.permissions || {
+      const p = selectedUser.permissions || {
         pages: ['/'],
-        actions: {
-          create: false,
-          edit: false,
-          delete: false,
-          view: true,
-          download: false
-        },
+        actions: { create: false, edit: false, delete: false, view: true, download: false },
         moduleAccess: { dashboard: true },
-        pagePermissions: {}
+        pagePermissions: {},
       }
-      
-      setPermissions(userPermissions)
-      setCheckedPages(userPermissions.pages || ['/'])
-      setExpandedKeys(['/', '/programs', '/payments', '/master', '/settings', '/settings/security'])
+      setPermissions(p)
+      setCheckedPages(p.pages || ['/'])
+      setActiveTab('pages')
     }
   }, [visible, selectedUser])
+
+  const rebuildModuleAccess = (pages) => {
+    const map = {
+      '/': 'dashboard', '/programs': 'programs', '/agents': 'agents',
+      '/members': 'members', '/requests': 'requests', '/payments': 'payments',
+      '/master': 'master', '/expenses': 'expenses', '/settings': 'settings', '/trash': 'trash',
+    }
+    const acc = {}
+    Object.values(map).forEach(m => (acc[m] = false))
+    pages.forEach(k => {
+      const mod = Object.keys(map).find(m => k === m || k.startsWith(m + '/'))
+      if (mod) acc[map[mod]] = true
+    })
+    return acc
+  }
+
+  const handleToggle = (pageKey, checked, config) => {
+    let next = [...checkedPages]
+    if (checked) {
+      if (!next.includes(pageKey)) next.push(pageKey)
+    } else {
+      next = next.filter(p => p !== pageKey)
+      config.children?.forEach(c => { next = next.filter(p => p !== c.key) })
+    }
+    setCheckedPages(next)
+    setPermissions(prev => ({ ...prev, moduleAccess: rebuildModuleAccess(next) }))
+  }
+
+  const handleSubToggle = (childKey, checked) => {
+    let next = [...checkedPages]
+    if (checked) { if (!next.includes(childKey)) next.push(childKey) }
+    else next = next.filter(p => p !== childKey)
+    setCheckedPages(next)
+    setPermissions(prev => ({ ...prev, moduleAccess: rebuildModuleAccess(next) }))
+  }
+
+  const handleAction = (key, val) => {
+    setPermissions(prev => ({ ...prev, actions: { ...prev.actions, [key]: val } }))
+  }
 
   const handleSave = async () => {
     try {
       setLoading(true)
-      
-      const updatedPermissions = {
-        ...permissions,
-        pages: checkedPages,
-        role: selectedUser.role,
-      }
-      
-      await userApi.updateUser(selectedUser.id, {
-        permissions: updatedPermissions,
-        id: selectedUser.id,
-        role: selectedUser.role,
-      })
-      
+      const updated = { ...permissions, pages: checkedPages, role: selectedUser.role }
+      await userApi.updateUser(selectedUser.id, { permissions: updated, id: selectedUser.id, role: selectedUser.role })
       message.success('Permissions updated successfully')
       onSuccess()
-      
-    } catch (error) {
-      message.error(error.message || 'Failed to update permissions')
-      console.error('Error:', error)
+    } catch (err) {
+      message.error(err.message || 'Failed to update permissions')
     } finally {
       setLoading(false)
     }
   }
 
-  const handlePageCheck = (checkedKeys) => {
-    setCheckedPages(checkedKeys)
-    
-    const newModuleAccess = { ...permissions.moduleAccess }
-    const modules = {
-      '/': 'dashboard',
-      '/programs': 'programs',
-      '/agents': 'agents',
-      '/members': 'members',
-      '/requests': 'requests',
-      '/payments': 'payments',
-      '/master': 'master',
-      '/rule-policy': 'rulePolicy',
-      '/expenses': 'expenses',
-      '/settings': 'settings',
-      '/trash': 'trash'
-    }
-    
-    Object.keys(modules).forEach(key => {
-      newModuleAccess[modules[key]] = false
-    })
-    
-    checkedKeys.forEach(key => {
-      const module = Object.keys(modules).find(m => key.startsWith(m))
-      if (module && modules[module]) {
-        newModuleAccess[modules[module]] = true
-      }
-    })
-    
-    setPermissions(prev => ({
-      ...prev,
-      moduleAccess: newModuleAccess
-    }))
-  }
-
-  const handleActionChange = (action, value) => {
-    setPermissions(prev => ({
-      ...prev,
-      actions: {
-        ...prev.actions,
-        [action]: value
-      }
-    }))
-  }
-
-  const handlePagePermissionChange = (pageKey, permission, value) => {
-    setPermissions(prev => ({
-      ...prev,
-      pagePermissions: {
-        ...prev.pagePermissions,
-        [pageKey]: {
-          ...prev.pagePermissions?.[pageKey],
-          [permission]: value
-        }
-      }
-    }))
-  }
-
-  const getPagePermissions = (pageKey) => {
-    return permissions.pagePermissions?.[pageKey] || {
-      view: checkedPages.includes(pageKey),
-      create: false,
-      edit: false,
-      delete: false,
-      download: false
-    }
-  }
-
-  // Remove all permissions
-  const handleRemoveAllPermissions = () => {
+  const handleReset = () => {
     Modal.confirm({
-      title: 'Remove All Permissions?',
-      icon: <ExclamationCircleOutlined />,
-      content: (
-        <div>
-          <p>This will remove all permissions for <strong>{selectedUser?.name}</strong>.</p>
-          <p>User will only have access to view the Dashboard.</p>
-          <p style={{ color: '#ff4d4f', marginTop: 12 }}>Are you sure?</p>
-        </div>
-      ),
-      okText: 'Yes, Remove All',
-      okType: 'danger',
-      cancelText: 'Cancel',
+      title: 'Reset All Permissions?',
+      icon: <ExclamationCircleOutlined style={{ color: T.primary }} />,
+      content: <Text>Reset <strong>{selectedUser?.name}</strong> to dashboard-only access?</Text>,
+      okText: 'Reset', okType: 'danger', cancelText: 'Cancel',
       async onOk() {
-        try {
-          setLoading(true)
-          
-          const resetPermissions = {
-            pages: ['/'],
-            actions: {
-              create: false,
-              edit: false,
-              delete: false,
-              view: true,
-              download: false,
-              approve: false,
-              request: false,
-              add_agent: false,
-              add_member: false
-            },
-            moduleAccess: { dashboard: true },
-            pagePermissions: {}
-          }
-          
-          setPermissions(resetPermissions)
-          setCheckedPages(['/'])
-          
-          await userApi.updateUser(selectedUser.id, {
-            permissions: resetPermissions,
-            id: selectedUser.id,
-            role: selectedUser.role,
-          })
-          
-          message.success('All permissions removed successfully')
-          onSuccess()
-          
-        } catch (error) {
-          message.error(error.message || 'Failed to remove permissions')
-        } finally {
-          setLoading(false)
+        const reset = {
+          pages: ['/'],
+          actions: { create: false, edit: false, delete: false, view: true, download: false, approve: false, request: false, add_agent: false, add_member: false },
+          moduleAccess: { dashboard: true }, pagePermissions: {},
         }
-      }
+        setPermissions(reset)
+        setCheckedPages(['/'])
+        try {
+          await userApi.updateUser(selectedUser.id, { permissions: reset, id: selectedUser.id, role: selectedUser.role })
+          message.success('Permissions reset')
+          onSuccess()
+        } catch { message.error('Failed to reset') }
+      },
     })
   }
-
-  const renderTreeWithPermissions = (data) =>
-    data.map((item) => ({
-      key: item.key,
-      title: (
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', padding: '4px 0' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            {item.icon}
-            <span>{item.title}</span>
-          </div>
-          {item.permissions && item.permissions.length > 0 && (
-            <div style={{ display: 'flex', gap: 4 }}>
-              {item.permissions.map(perm => {
-                const pagePerms = getPagePermissions(item.key)
-                const isChecked = pagePerms[perm]
-                
-                return (
-                  <Checkbox
-                    key={perm}
-                    checked={isChecked}
-                    onChange={(e) => handlePagePermissionChange(item.key, perm, e.target.checked)}
-                    disabled={!checkedPages.includes(item.key)}
-                  >
-                    <span style={{ fontSize: 11, textTransform: 'uppercase', fontWeight: 600 }}>
-                      {perm.charAt(0)}
-                    </span>
-                  </Checkbox>
-                )
-              })}
-            </div>
-          )}
-        </div>
-      ),
-      children: item.children ? renderTreeWithPermissions(item.children) : undefined
-    }))
 
   if (!selectedUser) return null
 
-  return (
-    <Drawer
-      title={
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+  const isSA        = selectedUser.role === ROLES.SUPER_ADMIN
+  const pagesCount  = checkedPages.length
+  const actionsCount = Object.values(permissions.actions || {}).filter(Boolean).length
+
+  const CountBadge = ({ n }) => n > 0 ? (
+    <span style={{
+      background: T.primary, color: '#fff', borderRadius: 10,
+      fontSize: 10, fontWeight: 700, padding: '1px 6px', lineHeight: '16px',
+    }}>{n}</span>
+  ) : null
+
+  const tabItems = [
+    {
+      key: 'pages',
+      label: <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}><AppstoreOutlined />Page Access <CountBadge n={pagesCount} /></span>,
+      children: (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {Object.entries(MODULE_CONFIG).map(([key, config]) => (
+            <ModuleCard key={key} pageKey={key} config={config}
+              checkedPages={checkedPages} onToggle={handleToggle} onSubToggle={handleSubToggle} />
+          ))}
+        </div>
+      ),
+    },
+    {
+      key: 'actions',
+      label: <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}><SecurityScanOutlined />Actions <CountBadge n={actionsCount} /></span>,
+      children: (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
           <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-              <SecurityScanOutlined />
-              <span>Permissions - {selectedUser.name}</span>
+            <Text style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: 0.6, display: 'block', marginBottom: 8 }}>
+              Basic Actions
+            </Text>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+              {BASIC_ACTIONS.map(ac => (
+                <ActionCard key={ac.key} actionKey={ac.key} config={ac}
+                  checked={permissions.actions?.[ac.key] || false} onChange={handleAction} />
+              ))}
             </div>
-            <Tag color={selectedUser.role === ROLES.SUPER_ADMIN ? 'gold' : 'blue'}>
-              {selectedUser.role}
-            </Tag>
+          </div>
+          <div>
+            <Text style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: 0.6, display: 'block', marginBottom: 8 }}>
+              Advanced Permissions
+            </Text>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {ADVANCED_ACTIONS.map(ac => {
+                const on = permissions.actions?.[ac.key] || false
+                return (
+                  <div key={ac.key} onClick={() => handleAction(ac.key, !on)} style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                    padding: '10px 14px', borderRadius: 10, cursor: 'pointer',
+                    border: `1.5px solid ${on ? T.primary + '40' : T.border}`,
+                    background: on ? T.primaryLight : '#fff', transition: 'all 0.2s',
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                      <span style={{ color: on ? T.primary : '#94a3b8', fontSize: 16 }}>{ac.icon}</span>
+                      <Text style={{ fontSize: 13, fontWeight: 500, color: on ? '#1e293b' : '#64748b' }}>
+                        {ac.label}
+                      </Text>
+                    </div>
+                    <Switch checked={on} size="small" style={on ? { background: T.primary } : {}}
+                      onClick={e => e.stopPropagation()} onChange={val => handleAction(ac.key, val)} />
+                  </div>
+                )
+              })}
+            </div>
           </div>
         </div>
-      }
+      ),
+    },
+    {
+      key: 'summary',
+      label: <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}><CheckCircleOutlined />Summary</span>,
+      children: (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          {/* Stat pills */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10 }}>
+            {[
+              { label: 'Pages',   value: pagesCount },
+              { label: 'Actions', value: actionsCount },
+              { label: 'Modules', value: Object.values(permissions.moduleAccess || {}).filter(Boolean).length },
+            ].map(s => (
+              <div key={s.label} style={{
+                padding: '14px 10px', borderRadius: 10, textAlign: 'center',
+                background: T.primaryBg, border: `1px solid ${T.primary}25`,
+              }}>
+                <div style={{ color: T.primary, fontSize: 22, fontWeight: 700 }}>{s.value}</div>
+                <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>{s.label}</div>
+              </div>
+            ))}
+          </div>
+
+          {[
+            { label: 'Accessible Pages', items: checkedPages },
+            { label: 'Enabled Actions',  items: Object.entries(permissions.actions || {}).filter(([_, v]) => v).map(([k]) => k.replace(/_/g, ' ')) },
+          ].map(({ label, items }) => (
+            <div key={label} style={{
+              background: T.primaryLight, borderRadius: 10, padding: 14,
+              border: `1px solid ${T.border}`,
+            }}>
+              <Text style={{ fontSize: 11, fontWeight: 700, color: T.primaryHover, display: 'block', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                {label}
+              </Text>
+              {items.length === 0 ? (
+                <Text type="secondary" style={{ fontSize: 12 }}>None selected</Text>
+              ) : (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+                  {items.map(item => (
+                    <Tag key={item} style={{
+                      borderRadius: 6, fontSize: 11,
+                      borderColor: T.primary + '40', color: T.primary, background: T.primaryBg,
+                    }}>{item}</Tag>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+
+          <Alert
+            message="Danger Zone"
+            description="Reset this user to dashboard-only access. All permissions will be lost."
+            type="warning" showIcon
+            action={<Button danger size="small" icon={<ClearOutlined />} onClick={handleReset}>Reset</Button>}
+          />
+        </div>
+      ),
+    },
+  ]
+
+  return (
+    <Drawer
+      title={null}
       open={visible}
       onClose={onClose}
-      width={720}
+      width={680}
+      styles={{ body: { padding: 0, background: T.primaryLight }, header: { display: 'none' } }}
       footer={
-        <div style={{ display: 'flex', justifyContent: 'space-between', padding: '16px 0' }}>
-          <Button 
-            danger 
-            icon={<ClearOutlined />}
-            onClick={handleRemoveAllPermissions}
-            disabled={selectedUser.role === ROLES.SUPER_ADMIN}
-          >
-            Remove All Permissions
-          </Button>
-          <Space>
-            <Button onClick={onClose} icon={<CloseOutlined />}>
-              Cancel
-            </Button>
-            <Button 
-              type="primary" 
-              onClick={handleSave}
-              loading={loading}
-              disabled={selectedUser.role === ROLES.SUPER_ADMIN}
-              icon={<SaveOutlined />}
-            >
-              Save Changes
-            </Button>
-          </Space>
-        </div>
+        !isSA && (
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <Button danger icon={<ClearOutlined />} onClick={handleReset}>Reset All</Button>
+            <Space>
+              <Button onClick={onClose} icon={<CloseOutlined />}>Cancel</Button>
+              <Button type="primary" onClick={handleSave} loading={loading} icon={<SaveOutlined />}
+                style={{ background: T.primary, borderColor: T.primary }}>
+                Save Permissions
+              </Button>
+            </Space>
+          </div>
+        )
       }
     >
-      {selectedUser.role === ROLES.SUPER_ADMIN ? (
-        <div style={{ textAlign: 'center', padding: '60px 20px' }}>
-          <CheckCircleOutlined style={{ fontSize: 64, color: '#52c41a', marginBottom: 16 }} />
-          <Title level={4}>Super Admin - Full Access</Title>
-          <Paragraph type="secondary">
-            This user has complete access to all features.
-            <br />
-            Permissions cannot be modified.
-          </Paragraph>
+      {/* Pink gradient header */}
+      <div style={{ padding: '20px 24px 16px', background: T.gradient, color: '#fff' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <div style={{ padding: 8, background: 'rgba(255,255,255,0.2)', borderRadius: 10 }}>
+              <SecurityScanOutlined style={{ fontSize: 20 }} />
+            </div>
+            <div>
+              <div style={{ fontWeight: 700, fontSize: 16 }}>Permission Manager</div>
+              <div style={{ fontSize: 12, opacity: 0.85 }}>Configure access levels & capabilities</div>
+            </div>
+          </div>
+          <Button type="text" icon={<CloseOutlined />} onClick={onClose} style={{ color: '#fff', opacity: 0.8 }} />
         </div>
-      ) : (
-        <Tabs defaultActiveKey="1">
-          {/* Page Access Tab */}
-          <TabPane tab="Page Access" key="1">
-            <Card title="Select Pages" size="small" style={{ marginBottom: 16 }}>
-              <div style={{ background: '#fafafa', padding: 16, borderRadius: 8, maxHeight: 450, overflowY: 'auto' }}>
-                <Tree
-                  checkable
-                  treeData={renderTreeWithPermissions(menuTreeData)}
-                  checkedKeys={checkedPages}
-                  onCheck={handlePageCheck}
-                  expandedKeys={expandedKeys}
-                  onExpand={setExpandedKeys}
-                  showLine
-                />
-              </div>
-              <Alert 
-                message="V = View, C = Create, E = Edit, D = Delete, Do = Download" 
-                type="info" 
-                showIcon 
-                style={{ marginTop: 12 }}
-              />
-            </Card>
 
-            <Card title="Module Access" size="small">
-              <Row gutter={[12, 12]}>
-                {Object.entries({
-                  dashboard: 'Dashboard',
-                  programs: 'Programs',
-                  agents: 'Agents',
-                  members: 'Members',
-                  requests: 'Requests',
-                  payments: 'Payments',
-                  master: 'Master',
-                  rulePolicy: 'Rule & Policy',
-                  expenses: 'Expenses',
-                  settings: 'Settings',
-                  trash: 'Trash'
-                }).map(([key, label]) => (
-                  <Col span={8} key={key}>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: 8, background: '#f5f5f5', borderRadius: 4 }}>
-                      <Text style={{ fontSize: 13 }}>{label}</Text>
-                      <Switch 
-                        checked={permissions.moduleAccess?.[key] || false}
-                        size="small"
-                        disabled
-                      />
-                    </div>
-                  </Col>
-                ))}
-              </Row>
-            </Card>
-          </TabPane>
+        {/* User card */}
+        <div style={{
+          background: 'rgba(255,255,255,0.18)', borderRadius: 12, padding: '12px 16px',
+          display: 'flex', alignItems: 'center', gap: 12,
+          border: '1px solid rgba(255,255,255,0.25)',
+        }}>
+          <Avatar size={46} src={selectedUser.photoURL}
+            icon={!selectedUser.photoURL && <UserOutlined />}
+            style={{ border: '2px solid rgba(255,255,255,0.5)', flexShrink: 0 }} />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontWeight: 700, fontSize: 15, color: '#fff' }}>{selectedUser.name}</div>
+            <div style={{ fontSize: 12, opacity: 0.85, color: '#fff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {selectedUser.email}
+            </div>
+          </div>
+          <Tag style={{
+            background: 'rgba(255,255,255,0.25)', border: '1px solid rgba(255,255,255,0.4)',
+            color: '#fff', fontWeight: 600, borderRadius: 6,
+            textTransform: 'uppercase', fontSize: 11, letterSpacing: 0.5, flexShrink: 0,
+          }}>
+            {isSA && <CrownOutlined style={{ marginRight: 4 }} />}
+            {selectedUser.role}
+          </Tag>
+        </div>
+      </div>
 
-          {/* Global Actions Tab */}
-          <TabPane tab="Global Actions" key="2">
-            <Card title="Basic Actions" size="small" style={{ marginBottom: 16 }}>
-              <Text type="secondary" style={{ display: 'block', marginBottom: 16 }}>
-                These actions apply to all pages user can access
-              </Text>
-              <Row gutter={[12, 12]}>
-                {Object.entries({
-                  view: 'View Records',
-                  create: 'Create Records',
-                  edit: 'Edit Records',
-                  delete: 'Delete Records',
-                  download: 'Download Data'
-                }).map(([key, label]) => (
-                  <Col span={12} key={key}>
-                    <div style={{ 
-                      padding: 12, 
-                      border: '1px solid #d9d9d9', 
-                      borderRadius: 6,
-                      background: permissions.actions[key] ? '#f6ffed' : '#fff',
-                      borderColor: permissions.actions[key] ? '#b7eb8f' : '#d9d9d9'
-                    }}>
-                      <Checkbox
-                        checked={permissions.actions[key] || false}
-                        onChange={(e) => handleActionChange(key, e.target.checked)}
-                      >
-                        <span style={{ fontWeight: 500 }}>{label}</span>
-                      </Checkbox>
-                    </div>
-                  </Col>
-                ))}
-              </Row>
-            </Card>
-
-            <Card title="Advanced Actions" size="small">
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                {Object.entries({
-                  approve: 'Can Approve Requests',
-                  request: 'Can Make Requests',
-                  add_agent: 'Can Add Agents',
-                  add_member: 'Can Add Members'
-                }).map(([key, label]) => (
-                  <div 
-                    key={key}
-                    style={{ 
-                      display: 'flex', 
-                      alignItems: 'center', 
-                      justifyContent: 'space-between',
-                      padding: 12,
-                      border: '1px solid #d9d9d9',
-                      borderRadius: 6,
-                      background: permissions.actions[key] ? '#e6f7ff' : '#fff',
-                      borderColor: permissions.actions[key] ? '#91d5ff' : '#d9d9d9'
-                    }}
-                  >
-                    <Text>{label}</Text>
-                    <Switch 
-                      checked={permissions.actions[key] || false}
-                      onChange={(checked) => handleActionChange(key, checked)}
-                    />
-                  </div>
-                ))}
-              </div>
-            </Card>
-          </TabPane>
-
-          {/* Summary Tab */}
-          <TabPane tab="Summary" key="3">
-            <Alert
-              message="Danger Zone"
-              description={
-                <div>
-                  <Paragraph>
-                    Remove all permissions to reset this user to minimum access (Dashboard only).
-                  </Paragraph>
-                  <Button 
-                    danger 
-                    icon={<ClearOutlined />}
-                    onClick={handleRemoveAllPermissions}
-                  >
-                    Remove All Permissions
-                  </Button>
-                </div>
-              }
-              type="warning"
-              showIcon
-              style={{ marginBottom: 16 }}
-            />
-
-            <Card title="Current Permissions" size="small" style={{ marginBottom: 16 }}>
-              <div style={{ marginBottom: 16 }}>
-                <Text strong>Pages: </Text>
-                <Tag color="blue">{checkedPages.length} selected</Tag>
-              </div>
-              <div style={{ background: '#fafafa', padding: 12, borderRadius: 6, maxHeight: 200, overflowY: 'auto' }}>
-                {checkedPages.length === 0 ? (
-                  <Text type="secondary">No pages selected</Text>
-                ) : (
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                    {checkedPages.map(key => (
-                      <Tag key={key}>{key}</Tag>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </Card>
-
-            <Card title="Enabled Actions" size="small">
-              <div style={{ background: '#fafafa', padding: 12, borderRadius: 6 }}>
-                {Object.entries(permissions.actions).filter(([_, value]) => value).length === 0 ? (
-                  <Text type="secondary">No actions enabled</Text>
-                ) : (
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                    {Object.entries(permissions.actions)
-                      .filter(([_, value]) => value)
-                      .map(([key]) => (
-                        <Tag key={key} color="green">
-                          {key.replace(/_/g, ' ').toUpperCase()}
-                        </Tag>
-                      ))}
-                  </div>
-                )}
-              </div>
-            </Card>
-          </TabPane>
-        </Tabs>
-      )}
+      {/* Body */}
+      <div style={{ padding: '0 20px 24px' }}>
+        {isSA ? (
+          <div style={{ textAlign: 'center', padding: '60px 20px' }}>
+            <div style={{
+              width: 76, height: 76, borderRadius: 20, background: T.gradient,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              margin: '0 auto 16px', fontSize: 34, color: '#fff',
+            }}>
+              <CrownOutlined />
+            </div>
+            <Title level={4} style={{ marginBottom: 8 }}>Super Admin — Full Access</Title>
+            <Paragraph type="secondary">
+              This user has complete access to all features.<br />Permissions cannot be modified.
+            </Paragraph>
+          </div>
+        ) : (
+          <Tabs activeKey={activeTab} onChange={setActiveTab} items={tabItems} style={{ marginTop: 8 }} />
+        )}
+      </div>
     </Drawer>
   )
 }

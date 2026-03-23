@@ -29,6 +29,8 @@ const TopBar = ({ collapsed, setCollapsed }) => {
     await signOut(auth);
     router.replace('/auth/login');
   }
+const isSuperAdmin = (user) => user?.role === 'superadmin';
+  const usersPermissions = user?.permissions || {};
   const handleLogout = async () => {
     try {
       // Remove session from Firestore before logout
@@ -144,7 +146,7 @@ const TopBar = ({ collapsed, setCollapsed }) => {
             onClick={() => setCollapsed(!collapsed)}
             className="!text-[var(--foreground)] hover:!text-[var(--primary)] hover:!bg-[rgba(219,39,119,0.05)] !h-10 !w-10"
           />
-
+{/* 
           <Input
             placeholder="Search profiles, members, events..."
             prefix={<SearchOutlined className="text-[var(--muted-foreground)]" />}
@@ -153,13 +155,14 @@ const TopBar = ({ collapsed, setCollapsed }) => {
             style={{
               background: 'var(--surface-secondary)',
             }}
-          />
+          /> */}
         </div>
 
         {/* Right Section - Actions & User */}
         <Space size="middle" className="flex items-center">
           {/* Add Program Button */}
-          <Button
+          {
+            isSuperAdmin(user) || usersPermissions?.actions?.add_yojna ? ( <Button
             type="primary"
             icon={<PlusOutlined />}
             onClick={handleAddProgram}
@@ -169,7 +172,9 @@ const TopBar = ({ collapsed, setCollapsed }) => {
             }}
           >
             <span className="hidden sm:inline">Add Yojna</span>
-          </Button>
+          </Button>) : null
+          }
+         
 
           {/* Notifications */}
           <Badge count={unreadCount} offset={[-5, 5]}>

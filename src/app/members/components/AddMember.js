@@ -1,414 +1,265 @@
 "use client"
-import { App, Button, Drawer, Form, Spin, Alert } from 'antd'
-import React, { useState, useEffect } from 'react'
+import { App, Button, Drawer, Form, Spin } from 'antd'
+import React, { useState, useEffect, useCallback } from 'react'
 import { LoadingOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
-import { collection, getDocs, query, where } from 'firebase/firestore'
-import { auth, db } from '../../../../lib/firbase-client'
 import isBetween from 'dayjs/plugin/isBetween'
+import { collection, getDocs, query, where } from 'firebase/firestore'
+import { db } from '../../../../lib/firbase-client'
 
-// Import components
-import BasicInfoForm from './components/BasicInfoForm'
-import AddressForm from './components/AddressForm'
-import GuardianForm from './components/GuardianForm'
+// Form section components
+import BasicInfoForm    from './components/BasicInfoForm'
+import AddressForm      from './components/AddressForm'
+import GuardianForm     from './components/GuardianForm'
 import ProgramSelection from './components/ProgramSelection'
-import AddedByForm from './components/AddedByForm'
-import FeesForm from './components/FeesForm'
-import PhotoUploads from './components/PhotoUploads'
-import DocumentUploads from './components/DocumentUploads'
+import AddedByForm      from './components/AddedByForm'
+import FeesForm         from './components/FeesForm'
+import PhotoUploads     from './components/PhotoUploads'
+import DocumentUploads  from './components/DocumentUploads'
 import { checkAadhaarDuplicate, handleSubmit } from './components/firebaseUtils'
 
 dayjs.extend(isBetween)
 
-const AddMember = ({ open, setOpen, programs, agents, currentUser ,onSuccess}) => {
-  const [form] = Form.useForm()
-  const {message}=App.useApp()
-  const [loading, setLoading] = useState(false)
-  const [selectedPrograms, setSelectedPrograms] = useState([])
-  const [selectedAgent, setSelectedAgent] = useState(null)
-  const [addedByRole, setAddedByRole] = useState('admin')
-  const [memberPhoto, setMemberPhoto] = useState(null)
-  const [guardianPhoto, setGuardianPhoto] = useState(null)
-  const [memberDocFront, setMemberDocFront] = useState(null)
-  const [memberDocBack, setMemberDocBack] = useState(null)
-  const [guardianDoc, setGuardianDoc] = useState(null)
-  const [states, setStates] = useState([])
-  const [districts, setDistricts] = useState([])
-  const [cities, setCities] = useState([])
-  const [castes, setCastes] = useState([])
-  const [relations, setRelations] = useState([])
-  const [selectedState, setSelectedState] = useState(null)
-  const [selectedDistrict, setSelectedDistrict] = useState(null)
-  const [programDetails, setProgramDetails] = useState([])
+// ─── Password generator ───────────────────────────────────────────────────────
+const generatePassword = (name, dob) => {
+  if (!name || !dob) return ''
+  const first = name.trim().split(' ')[0].substring(0, 5)
+  const part  = first.charAt(0).toUpperCase() + first.slice(1).toLowerCase()
+  return `${part}${dayjs(dob).format('YYYY')}`
+}
+
+// ─── Main component ───────────────────────────────────────────────────────────
+const AddMember = ({ open, setOpen, programs, agents, currentUser, onSuccess }) => {
+  const [form]      = Form.useForm()
+  const { message } = App.useApp()
+  const [loading,  setLoading]  = useState(false)
+
+  // ── Single program (flat) ──────────────────────────────────────────────────
+  const [selectedProgram, setSelectedProgram] = useState('')   // single ID string
+  const [programDetail,   setProgramDetail]   = useState(null) // single object
+
+  // ── Dates & age ────────────────────────────────────────────────────────────
   const [joinDate, setJoinDate] = useState(dayjs())
-  const [dobDate, setDobDate] = useState(null)
+  const [dobDate,  setDobDate]  = useState(null)
+  const [age,      setAge]      = useState(null)
+
+  // ── Payment ────────────────────────────────────────────────────────────────
   const [joinFeesDone, setJoinFeesDone] = useState(false)
-  const [paymentMode, setPaymentMode] = useState('cash')
-  const [paidAmount, setPaidAmount] = useState(0)
-   const [existingMember, setExistingMember] = useState(null)
-  const [age, setAge] = useState(null)
-  // Fetch static data on component mount
-  useEffect(() => {
-    fetchStaticData()
-  }, [])
+  const [paymentMode,  setPaymentMode]  = useState('cash')
+  const [paidAmount,   setPaidAmount]   = useState(0)
 
-  useEffect(() => {
-    if (dobDate && selectedPrograms.length > 0) {
-      calculateProgramDetails()
-    }
-  }, [dobDate, joinDate, selectedPrograms])
+  // ── Added by ───────────────────────────────────────────────────────────────
+  const [addedByRole,   setAddedByRole]   = useState('admin')
+  const [selectedAgent, setSelectedAgent] = useState(null)
 
+  // ── Files ──────────────────────────────────────────────────────────────────
+  const [memberPhoto,    setMemberPhoto]    = useState(null)
+  const [guardianPhoto,  setGuardianPhoto]  = useState(null)
+  const [memberDocFront, setMemberDocFront] = useState(null)
+  const [memberDocBack,  setMemberDocBack]  = useState(null)
+  const [guardianDoc,    setGuardianDoc]    = useState(null)
+
+  // ── Aadhaar duplicate check ────────────────────────────────────────────────
+  const [existingMember, setExistingMember] = useState(null)
+
+  // ── Location ───────────────────────────────────────────────────────────────
+  const [states,           setStates]           = useState([])
+  const [districts,        setDistricts]        = useState([])
+  const [cities,           setCities]           = useState([])
+  const [castes,           setCastes]           = useState([])
+  const [relations,        setRelations]        = useState([])
+  const [selectedState,    setSelectedState]    = useState(null)
+  const [selectedDistrict, setSelectedDistrict] = useState(null)
+
+  // ── Load static data once ──────────────────────────────────────────────────
+  useEffect(() => { fetchStaticData() }, [])
+
+  // ── Recalculate program detail when dob / program / joinDate changes ───────
+  useEffect(() => {
+    if (dobDate && selectedProgram) calculateProgramDetail()
+    else if (!dobDate || !selectedProgram) setProgramDetail(null)
+  }, [dobDate, joinDate, selectedProgram])
+
+  // ── Static data ────────────────────────────────────────────────────────────
   const fetchStaticData = async () => {
     try {
-      // Fetch states
-      const statesSnapshot = await getDocs(collection(db, 'states'))
-      const statesData = statesSnapshot.docs
-        .filter(doc => doc.data().status === 'active')
-        .map(doc => ({ id: doc.id, ...doc.data() }))
-      setStates(statesData)
-
-      // Fetch castes
-      const castesSnapshot = await getDocs(collection(db, 'castes'))
-      const castesData = castesSnapshot.docs
-        .filter(doc => doc.data().status === 'active')
-        .map(doc => ({ id: doc.id, ...doc.data() }))
-      setCastes(castesData)
-
-      // Fetch relations
-      const relationsSnapshot = await getDocs(collection(db, 'relations'))
-      const relationsData = relationsSnapshot.docs
-        .filter(doc => doc.data().status === 'active')
-        .map(doc => ({ id: doc.id, ...doc.data() }))
-      setRelations(relationsData)
-    } catch (error) {
-      console.error('Error fetching static data:', error)
-      message.error('Failed to load form data')
-    }
+      const [stSnap, caSnap, relSnap] = await Promise.all([
+        getDocs(collection(db, 'states')),
+        getDocs(collection(db, 'castes')),
+        getDocs(collection(db, 'relations')),
+      ])
+      const active = (snap) => snap.docs.filter(d => d.data().status === 'active').map(d => ({ id: d.id, ...d.data() }))
+      setStates(active(stSnap)); setCastes(active(caSnap)); setRelations(active(relSnap))
+    } catch (e) { console.error(e); message.error('Failed to load form data') }
   }
 
   const fetchDistricts = async (stateId) => {
     try {
-      const q = query(collection(db, 'districts'), where('stateId', '==', stateId))
-      const snapshot = await getDocs(q)
-      const districtsData = snapshot.docs
-        .filter(doc => doc.data().status === 'active')
-        .map(doc => ({ id: doc.id, ...doc.data() }))
-      setDistricts(districtsData)
-      setCities([])
-      form.setFieldsValue({ district: undefined, city: undefined })
-    } catch (error) {
-      console.error('Error fetching districts:', error)
-    }
+      const snap = await getDocs(query(collection(db, 'districts'), where('stateId', '==', stateId)))
+      setDistricts(snap.docs.filter(d => d.data().status === 'active').map(d => ({ id: d.id, ...d.data() })))
+      setCities([]); form.setFieldsValue({ district: undefined, city: undefined })
+    } catch (e) { console.error(e) }
   }
 
   const fetchCities = async (districtId) => {
     try {
-      const q = query(collection(db, 'cities'), where('districtId', '==', districtId))
-      const snapshot = await getDocs(q)
-      const citiesData = snapshot.docs
-        .filter(doc => doc.data().status === 'active')
-        .map(doc => ({ id: doc.id, ...doc.data() }))
-      setCities(citiesData)
+      const snap = await getDocs(query(collection(db, 'cities'), where('districtId', '==', districtId)))
+      setCities(snap.docs.filter(d => d.data().status === 'active').map(d => ({ id: d.id, ...d.data() })))
       form.setFieldsValue({ city: undefined })
-    } catch (error) {
-      console.error('Error fetching cities:', error)
-    }
+    } catch (e) { console.error(e) }
   }
 
-  const calculateProgramDetails = () => {
-    if (!dobDate || selectedPrograms.length === 0) {
-      setProgramDetails([])
-      return
+  // ── Single-program detail calculation ─────────────────────────────────────
+  const calculateProgramDetail = useCallback(() => {
+    if (!dobDate || !selectedProgram || !programs?.length) {
+      setProgramDetail(null); return
     }
 
-    const calculatedAge = dayjs().diff(dobDate, 'year')
-    const currentJoinDate = joinDate.format('DD-MM-YYYY')
-    
-    const details = selectedPrograms.map(programId => {
-      const program = programs.find(p => p.id === programId)
-      
-      if (!program?.ageGroups) return null
+    const calcAge     = dayjs().diff(dobDate, 'year')
+    const joinDateStr = joinDate.format('DD-MM-YYYY')
+    const program     = programs.find(p => p.id === selectedProgram)
 
-      const ageGroup = program.ageGroups.find(ag => 
-        calculatedAge >= ag.startAge && calculatedAge <= ag.endAge
-      )
+    if (!program?.ageGroups?.length) {
+      setProgramDetail({ programId: selectedProgram, programName: program?.name, error: 'No age groups configured' }); return
+    }
 
-      if (!ageGroup) {
-        return {
-          programId,
-          programName: program.name,
-          error: `No age group found for age ${calculatedAge} years. Available: ${program.ageGroups.map(ag => `${ag.startAge}-${ag.endAge}`).join(', ')}`
-        }
-      }
+    const ageGroup = program.ageGroups.find(ag => calcAge >= ag.startAge && calcAge <= ag.endAge)
+    if (!ageGroup) {
+      setProgramDetail({
+        programId: selectedProgram, programName: program.name,
+        error: `No age group for age ${calcAge}. Available: ${program.ageGroups.map(ag => `${ag.startAge}-${ag.endAge}`).join(', ')}`
+      }); return
+    }
 
-      const period = ageGroup.periods?.find(p => {
-        const start = dayjs(p.startDate, 'DD-MM-YYYY')
-        const end = dayjs(p.endDate, 'DD-MM-YYYY')
-        const join = dayjs(currentJoinDate, 'DD-MM-YYYY')
-        return join.isBetween(start, end, null, '[]')
-      })
+    const period = ageGroup.periods?.find(p => {
+      try {
+        return dayjs(joinDateStr, 'DD-MM-YYYY').isBetween(dayjs(p.startDate, 'DD-MM-YYYY'), dayjs(p.endDate, 'DD-MM-YYYY'), null, '[]')
+      } catch { return false }
+    })
 
-      if (!period) {
-        return {
-          programId,
-          programName: program.name,
-          ageGroupName: ageGroup.ageGroupName,
-          ageRange: `${ageGroup.startAge}-${ageGroup.endAge} years`,
-          error: `No active period found for join date ${currentJoinDate}. Available periods: ${ageGroup.periods?.map(p => `${p.startDate} to ${p.endDate}`).join(', ')}`
-        }
-      }
-
-      return {
-        programId,
-        programName: program.name,
-        ageGroupId: ageGroup.id,
-        ageGroupName: ageGroup.ageGroupName,
+    if (!period) {
+      setProgramDetail({
+        programId: selectedProgram, programName: program.name, ageGroupName: ageGroup.ageGroupName,
         ageRange: `${ageGroup.startAge}-${ageGroup.endAge} years`,
-        joinFees: period.joinFees || 0,
-        fixedJoinFees:period.fixedJoinFees || 0,
-        payAmount: period.payAmount || 0,
-        periodStartDate: period.startDate,
-        periodEndDate: period.endDate,
-        hasPeriod: true
-      }
-    }).filter(detail => detail !== null)
-
-    setProgramDetails(details)
-    
-    // Auto-fill paid amount with total join fees when "Yes" is selected
-    if (joinFeesDone) {
-      const totalJoinFees = details.reduce((sum, p) => sum + (p.joinFees || 0), 0)
-      setPaidAmount(totalJoinFees)
-      form.setFieldsValue({ paidAmount: totalJoinFees })
+        error: `No active period for ${joinDateStr}. Available: ${ageGroup.periods?.map(p => `${p.startDate} to ${p.endDate}`).join(', ')}`
+      }); return
     }
-  }
-const generatePassword = (name, dob) => {
-  if (!name || !dob) return '';
 
-  const firstName = name.trim().split(' ')[0];
-  const namePart = firstName.substring(0, 5);
-
-  const formattedName =
-    namePart.charAt(0).toUpperCase() +
-    namePart.slice(1).toLowerCase();
-
-  const year = dayjs(dob).format('YYYY');
-
-  return `${formattedName}${year}`;
-};
-const handleDobChange = (date) => {
-  if (!date) {
-    setDobDate(null);
-    setAge(null);
-    setProgramDetails([]);
-    form.setFieldsValue({ password: '' });
-    return;
-  }
-
-  const dob = date;
-  const today = dayjs();
-  const calculatedAge = today.diff(dob, 'year');
-
-  setDobDate(dob);
-  setAge(calculatedAge);
-
-  // Get name from form
-  const name = form.getFieldValue('name');
-
-  // Generate password
-  const password = generatePassword(name, dob);
-
-  // Set password in form
-  form.setFieldsValue({
-    password: password
-  });
-
-  if (selectedPrograms.length > 0) {
-    calculateProgramDetails();
-  }
-};
-  const handleProgramChange = (programIds) => {
-    setSelectedPrograms(programIds)
-    
-    if (dobDate && programIds.length > 0) {
-      calculateProgramDetails()
+    const detail = {
+      programId:       selectedProgram,
+      programName:     program.name,
+      ageGroupId:      ageGroup.id,
+      ageGroupName:    ageGroup.ageGroupName,
+      ageRange:        `${ageGroup.startAge}-${ageGroup.endAge} years`,
+      joinFees:        period.joinFees        || 0,
+      fixedJoinFees:   period.fixedJoinFees   || 0,
+      payAmount:       period.payAmount       || 0,
+      periodStartDate: period.startDate,
+      periodEndDate:   period.endDate,
+      memberGroupId:   program?.memberGroups?.[0]?.id        || '',
+      memberGroupName: program?.memberGroups?.[0]?.groupName || '',
+      memberGroupCode: program?.memberGroups?.[0]?.code      || '',
+      hasPeriod:       true,
     }
+    setProgramDetail(detail)
+
+    // Auto-fill paid amount when joinFeesDone is already true
+    if (joinFeesDone && detail.joinFees > 0) {
+      setPaidAmount(detail.joinFees)
+      form.setFieldsValue({ paidAmount: detail.joinFees })
+    }
+  }, [dobDate, selectedProgram, joinDate, programs, joinFeesDone, form])
+
+  // ── Event handlers ─────────────────────────────────────────────────────────
+  const handleDobChange = (date) => {
+    if (!date) { setDobDate(null); setAge(null); setProgramDetail(null); form.setFieldsValue({ password: '' }); return }
+    const calcAge = dayjs().diff(date, 'year')
+    setDobDate(date); setAge(calcAge)
+    form.setFieldsValue({ password: generatePassword(form.getFieldValue('name'), date) })
   }
 
-  const handleJoinDateChange = (date) => {
-    setJoinDate(date)
-    
-    if (dobDate && selectedPrograms.length > 0) {
-      calculateProgramDetails()
-    }
+  const handleProgramChange = (programId) => {
+    setSelectedProgram(programId || '')
+    if (!programId) setProgramDetail(null)
   }
+
+  const handleJoinDateChange = (date) => { setJoinDate(date) }
 
   const handleJoinFeesDoneChange = (e) => {
     const isDone = e.target.value
     setJoinFeesDone(isDone)
-    
-    // Auto-fill with total join fees when "Yes" is selected
     if (isDone) {
-      const totalJoinFees = programDetails.reduce((sum, p) => sum + (p.joinFees || 0), 0)
-      setPaidAmount(totalJoinFees)
-      form.setFieldsValue({ paidAmount: totalJoinFees })
+      const fees = programDetail?.joinFees || 0
+      setPaidAmount(fees); form.setFieldsValue({ paidAmount: fees })
     } else {
-      setPaidAmount(0)
-      form.setFieldsValue({ paidAmount: 0 })
+      setPaidAmount(0); form.setFieldsValue({ paidAmount: 0 })
     }
   }
 
-  const calculateTotalJoinFees = () => {
-    return programDetails.reduce((sum, p) => sum + (p.joinFees || 0), 0)
+  const handleStateChange = (v) => {
+    setSelectedState(v || null)
+    setSelectedDistrict(null)
+    if (v) fetchDistricts(v)
+    else { setDistricts([]); setCities([]) }
+    form.setFieldsValue({ district: undefined, city: undefined })
   }
 
-  const onFormSubmit = async (values) => {
+  const handleDistrictChange = (v) => {
+    setSelectedDistrict(v || null)
+    if (v) fetchCities(v)
+    else setCities([])
+    form.setFieldsValue({ city: undefined })
+  }
+  const handleAadhaarCheck   = async (aadhaar) => { try { return await checkAadhaarDuplicate(aadhaar) } catch { return null } }
 
-    const addedByName = addedByRole === 'admin' ?currentUser?.displayName||"Admin" : agents.find(a => a.uid === selectedAgent)?.name || 'Unknown'
+  // ── Submit ─────────────────────────────────────────────────────────────────
+  const onFormSubmit = async (values) => {
+    const addedByName = addedByRole === 'admin'
+      ? currentUser?.displayName || 'Admin'
+      : agents.find(a => a.uid === selectedAgent)?.name || 'Unknown'
+
     const success = await handleSubmit(
       values,
       {
-        selectedPrograms,
-        programDetails,
+        // Single program — pass as the shape handleSubmit expects
+        selectedPrograms:  [selectedProgram],    // firebaseUtils still reads [0]
+        programDetails:    programDetail ? [programDetail] : [],
         programs,
-        states,
-        districts,
-        cities,
-        castes,
-        relations,
-        addedByRole,
-        selectedAgent,
-        addedByName,
-        joinDate,
-        dobDate,
-        age,
-        joinFeesDone,
-        paymentMode,
-        paidAmount,
-        memberPhoto,
-        guardianPhoto,
-        memberDocFront,
-        memberDocBack,
-        guardianDoc,
-        currentUser,
-        form,
-        setOpen,
-        setLoading
+        states, districts, cities, castes, relations,
+        addedByRole, selectedAgent, addedByName,
+        joinDate, dobDate, age,
+        joinFeesDone, paymentMode, paidAmount,
+        memberPhoto, guardianPhoto, memberDocFront, memberDocBack, guardianDoc,
+        currentUser, form, setOpen, setLoading
       },
       message
     )
 
     if (success) {
-      onSuccess()
-      setSelectedPrograms([])
-      setProgramDetails([])
-      setMemberPhoto(null)
-      setGuardianPhoto(null)
-      setMemberDocFront(null)
-      setMemberDocBack(null)
-      setGuardianDoc(null)
-      setSelectedState(null)
-      setSelectedDistrict(null)
-      setCities([])
-      setDobDate(null)
-      setAge(null)
-      setJoinFeesDone(false)
-      setPaymentMode('cash')
-      setPaidAmount(0)
-      form.resetFields()
+      onSuccess?.()
+      resetLocalState()
     }
   }
 
-  const handleStateChange = (value) => {
-    setSelectedState(value)
-    if (value) {
-      fetchDistricts(value)
-    } else {
-      setDistricts([])
-      setCities([])
-      form.setFieldsValue({ district: undefined, city: undefined })
-    }
+  const resetLocalState = () => {
+    setSelectedProgram(''); setProgramDetail(null)
+    setMemberPhoto(null); setGuardianPhoto(null)
+    setMemberDocFront(null); setMemberDocBack(null); setGuardianDoc(null)
+    setCities([]); setDistricts([])
+    setSelectedState(null); setSelectedDistrict(null)
+    setDobDate(null); setAge(null); setJoinDate(dayjs())
+    setJoinFeesDone(false); setPaymentMode('cash'); setPaidAmount(0)
+    setAddedByRole('admin'); setSelectedAgent(null)
+    setExistingMember(null)
+    form.resetFields()
   }
 
-  const handleDistrictChange = (value) => {
-    setSelectedDistrict(value)
-    if (value) {
-      fetchCities(value)
-    } else {
-      setCities([])
-      form.setFieldsValue({ city: undefined })
-    }
-  }
-
-const calculateProgramPayments = (programDetails, paidAmount) => {
-  if (!programDetails || programDetails.length === 0) {
-    return []
-  }
-  
-  // Program को priority order में sort करें (या original order maintain करें)
-  const programs = [...programDetails]
-  let remainingAmount = paidAmount
-  
-  const result = programs.map(p => {
-    const programFees = p.joinFees || 0
-    
-    if (remainingAmount <= 0) {
-      // No money left for this program
-      return {
-        programId: p.programId,
-        programName: p.programName,
-        joinFees: programFees,
-        paidAmount: 0,
-        pendingAmount: programFees,
-        paymentPercentage: 0
-      }
-    } else if (remainingAmount >= programFees) {
-      // Full payment for this program
-      const programPaidAmount = programFees
-      remainingAmount -= programPaidAmount
-      
-      return {
-        programId: p.programId,
-        programName: p.programName,
-        joinFees: programFees,
-        paidAmount: programPaidAmount,
-        pendingAmount: 0,
-        paymentPercentage: 100
-      }
-    } else {
-      // Partial payment for this program
-      const programPaidAmount = remainingAmount
-      remainingAmount = 0
-      
-      return {
-        programId: p.programId,
-        programName: p.programName,
-        joinFees: programFees,
-        paidAmount: programPaidAmount,
-        pendingAmount: programFees - programPaidAmount,
-        paymentPercentage: Math.round((programPaidAmount / programFees) * 100)
-      }
-    }
-  })
-  
-  return result
-}
-
-  const handleAadhaarCheck = async (aadhaarNumber) => {
-    try {
-      // आपका Firebase function यहाँ call करें
-      return await checkAadhaarDuplicate(aadhaarNumber)
-    } catch (error) {
-      console.error('Error checking Aadhaar:', error)
-      return null
-    }
-  }
   return (
     <Drawer
       title="Add New Member"
       open={open}
       onClose={() => !loading && setOpen(false)}
-      size={1000}
+      width={1000}
       footer={null}
       maskClosable={false}
       destroyOnHidden
@@ -419,28 +270,23 @@ const calculateProgramPayments = (programDetails, paidAmount) => {
           form={form}
           layout="vertical"
           onFinish={onFormSubmit}
-          initialValues={{
-            joinFeesDone: false,
-            addedBy: 'admin',
-            joinDate: dayjs()
-          }}
+          initialValues={{ joinFeesDone: false, addedBy: 'admin', joinDate: dayjs() }}
           disabled={loading}
         >
-          <div className='flex flex-col gap-2'>
-           <BasicInfoForm 
+          <div className="flex flex-col gap-2">
+
+            <BasicInfoForm
               handleDobChange={handleDobChange}
               age={age}
               castes={castes}
               form={form}
               existingMember={existingMember}
               setExistingMember={setExistingMember}
-              onAadhaarCheck={handleAadhaarCheck}  // यहाँ pass करें
+              onAadhaarCheck={handleAadhaarCheck}
             />
 
-            <AddressForm 
-              states={states}
-              districts={districts}
-              cities={cities}
+            <AddressForm
+              states={states} districts={districts} cities={cities}
               selectedState={selectedState}
               selectedDistrict={selectedDistrict}
               handleStateChange={handleStateChange}
@@ -450,19 +296,19 @@ const calculateProgramPayments = (programDetails, paidAmount) => {
 
             <GuardianForm relations={relations} />
 
-            <ProgramSelection 
+            {/* ProgramSelection — single select props */}
+            <ProgramSelection
               joinDate={joinDate}
               handleJoinDateChange={handleJoinDateChange}
               programs={programs}
-              selectedPrograms={selectedPrograms}
-              handleProgramChange={handleProgramChange}
+              selectedProgram={selectedProgram}          // ← single string
+              handleProgramChange={handleProgramChange}  // ← sets single ID
               dobDate={dobDate}
-              programDetails={programDetails}
-              calculateTotalJoinFees={calculateTotalJoinFees}
-                existingMember={existingMember}
+              programDetail={programDetail}              // ← single object
+              existingMember={existingMember}
             />
 
-            <AddedByForm 
+            <AddedByForm
               addedByRole={addedByRole}
               setAddedByRole={setAddedByRole}
               agents={agents}
@@ -470,42 +316,43 @@ const calculateProgramPayments = (programDetails, paidAmount) => {
               setSelectedAgent={setSelectedAgent}
             />
 
-            <FeesForm 
+            {/* FeesForm — pass single-program values */}
+            <FeesForm
               joinFeesDone={joinFeesDone}
               handleJoinFeesDoneChange={handleJoinFeesDoneChange}
               paymentMode={paymentMode}
               setPaymentMode={setPaymentMode}
               paidAmount={paidAmount}
               setPaidAmount={setPaidAmount}
-              calculateTotalJoinFees={calculateTotalJoinFees}
-              programDetails={programDetails}
-              calculateProgramPayments={calculateProgramPayments}
+              // single program total
+              calculateTotalJoinFees={() => programDetail?.joinFees || 0}
+              // pass as single-item array so FeesForm still renders correctly
+              programDetails={programDetail ? [programDetail] : []}
+              calculateProgramPayments={(details, paid) => {
+                if (!details?.length) return []
+                const fees    = details[0].joinFees || 0
+                const actual  = Math.min(paid, fees)
+                const pending = Math.max(0, fees - actual)
+                const pct     = fees > 0 ? Math.round((actual / fees) * 100) : 0
+                return [{ ...details[0], paidAmount: actual, pendingAmount: pending, paymentPercentage: pct }]
+              }}
             />
 
-            <PhotoUploads 
-              memberPhoto={memberPhoto}
-              setMemberPhoto={setMemberPhoto}
-              guardianPhoto={guardianPhoto}
-              setGuardianPhoto={setGuardianPhoto}
+            <PhotoUploads
+              memberPhoto={memberPhoto}     setMemberPhoto={setMemberPhoto}
+              guardianPhoto={guardianPhoto} setGuardianPhoto={setGuardianPhoto}
             />
 
-            <DocumentUploads 
-              memberDocFront={memberDocFront}
-              setMemberDocFront={setMemberDocFront}
-              memberDocBack={memberDocBack}
-              setMemberDocBack={setMemberDocBack}
-              guardianDoc={guardianDoc}
-              setGuardianDoc={setGuardianDoc}
+            <DocumentUploads
+              memberDocFront={memberDocFront} setMemberDocFront={setMemberDocFront}
+              memberDocBack={memberDocBack}   setMemberDocBack={setMemberDocBack}
+              guardianDoc={guardianDoc}       setGuardianDoc={setGuardianDoc}
             />
           </div>
 
           <div className="flex justify-end gap-2 mt-6">
-            <Button onClick={() => setOpen(false)} disabled={loading}>
-              Cancel
-            </Button>
-            <Button type="primary" htmlType="submit" loading={loading}>
-              Add Member
-            </Button>
+            <Button onClick={() => setOpen(false)} disabled={loading}>Cancel</Button>
+            <Button type="primary" htmlType="submit" loading={loading}>Add Member</Button>
           </div>
         </Form>
       </Spin>
