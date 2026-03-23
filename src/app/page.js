@@ -1002,11 +1002,7 @@ const fetchProgramDetailsStats = async () => {
         </div>
       }
       className="shadow-sm"
-      extra={
-        <Button type="link" size="small" href="/programs">
-          View All Programs
-        </Button>
-      }
+
     >
       <Row gutter={[16, 16]}>
         {programStats.slice(0, 4).map((program, index) => (
@@ -1107,7 +1103,7 @@ const fetchProgramDetailsStats = async () => {
          
 
         {/* Recent Members and Top Agents */}
-        <Row gutter={[16, 16]} className="mb-6">
+        {/* <Row gutter={[16, 16]} className="mb-6">
           <Col xs={24} lg={12}>
             <Card 
               title={
@@ -1161,10 +1157,10 @@ const fetchProgramDetailsStats = async () => {
               />
             </Card>
           </Col>
-        </Row>
+        </Row> */}
 
         {/* Recent Transactions */}
-        <Row gutter={[16, 16]} className="mb-6">
+        {/* <Row gutter={[16, 16]} className="mb-6">
           <Col xs={24} lg={12}>
             <Card 
               title={
@@ -1218,10 +1214,10 @@ const fetchProgramDetailsStats = async () => {
               />
             </Card>
           </Col>
-        </Row>
+        </Row> */}
 
         {/* Recent Closing Generated */}
-        <Row gutter={[16, 16]}>
+        {/* <Row gutter={[16, 16]}>
           <Col xs={24} lg={24}>
             <Card 
               title={
@@ -1248,7 +1244,7 @@ const fetchProgramDetailsStats = async () => {
               />
             </Card>
           </Col>
-        </Row>
+        </Row> */}
 
         {/* Loading State */}
         {loading && (

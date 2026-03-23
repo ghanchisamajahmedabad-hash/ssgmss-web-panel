@@ -20,7 +20,42 @@ const MainLayout = ({ children }) => {
   const pathname = usePathname();
   const router = useRouter();
   const dispatch=useDispatch()
+ const fetchPrograms = async () => {
+    try {
+      const querySnapshot = await getDocs(programsCollectionRef);
+      const programsData = querySnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+      
+      // Sort by creation date
+      programsData.sort((a, b) => b.created_at?.toDate() - a.created_at?.toDate());
+      
+   dispatch(setProgramList(programsData))
 
+    } catch (error) {
+      console.error('Error fetching programs:', error);
+      message.error('Failed to fetch programs');
+    } finally {
+    }
+  };
+   
+  const fetchAgents=async()=>{
+  try {
+      const querySnapshot = await getDocs(agentsCollectionRef);
+      const agentsData = querySnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+    
+   dispatch(setAgentList(agentsData))
+
+    } catch (error) {
+      console.error('Error fetching programs:', error);
+      message.error('Failed to fetch programs');
+    } finally {
+    }
+  };
   useEffect(() => {
     if (!loading && !user && !withoutLayout.includes(pathname)) {
       router.replace("/auth/login");
@@ -57,42 +92,7 @@ const MainLayout = ({ children }) => {
  const agentsCollectionRef = collection(db, 'agents');
 
   // Fetch programs
-  const fetchPrograms = async () => {
-    try {
-      const querySnapshot = await getDocs(programsCollectionRef);
-      const programsData = querySnapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      }));
-      
-      // Sort by creation date
-      programsData.sort((a, b) => b.created_at?.toDate() - a.created_at?.toDate());
-      
-   dispatch(setProgramList(programsData))
-
-    } catch (error) {
-      console.error('Error fetching programs:', error);
-      message.error('Failed to fetch programs');
-    } finally {
-    }
-  };
-   
-  const fetchAgents=async()=>{
-  try {
-      const querySnapshot = await getDocs(agentsCollectionRef);
-      const agentsData = querySnapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      }));
-    
-   dispatch(setAgentList(agentsData))
-
-    } catch (error) {
-      console.error('Error fetching programs:', error);
-      message.error('Failed to fetch programs');
-    } finally {
-    }
-  }
+ 
   // Initial fetch
 
 

@@ -73,27 +73,27 @@ const isSuperAdmin = (user) => user?.role === 'superadmin';
 
   // User menu items
   const userMenuItems = [
-    {
-      key: 'profile',
-      icon: <ProfileOutlined />,
-      label: 'My Profile',
-      onClick: () => router.push('/profile'),
-    },
-    {
-      key: 'messages',
-      icon: <MailOutlined />,
-      label: 'Messages',
-      onClick: () => router.push('/messages'),
-    },
-    {
-      key: 'settings',
-      icon: <SettingOutlined />,
-      label: 'Settings',
-      onClick: () => router.push('/settings'),
-    },
-    {
-      type: 'divider',
-    },
+    // {
+    //   key: 'profile',
+    //   icon: <ProfileOutlined />,
+    //   label: 'My Profile',
+    //   onClick: () => router.push('/profile'),
+    // },
+    // {
+    //   key: 'messages',
+    //   icon: <MailOutlined />,
+    //   label: 'Messages',
+    //   onClick: () => router.push('/messages'),
+    // },
+    // {
+    //   key: 'settings',
+    //   icon: <SettingOutlined />,
+    //   label: 'Settings',
+    //   onClick: () => router.push('/settings'),
+    // },
+    // {
+    //   type: 'divider',
+    // },
     {
       key: 'logout',
       icon: <LogoutOutlined />,
