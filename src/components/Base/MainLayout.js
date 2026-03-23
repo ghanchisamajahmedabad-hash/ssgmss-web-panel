@@ -2,7 +2,7 @@
 import React, { useEffect, useState } from 'react';
 import { useAuth } from './AuthProvider';
 import { usePathname, useRouter } from 'next/navigation';
-import { Layout } from 'antd';
+import { Layout, message } from 'antd';
 import SideBar from './SideBar';
 import TopBar from './TopBar';
 import { Provider, useDispatch } from 'react-redux';
@@ -20,6 +20,8 @@ const MainLayout = ({ children }) => {
   const pathname = usePathname();
   const router = useRouter();
   const dispatch=useDispatch()
+   const programsCollectionRef = collection(db, 'programs');
+ const agentsCollectionRef = collection(db, 'agents');
  const fetchPrograms = async () => {
     try {
       const querySnapshot = await getDocs(programsCollectionRef);
@@ -88,8 +90,7 @@ const MainLayout = ({ children }) => {
     return null;
   }
 
- const programsCollectionRef = collection(db, 'programs');
- const agentsCollectionRef = collection(db, 'agents');
+
 
   // Fetch programs
  

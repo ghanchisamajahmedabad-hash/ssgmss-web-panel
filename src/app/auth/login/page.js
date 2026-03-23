@@ -5,6 +5,7 @@ import { signInWithEmailAndPassword, sendPasswordResetEmail } from 'firebase/aut
 import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { auth, db } from '../../../../lib/firbase-client';
 import { message } from 'antd';
+import { useRouter } from 'next/navigation';
 
 const LoginPage = () => {
   const [view, setView] = useState('login');
@@ -17,7 +18,8 @@ const LoginPage = () => {
   const [otpResendDisabled, setOtpResendDisabled] = useState(true);
   const [isOtpVerified, setIsOtpVerified] = useState(false);
   const [messageApi, contextHolder] = message.useMessage();
-
+ 
+  const router = useRouter();
   // Timer for OTP expiration (1 minute)
   useEffect(() => {
     let interval;
@@ -273,7 +275,7 @@ const LoginPage = () => {
       
       // Redirect to home page after a short delay
       setTimeout(() => {
-        window.location.href = "/";
+      router.replace('/');
       }, 1000);
     } catch (error) {
       console.error('Login error:', error);
