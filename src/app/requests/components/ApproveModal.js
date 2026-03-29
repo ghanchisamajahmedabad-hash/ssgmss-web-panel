@@ -8,7 +8,7 @@ import { collection, doc, serverTimestamp, updateDoc, addDoc } from 'firebase/fi
 import { db } from '../../../../lib/firbase-client'
 import dayjs from 'dayjs'
 import isBetween from 'dayjs/plugin/isBetween'
-import { createSearchIndex, generateRegistrationNumber, memberAccoiuntCreate } from '@/app/members/components/components/firebaseUtils'
+import { createClosingPayment, createSearchIndex, generateRegistrationNumber, memberAccoiuntCreate } from '@/app/members/components/components/firebaseUtils'
 
 dayjs.extend(isBetween)
 
@@ -257,7 +257,7 @@ const ApproveModal = ({ open, setOpen, selectedMember, setSelectedMember, fetchA
 
       // ── Create / update auth account ───────────────────────────────────────
       await memberAccoiuntCreate({ ...selectedMember, ...memberUpdate, id: selectedMember.id })
-
+      await createClosingPayment({ ...selectedMember, id: selectedMember.id })
       message.success(`Member approved! Registration: ${finalRegNumber}`)
       setOpen(false)
       setSelectedMember(null)

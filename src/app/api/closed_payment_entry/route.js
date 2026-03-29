@@ -137,19 +137,19 @@ export async function POST(req) {
           skippedClose.push({ memberId, name: m.displayName || m.name, reason: "Already closed" });
         } else {
           const detail = memberClosingList.find(c => c.closed_memberId === memberId) || {};
-          const newStatusEntry = {
+      
+
+          mb.update(memberRef, {
             programId,
             closingGroupId,
             member_closed_at: now,
             member_closed_by: closedBy || null,
             closed_date: detail.closed_date || null,
             closed_note: detail.closed_note || "",
-          };
-
-          mb.update(memberRef, {
-            closedStatus: [...(m.closedStatus || []), newStatusEntry],
+            closed_invitation_url:detail.closed_invitation_url || null,
             member_closed: true,
             updated_at: ts,
+            member_closed_at: now,
           });
 
           closedIds.push(memberId);

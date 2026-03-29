@@ -194,10 +194,10 @@ const ClosingMembersPage = () => {
     { title: 'Phone', dataIndex: 'phone', key: 'phone', width: 130 },
     {
       // Single program — member_closed_program is a flat string
-      title: 'Program', key: 'program', width: 160,
+      title: 'Program', key: 'programName', width: 160,
       render: (_, r) => {
-        const p = programList.find(p => p.id === r.member_closed_program)
-        return p ? <Tag color="blue">{p.name}</Tag> : <Tag>N/A</Tag>
+        
+        return  <Tag color="blue">{r.programName}</Tag> 
       }
     },
     { title: 'Closed Date', key: 'closed_date', width: 130, render: (_, r) => r.closed_date ? dayjs(r.closed_date).format('DD/MM/YYYY') : 'N/A' },

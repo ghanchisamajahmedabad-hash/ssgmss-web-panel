@@ -1,5 +1,5 @@
 "use client"
-import { App, Button, Drawer, Form, Spin } from 'antd'
+import { App, Button, Drawer, Form, Spin, Checkbox, Space } from 'antd'
 import React, { useState, useEffect, useCallback } from 'react'
 import { LoadingOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
@@ -70,6 +70,10 @@ const AddMember = ({ open, setOpen, programs, agents, currentUser, onSuccess }) 
   const [relations,        setRelations]        = useState([])
   const [selectedState,    setSelectedState]    = useState(null)
   const [selectedDistrict, setSelectedDistrict] = useState(null)
+
+  // ── Notification options ───────────────────────────────────────────────────
+  const [sendWhatsApp, setSendWhatsApp] = useState(true)
+  const [sendNotification, setSendNotification] = useState(true)
 
   // ── Load static data once ──────────────────────────────────────────────────
   useEffect(() => { fetchStaticData() }, [])
@@ -230,7 +234,10 @@ const AddMember = ({ open, setOpen, programs, agents, currentUser, onSuccess }) 
         joinDate, dobDate, age,
         joinFeesDone, paymentMode, paidAmount,
         memberPhoto, guardianPhoto, memberDocFront, memberDocBack, guardianDoc,
-        currentUser, form, setOpen, setLoading
+        currentUser, form, setOpen, setLoading,
+        // Pass notification options
+        sendWhatsApp,
+        sendNotification
       },
       message
     )
@@ -251,6 +258,8 @@ const AddMember = ({ open, setOpen, programs, agents, currentUser, onSuccess }) 
     setJoinFeesDone(false); setPaymentMode('cash'); setPaidAmount(0)
     setAddedByRole('admin'); setSelectedAgent(null)
     setExistingMember(null)
+    setSendWhatsApp(true)
+    setSendNotification(true)
     form.resetFields()
   }
 
@@ -348,6 +357,44 @@ const AddMember = ({ open, setOpen, programs, agents, currentUser, onSuccess }) 
               memberDocBack={memberDocBack}   setMemberDocBack={setMemberDocBack}
               guardianDoc={guardianDoc}       setGuardianDoc={setGuardianDoc}
             />
+
+            {/* Notification Options Section */}
+            <div className="bg-gray-50 p-4 rounded-lg border border-gray-200">
+              <div className="mb-3">
+                <h4 className="text-sm font-semibold text-gray-700 mb-2">Notification Options</h4>
+                <p className="text-xs text-gray-500 mb-3">Choose how to notify the member after registration</p>
+              </div>
+              <Space direction="vertical" size="middle" className="w-full">
+                <Checkbox
+                  checked={sendWhatsApp}
+                  onChange={(e) => setSendWhatsApp(e.target.checked)}
+                  disabled={loading}
+                >
+                  <span className="text-sm">
+                    Send WhatsApp Message
+                    {sendWhatsApp && <span className="text-xs text-green-600 ml-2">(Will be sent to member's mobile number)</span>}
+                  </span>
+                </Checkbox>
+                
+                <Checkbox
+                  checked={sendNotification}
+                  onChange={(e) => setSendNotification(e.target.checked)}
+                  disabled={loading}
+                >
+                  <span className="text-sm">
+                    Send In-App Notification
+                    {sendNotification && <span className="text-xs text-blue-600 ml-2">(Member will receive notification in dashboard)</span>}
+                  </span>
+                </Checkbox>
+              </Space>
+              
+              {/* Optional: Show summary if both are unchecked */}
+              {!sendWhatsApp && !sendNotification && (
+                <div className="mt-3 text-xs text-amber-600 bg-amber-50 p-2 rounded">
+                  ⚠️ No notification method selected. Member will not receive any registration confirmation.
+                </div>
+              )}
+            </div>
           </div>
 
           <div className="flex justify-end gap-2 mt-6">

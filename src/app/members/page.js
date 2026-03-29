@@ -636,7 +636,7 @@ const handleDeleteMember = (member) => {
               </PDFDownloadLink>
             </div>
           }>
-          <CertificateViewer memberData={selectedMember} />
+          <CertificateViewer memberData={selectedMember}  />
         </Drawer>
       )}
 

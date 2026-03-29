@@ -362,7 +362,7 @@ const ClosingMemberPaymentPage = () => {
 
     // Program filter
     if (selectedProgram !== 'all')
-      list = list.filter(m => m.programIds?.includes(selectedProgram));
+      list = list.filter(m => m.programId ===selectedProgram);
 
     // Pending/Paid filter
     if (paymentFilter === 'pending')
@@ -393,17 +393,26 @@ const ClosingMemberPaymentPage = () => {
 
   useEffect(() => { if (agentId) fetchMember(); }, [agentId]);
 
-  useEffect(() => {
-    const programs = new Set();
-    members.forEach(m => {
-      if (m.programIds && !m.delete_flag)
-        m.programIds.forEach(pid => {
-          const p = programList?.find(p => p.id === pid);
-          if (p) programs.add(JSON.stringify({ id: pid, name: p.name }));
-        });
-    });
-    setProgramOptions(Array.from(programs).map(p => JSON.parse(p)));
-  }, [members, programList]);
+useEffect(() => {
+  const programs = new Set();
+
+  members.forEach(m => {
+    if (m.programId && !m.delete_flag) {
+      const p = programList?.find(p => p.id === m.programId);
+
+      if (p) {
+        programs.add(JSON.stringify({
+          id: p.id,
+          name: p.name
+        }));
+      }
+    }
+  });
+
+  setProgramOptions(
+    Array.from(programs).map(p => JSON.parse(p))
+  );
+}, [members, programList]);
 
 
 
@@ -530,8 +539,11 @@ const ClosingMemberPaymentPage = () => {
 
 
       setUploading(true);
-    
-      const fileUrl = await uploadFile(uploadedFile, `memberpayments/JoinFees/${agentId}/${Date.now()}_${uploadedFile.name}`);
+      let fileUrl
+    if(uploadedFile){
+
+       fileUrl = await uploadFile(uploadedFile, `memberpayments/JoinFees/${agentId}/${Date.now()}_${uploadedFile.name}`);
+    }
    
       if (!auth.currentUser) { message.error('No authenticated user'); return; }
       const res = await paymentApi.closedPaymentUpdate({
@@ -801,8 +813,8 @@ const ClosingMemberPaymentPage = () => {
           </Col>
           <Col xs={24} md={7}>
             <Space direction="vertical" size={2} style={{ width: '100%' }}>
-              <Text type="secondary" style={{ fontSize: 12 }}>📞 {currentAgent?.phone1}</Text>
-              <Text type="secondary" style={{ fontSize: 12 }}>📍 {currentAgent?.village}, {currentAgent?.city}</Text>
+              {/* <Text type="secondary" style={{ fontSize: 12 }}>📞 {currentAgent?.phone1}</Text>
+              <Text type="secondary" style={{ fontSize: 12 }}>📍 {currentAgent?.village}, {currentAgent?.city}</Text> */}
               {/* PDF Download Button */}
               <Button
                 icon={<FilePdfOutlined />}
@@ -816,7 +828,7 @@ const ClosingMemberPaymentPage = () => {
                   boxShadow: `0 2px 8px ${colors.primary}40`
                 }}
               >
-                Download PDF Report
+                Download PDF Rasid
               </Button>
             </Space>
           </Col>
@@ -1094,7 +1106,9 @@ const ClosingMemberPaymentPage = () => {
       open={openRasidDrawer}
       setOpen={setOpenRasidDrawer}
       agentId={agentId}
+      programList={programList}
       />
+      
     </div>
   );
 };

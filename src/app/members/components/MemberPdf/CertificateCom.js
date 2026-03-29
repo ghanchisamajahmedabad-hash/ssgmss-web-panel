@@ -1,3 +1,6 @@
+import FrameImg from '@/app/api/helper/Images/FraameImg';
+import LogoImg from '@/app/api/helper/Images/LogoImg';
+import RigthImg from '@/app/api/helper/Images/rigthImg';
 import NotoSansDevanagari from '@/app/api/helper/static/font/NotoSansDevanagari';
 import NotoSansDevanagariBold from '@/app/api/helper/static/font/NotoSansDevanagariBold';
 import { Document, Font, Image, Page, StyleSheet, Text, View } from '@react-pdf/renderer'
@@ -449,7 +452,7 @@ const styles = StyleSheet.create({
       }
 });
 
-const CertificateCom = ({ data }) => {
+const CertificateCom = ({ data ,  memberProgram}) => {
   console.log(data,"data")
   // Format the date
   const formatDate = (dateString) => {
@@ -462,7 +465,7 @@ const CertificateCom = ({ data }) => {
       <Page size={{ width: '210mm', height: '148mm' }} style={styles.page}>
 
            <Image
-            src="/Images/frameImg.png"
+            src={FrameImg}
             style={styles.frameImg}
           />
                 {/* <Image
@@ -471,7 +474,7 @@ const CertificateCom = ({ data }) => {
           /> */}
         <View style={styles.outerView}>
           <Image
-            src="/Images/logoT.png"
+            src={LogoImg}
             style={styles.watermark}
           />
      
@@ -485,7 +488,7 @@ const CertificateCom = ({ data }) => {
           <View style={styles.headerSection}>
             <View style={styles.imageBox}>
               <Image
-                src="/Images/logoT.png" 
+                src={LogoImg}
                 style={styles.logoImage}
               />
               <Text style={styles.imageText}>SINCE: 2024</Text>
@@ -520,7 +523,7 @@ const CertificateCom = ({ data }) => {
 
             <View style={styles.imageBox}>
               <Image
-                src="/Images/sanidevImg.jpeg"
+                src={RigthImg}
                 style={styles.logoImage1}
               />
               <Text style={styles.imageText}>Reg. No: A/5231</Text>
@@ -533,7 +536,7 @@ const CertificateCom = ({ data }) => {
               सदस्य क्रमांक : <Text style={styles.memberIdValue}>{data?.registrationNumber || 'S1001511'}</Text>
             </Text>
             <Text style={styles.schemeNameText}>
-             {data?.programName || 'सामाजिक सुरक्षा योजना'}
+             {memberProgram?.hindiName || '-'}
             </Text>
             <View style={styles.dateContainer}>
               <Text style={styles.dateLabel}>दिनांक : </Text>
@@ -668,18 +671,20 @@ const CertificateCom = ({ data }) => {
           </View>
 
           {/* Scheme Information */}
-          <View style={styles.schemeInfo}>
+          <View style={styles.schemeInfo}>  
             <Text style={styles.contributionText}>
-              सहयोग राशि : ₹ 200 रूपये प्रत्येक कार्यक्रम पर लागु।
+              सहयोग राशि : ₹ {data?.payAmount} रूपये प्रत्येक कार्यक्रम पर लागु।
             </Text>
-
-            <View style={styles.rulesRow}>
+          {
+            memberProgram?.certificateRule.trim() &&  <View style={styles.rulesRow}>
               <Text style={styles.rulesLabel}>योजना नियम :</Text>
               <Text style={styles.rulesText}>
-                इस ग्रुप के सदस्य के देहावसान पर - 3 माह तक कोई राशि नहीं, 3+ से 12 माह
-                में ₹61,000, 1 वर्ष बाद सदस्य अनुसार राशि दी जाएगी
+                
+               {memberProgram?.certificateRule}
               </Text>
             </View>
+          }
+           
           </View>
 
           {/* Improved Footer Section */}
