@@ -46,21 +46,17 @@ function canVisit(user, pathname) {
   if (!user) return false;
   if (isSuperAdmin(user)) return true;
 
+  // Allow root dashboard path always for authenticated users
+  if (pathname === "/") return true;   // ← ADD THIS
+
   const pages = user.permissions?.pages || [];
-
-  // 1. Exact match
   if (pages.includes(pathname)) return true;
-
-  // 2. Allow a parent path if the user has at least one child listed under it.
-  //    e.g. user has /programs/closing-forms → allow /programs route itself
-  //    so the menu sub-item is reachable without being blocked on the parent URL.
   const hasChildAccess = pages.some(
     (p) => p !== pathname && p.startsWith(pathname + "/")
   );
-  if (hasChildAccess) return true;
-
-  return false;
+  return hasChildAccess;
 }
+
 
 // ── Provider ──────────────────────────────────────────────────────────────────
 export function AuthProvider({ children }) {

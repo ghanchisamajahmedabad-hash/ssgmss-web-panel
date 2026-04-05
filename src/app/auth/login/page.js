@@ -273,10 +273,10 @@ const LoginPage = () => {
 
       showMessage('success', 'Login successful! Redirecting...');
       
-      // Redirect to home page after a short delay
-      setTimeout(() => {
-      router.replace('/');
-      }, 1000);
+setTimeout(() => {
+  router.push("/");
+}, 1500);
+
     } catch (error) {
       console.error('Login error:', error);
       if (error.code === 'auth/wrong-password') {
