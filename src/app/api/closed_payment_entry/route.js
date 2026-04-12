@@ -46,17 +46,12 @@ class MultiBatch {
   }
   set(ref, data, opts) { this._cur().set(ref, data, opts || {}); this._ops++; }
   update(ref, data) { this._cur().update(ref, data); this._ops++; }
+  delete(ref) { this._cur().delete(ref); this._ops++; }
   commit() { return Promise.all(this._batches.map((b) => b.commit())); }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // POST — Process closing + distribute payments
-// Program data is now FLAT on the member doc — no memberPrograms subcollection.
-//
-// PAYMENT RULES (unchanged):
-//   open member        → joinDate <= eventDate
-//   closing-now member → joinDate <= eventDate AND eventDate <= own closed_date
-//   previously-closed  → joinDate <= eventDate AND eventDate > prevClosedDate
 // ─────────────────────────────────────────────────────────────────────────────
 export async function POST(req) {
   const auth = await verifyToken(req);
@@ -90,7 +85,6 @@ export async function POST(req) {
     const mb = new MultiBatch();
 
     // ── 1. Fetch all members in this program ──────────────────────────────
-    // Members now store programId as a flat field — query the members collection directly.
     let membersQuery = db.collection("members")
       .where("programId", "==", programId)
       .where("status", "==", "active");
@@ -137,7 +131,17 @@ export async function POST(req) {
           skippedClose.push({ memberId, name: m.displayName || m.name, reason: "Already closed" });
         } else {
           const detail = memberClosingList.find(c => c.closed_memberId === memberId) || {};
-      
+
+          // Build the closedStatus entry — DELETE relies on this to find & remove
+          const newClosedEntry = {
+            programId,
+            closingGroupId,
+            closed_date: detail.closed_date || null,
+            closed_note: detail.closed_note || "",
+            closed_invitation_url: detail.closed_invitation_url || null,
+            closed_at: now,
+            closed_by: closedBy || null,
+          };
 
           mb.update(memberRef, {
             programId,
@@ -146,10 +150,11 @@ export async function POST(req) {
             member_closed_by: closedBy || null,
             closed_date: detail.closed_date || null,
             closed_note: detail.closed_note || "",
-            closed_invitation_url:detail.closed_invitation_url || null,
+            closed_invitation_url: detail.closed_invitation_url || null,
             member_closed: true,
             updated_at: ts,
-            member_closed_at: now,
+            // ← push entry into closedStatus array so DELETE can find & remove it
+            closedStatus: admin.firestore.FieldValue.arrayUnion(newClosedEntry),
           });
 
           closedIds.push(memberId);
@@ -194,8 +199,8 @@ export async function POST(req) {
         agentStats[m.agentId].memberCount += isBeingClosedNow ? 1 : 0;
       }
 
-      // Update member doc only (no subcollection)
-      const paymentUpdates = {
+      // ── Update member doc (no subcollection) ──────────────────────────────
+      mb.update(memberRef, {
         closing_totalAmount: INC(memberPayment),
         closing_pendingAmount: INC(memberPayment),
         totalClosingCount: INC(memberCount),
@@ -204,9 +209,74 @@ export async function POST(req) {
         closingGroupIds: admin.firestore.FieldValue.arrayUnion(closingGroupId),
         [`closingGroupAmounts.${closingGroupId}`]: memberPayment,
         [`closingGroupCounts.${closingGroupId}`]: memberCount,
-      };
+      });
 
-      mb.update(memberRef, paymentUpdates);
+      // ── JOB 3: Write closing_payment entry for this member ────────────────
+      // Doc ID: {memberId}_{closingGroupId} — unique per member per group
+      const closingPaymentRef = db.collection("closing_payment").doc(`${memberId}_${closingGroupId}`);
+
+      // Pull the closing-member snapshot that the frontend sent
+      const closingMemberDetail = memberClosingList.find(c => c.closed_memberId === memberId) || {};
+
+      // Build per-closing-event details — each event gets full member snapshot too
+      const closingDetails = matchingClosings.map(event => {
+        const eventDetail = memberClosingList.find(c => c.closed_memberId === event.closed_memberId) || {};
+        return {
+          closed_memberId: event.closed_memberId || null,
+          closed_memberName: eventDetail.closing_Name || event.closed_memberName || event.name || null,
+          closed_fatherName: eventDetail.closing_fatherName || null,
+          closed_village: eventDetail.closing_village || null,
+          closingPhone: eventDetail.closingPhone || null,
+          closing_registrationNumber: eventDetail.closing_registrationNumber || null,
+          closed_photoURL: eventDetail.closed_photoURL || null,
+          closed_date: event.closed_date || event.marriageDate || null,
+          closed_note: event.closed_note || null,
+          closed_invitation_url: event.closed_invitation_url || null,
+          marriageDate: event.marriageDate || null,
+        };
+      });
+
+      mb.set(closingPaymentRef, {
+        // identifiers
+        memberId,
+        closingGroupId,
+        programId,
+
+        // member info snapshot (from Firestore member doc)
+        memberName: m.displayName || m.name || null,
+        memberCode: m.memberCode || m.code || null,
+        agentId: m.agentId || null,
+        ageGroupId: m.ageGroupId || null,
+        memberGroupId: m.memberGroupId || null,
+        dateJoin: m.dateJoin || null,
+
+        // member closing snapshot (sent from frontend)
+        closing_Name: closingMemberDetail.closing_Name || m.displayName || m.name || null,
+        closing_fatherName: closingMemberDetail.closing_fatherName || m.fatherName || null,
+        closing_village: closingMemberDetail.closing_village || m.village || null,
+        closingPhone: closingMemberDetail.closingPhone || m.phone || null,
+        closing_registrationNumber: closingMemberDetail.closing_registrationNumber || m.registrationNumber || null,
+        closed_photoURL: closingMemberDetail.closed_photoURL || m.photoURL || null,
+
+        // payment info
+        payAmount,                   // per-closing pay rate
+        closingCount: memberCount,   // how many closings triggered payment
+        totalAmount: memberPayment,  // payAmount × closingCount
+
+        // closing event details (list of all closings that triggered payment)
+        closingDetails,
+
+        // status & audit
+        status: "pending",
+        createdAt: ts,
+        createdBy: closedBy || null,
+        createdByName: closedByName || null,
+        isReversed: false,
+        reversedAt: null,
+        reversedBy: null,
+        reversedByName: null,
+        reversalReason: null,
+      });
     }
 
     // ── 5. Write group doc ────────────────────────────────────────────────
@@ -265,8 +335,6 @@ export async function POST(req) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // DELETE — Reverse a closing group
-// Reads exact per-group amounts from closingGroupAmounts.{groupId} on member doc.
-// No subcollection reads needed.
 // ─────────────────────────────────────────────────────────────────────────────
 export async function DELETE(req) {
   const auth = await verifyToken(req);
@@ -314,9 +382,12 @@ export async function DELETE(req) {
         const entryIdx = closedStatus.findIndex(
           cs => cs.programId === programId && cs.closingGroupId === closingGroupId
         );
-        if (entryIdx === -1) continue;
 
-        const updatedStatus = closedStatus.filter((_, i) => i !== entryIdx);
+        // Remove this group's entry from closedStatus (if found)
+        const updatedStatus = entryIdx !== -1
+          ? closedStatus.filter((_, i) => i !== entryIdx)
+          : closedStatus;
+
         const stillClosed = updatedStatus.length > 0;
         const latestEntry = stillClosed ? updatedStatus[updatedStatus.length - 1] : null;
 
@@ -324,6 +395,7 @@ export async function DELETE(req) {
         const memberUpdate = { closedStatus: updatedStatus, updated_at: ts };
 
         if (!stillClosed) {
+          // No more closing entries — fully un-close the member
           Object.assign(memberUpdate, {
             member_closed: false,
             member_closed_at: DEL(),
@@ -335,6 +407,7 @@ export async function DELETE(req) {
             closingGroupId: DEL(),
           });
         } else {
+          // Still has other closings — restore latest one
           Object.assign(memberUpdate, {
             member_closed: true,
             member_closed_program: latestEntry.programId,
@@ -355,17 +428,14 @@ export async function DELETE(req) {
         const m = paymentDocs[memberId];
         if (!m) continue;
 
-        // Read exact amount from per-group ledger on the member doc
-        let amount = Number((m)[`closingGroupAmounts.${closingGroupId}`] || 0);
-        let count = Number((m)[`closingGroupCounts.${closingGroupId}`] || 0);
+        let amount = Number(m[`closingGroupAmounts.${closingGroupId}`] || 0);
+        let count = Number(m[`closingGroupCounts.${closingGroupId}`] || 0);
 
-        // Fallback: paymentBreakdown written at POST time on groupDoc
         if (!amount && paymentBreakdown[memberId]) {
           amount = Number(paymentBreakdown[memberId].amount || 0);
           count = Number(paymentBreakdown[memberId].count || 0);
         }
 
-        // Legacy fallback
         if (!amount) {
           amount = Number(m.closing_pendingAmount || 0);
           count = Number(m.pendingClosingCount || 0);
@@ -396,54 +466,99 @@ export async function DELETE(req) {
           agentStats[m.agentId].count += count;
           agentStats[m.agentId].memberCount += 1;
         }
+
+        // ── Hard delete closing_payment entry on reversal ──
+        mb.delete(db.collection("closing_payment").doc(`${memberId}_${closingGroupId}`));
       }
     }
 
-    // ── Step 3: Mark group reversed ───────────────────────────────────────
-    mb.update(db.collection("groupClosings").doc(closingGroupId), {
-      status: "reversed",
-      reversedAt: ts,
-      reversedBy: reversedBy || null,
-      reversedByName: reversedByName || "Unknown",
-      reversalReason: reason,
-    });
+    // ── Step 3: Hard delete groupClosings doc ────────────────────────────
+    mb.delete(db.collection("groupClosings").doc(closingGroupId));
 
-    // ── Step 4: Agent stats reversal ──────────────────────────────────────
-    for (const [agentId, s] of Object.entries(agentStats)) {
-      mb.update(db.collection("agents").doc(agentId), {
-        closing_pendingAmount: INC(-s.amount),
-        closing_totalAmount: INC(-s.amount),
-        totalClosingCount: INC(-s.count),
-        closedCount: INC(-s.memberCount),
-        pendingClosingCount: INC(-s.count),
-        updated_at: ts,
-        [`programStats.${programId}.totalClosingPendingAmount`]: INC(-s.amount),
-        [`programStats.${programId}.closedCount`]: INC(-s.memberCount),
-        [`programStats.${programId}.totalClosingAmount`]: INC(-s.amount),
-        [`programStats.${programId}.totalClosingCount`]: INC(-s.count),
-        [`programStats.${programId}.pendingClosingCount`]: INC(-s.count),
-        [`programStats.${programId}.lastUpdated`]: ts,
-      });
+    // ── Step 4: Agent stats reversal — clamp to 0, never go negative ────────
+    if (Object.keys(agentStats).length) {
+      const agentDocs = await fetchMemberMap(Object.keys(agentStats)); // reuse helper
+      // fetchMemberMap reads "members" collection — agents need separate fetch
+      const agentSnaps = await Promise.all(
+        Object.keys(agentStats).map(aid => db.collection("agents").doc(aid).get())
+      );
+      const agentDataMap = {};
+      agentSnaps.forEach(snap => { if (snap.exists) agentDataMap[snap.id] = snap.data(); });
+
+      for (const [agentId, s] of Object.entries(agentStats)) {
+        const a = agentDataMap[agentId] || {};
+        const ps = (a.programStats || {})[programId] || {};
+
+        // Clamp each field — never go below 0
+        const newPendingAmt = Math.max(0, Number(a.closing_pendingAmount || 0) - s.amount);
+        const newTotalAmt = Math.max(0, Number(a.closing_totalAmount || 0) - s.amount);
+        const newTotalCount = Math.max(0, Number(a.totalClosingCount || 0) - s.count);
+        const newPendingCount = Math.max(0, Number(a.pendingClosingCount || 0) - s.count);
+        const newClosedCount = Math.max(0, Number(a.closedCount || 0) - s.memberCount);
+
+        const newPsTotalAmt = Math.max(0, Number(ps.totalClosingAmount || 0) - s.amount);
+        const newPsPendingAmt = Math.max(0, Number(ps.totalClosingPendingAmount || 0) - s.amount);
+        const newPsTotalCount = Math.max(0, Number(ps.totalClosingCount || 0) - s.count);
+        const newPsPendingCnt = Math.max(0, Number(ps.pendingClosingCount || 0) - s.count);
+        const newPsClosedCount = Math.max(0, Number(ps.closedCount || 0) - s.memberCount);
+
+        mb.update(db.collection("agents").doc(agentId), {
+          closing_pendingAmount: newPendingAmt,
+          closing_totalAmount: newTotalAmt,
+          totalClosingCount: newTotalCount,
+          pendingClosingCount: newPendingCount,
+          closedCount: newClosedCount,
+          updated_at: ts,
+          [`programStats.${programId}.totalClosingAmount`]: newPsTotalAmt,
+          [`programStats.${programId}.totalClosingPendingAmount`]: newPsPendingAmt,
+          [`programStats.${programId}.totalClosingCount`]: newPsTotalCount,
+          [`programStats.${programId}.pendingClosingCount`]: newPsPendingCnt,
+          [`programStats.${programId}.closedCount`]: newPsClosedCount,
+          [`programStats.${programId}.lastUpdated`]: ts,
+        });
+      }
     }
 
-    // ── Step 5 & 6: Program + Org stats reversal ──────────────────────────
-    const reverseStats = {
-      closedCount: INC(-storedMemberCount),
-      totalClosingPendingAmount: INC(-totalRevAmount),
-      totalClosingAmount: INC(-totalRevAmount),
-      totalClosingCount: INC(-totalRevCount),
-      pendingClosingCount: INC(-totalRevCount),
+    // ── Step 5 & 6: Program + Org stats reversal — clamp to 0 ──────────────
+    const [progSnap, orgSnap] = await Promise.all([
+      db.collection("programs").doc(programId).get(),
+      db.collection("organizationStats").doc("current").get(),
+    ]);
+    const pd = progSnap.exists ? progSnap.data() : {};
+    const od = orgSnap.exists ? orgSnap.data() : {};
+
+    const progStats = {
+      closedCount: Math.max(0, Number(pd.closedCount || 0) - storedMemberCount),
+      totalClosingPendingAmount: Math.max(0, Number(pd.totalClosingPendingAmount || 0) - totalRevAmount),
+      totalClosingAmount: Math.max(0, Number(pd.totalClosingAmount || 0) - totalRevAmount),
+      totalClosingCount: Math.max(0, Number(pd.totalClosingCount || 0) - totalRevCount),
+      pendingClosingCount: Math.max(0, Number(pd.pendingClosingCount || 0) - totalRevCount),
       updated_at: ts,
     };
-    mb.set(db.collection("programs").doc(programId), reverseStats, { merge: true });
-    mb.set(db.collection("organizationStats").doc("current"), reverseStats, { merge: true });
+    const orgStats = {
+      closedCount: Math.max(0, Number(od.closedCount || 0) - storedMemberCount),
+      totalClosingPendingAmount: Math.max(0, Number(od.totalClosingPendingAmount || 0) - totalRevAmount),
+      totalClosingAmount: Math.max(0, Number(od.totalClosingAmount || 0) - totalRevAmount),
+      totalClosingCount: Math.max(0, Number(od.totalClosingCount || 0) - totalRevCount),
+      pendingClosingCount: Math.max(0, Number(od.pendingClosingCount || 0) - totalRevCount),
+      updated_at: ts,
+    };
+    mb.set(db.collection("programs").doc(programId), progStats, { merge: true });
+    mb.set(db.collection("organizationStats").doc("current"), orgStats, { merge: true });
 
     await mb.commit();
 
     return NextResponse.json({
       success: true,
       message: `Reversed: ${closedMemberIds.length} members un-closed, ${paymentMemberIds.length} payments reversed`,
-      summary: { closingGroupId, membersUnClosed: closedMemberIds.length, paymentReversedFor: paymentMemberIds.length, reversedAmount: totalRevAmount, reversedCount: totalRevCount, reason },
+      summary: {
+        closingGroupId,
+        membersUnClosed: closedMemberIds.length,
+        paymentReversedFor: paymentMemberIds.length,
+        reversedAmount: totalRevAmount,
+        reversedCount: totalRevCount,
+        reason,
+      },
     });
 
   } catch (err) {

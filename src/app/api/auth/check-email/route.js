@@ -2,11 +2,21 @@ import { NextResponse } from "next/server";
 import admin from "../../db/firebaseAdmin";
 
 const db = admin.firestore();
+// async function setSuperAdmin(uid) {
+//   try {
+//     await admin.auth().setCustomUserClaims(uid, {
+//       role: 'superadmin'
+//     });
+
+//     console.log('✅ Superadmin role assigned successfully');
+//   } catch (error) {
+//     console.error('❌ Error setting role:', error);
+//   }
+// }
 
 export async function POST(req) {
   try {
     const { email } = await req.json();
-
     if (!email) {
       return NextResponse.json(
         { success: false, message: "Email required" },

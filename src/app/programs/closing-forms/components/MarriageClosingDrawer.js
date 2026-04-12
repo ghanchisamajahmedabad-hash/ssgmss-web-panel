@@ -14,13 +14,13 @@ import {
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { ref, uploadBytesResumable, getDownloadURL, deleteObject } from 'firebase/storage'
-import { db, storage } from '../../../../../lib/firbase-client'
 import { paymentApi } from '@/utils/api'
 import { Colors } from '@/constent/antdTheme'
 import {
   fetchAllMembersForSearch,
   fetchMembersPaginated,
 } from '@/app/members/components/firebase-helpers'
+import { storage } from '../../../../../lib/firbase-client'
 
 const { confirm } = Modal
 const { Panel }   = Collapse
@@ -97,7 +97,6 @@ const SectionHeader = ({ icon, title, subtitle, action }) => (
 )
 
 // ─── member select card ───────────────────────────────────────────────────────
-// Uses flat programId field — member.programId === programId
 const MemberSelectCard = ({ member, checked, onChange, programId }) => {
   const alreadyClosed = (member.closedStatus || []).some(
     cs => cs.programId === programId && cs.closingGroupId
@@ -129,7 +128,6 @@ const MemberSelectCard = ({ member, checked, onChange, programId }) => {
           <Pill color={C.info}>{member.registrationNumber}</Pill>
           {member.phone   && <Pill color={C.accent}>{member.phone}</Pill>}
           {member.village && <Pill color={C.muted}>{member.village}</Pill>}
-          {/* Show program name from flat field */}
           {member.programName && <Pill color={C.primary}>{member.programName}</Pill>}
           {alreadyClosed && <Pill color={C.warning}>Already Closed</Pill>}
         </div>
@@ -141,7 +139,7 @@ const MemberSelectCard = ({ member, checked, onChange, programId }) => {
 
 // ─── member detail row (step 3) ───────────────────────────────────────────────
 const MemberDetailRow = ({ member, details, progress, onUpdate, onRemove, onUpload, onRemoveFile }) => {
-  const pct      = progress
+  const pct       = progress
   const uploading = typeof pct === 'number' && pct > 0 && pct < 100
   const uploaded  = pct === 'done' || !!details?.invitationUrl
   const errored   = pct === 'error'
@@ -211,41 +209,41 @@ const MemberDetailRow = ({ member, details, progress, onUpdate, onRemove, onUplo
 // MAIN COMPONENT
 // ═══════════════════════════════════════════════════════════════════════════════
 const MarriageClosingDrawer = ({ visible, onClose, members: allMembers = [], programList = [], currentUser, onSuccess }) => {
-  const [step,          setStep]          = useState(0)
-  const [selectedProg,  setSelectedProg]  = useState(null)
-  const [ageGroups,     setAgeGroups]     = useState([])
-  const [memberGroups,  setMemberGroups]  = useState([])
-  const [selectedIds,   setSelectedIds]   = useState([])
-  const [selectedMap,   setSelectedMap]   = useState({})
-  const [details,       setDetails]       = useState({})
+  const [step,           setStep]           = useState(0)
+  const [selectedProg,   setSelectedProg]   = useState(null)
+  const [ageGroups,      setAgeGroups]      = useState([])
+  const [memberGroups,   setMemberGroups]   = useState([])
+  const [selectedIds,    setSelectedIds]    = useState([])
+  const [selectedMap,    setSelectedMap]    = useState({})
+  const [details,        setDetails]        = useState({})
   const [uploadProgress, setUploadProgress] = useState({})
-  const [processing,    setProcessing]    = useState(false)
+  const [processing,     setProcessing]     = useState(false)
 
-  const [displayed,     setDisplayed]     = useState([])
-  const [search,        setSearch]        = useState('')
-  const [listLoading,   setListLoading]   = useState(false)
-  const [searchMode,    setSearchMode]    = useState(false)
-  const [hasMore,       setHasMore]       = useState(false)
-  const [lastDoc,       setLastDoc]       = useState(null)
-  const [loadingMore,   setLoadingMore]   = useState(false)
+  const [displayed,    setDisplayed]    = useState([])
+  const [search,       setSearch]       = useState('')
+  const [listLoading,  setListLoading]  = useState(false)
+  const [searchMode,   setSearchMode]   = useState(false)
+  const [hasMore,      setHasMore]      = useState(false)
+  const [lastDoc,      setLastDoc]      = useState(null)
+  const [loadingMore,  setLoadingMore]  = useState(false)
+
+  // ── KEY FIX: use a ref to always read the latest details in handleSubmit ──
+  // React state is stale inside confirm().onOk closure — ref gives latest value
+  const detailsRef = useRef(details)
+  useEffect(() => { detailsRef.current = details }, [details])
 
   const PAGE    = 20
   const listRef = useRef(null)
   const program = programList.find(p => p.id === selectedProg)
 
-  // ── load first page — filter by flat programId field ──────────────────────
+  // ── load first page ────────────────────────────────────────────────────────
   const loadPage = useCallback(async (programId) => {
     if (!programId) return
     setListLoading(true); setSearchMode(false); setSearch('')
     try {
       const r = await fetchMembersPaginated({
-        programId,          // firebase-helpers now uses where("programId","==",programId)
-        status: 'active',
-        pageSize: PAGE,
-        lastDoc: null,
-        search: '',
+        programId, status: 'active', pageSize: PAGE, lastDoc: null, search: '',
       })
-      // members already filtered by programId in the query — no client-side filter needed
       setDisplayed(r.members || [])
       setLastDoc(r.lastDoc || null)
       setHasMore(r.hasNextPage || false)
@@ -278,8 +276,6 @@ const MarriageClosingDrawer = ({ visible, onClose, members: allMembers = [], pro
     if (!val) { loadPage(selectedProg); return }
     setListLoading(true)
     try {
-      // fetchAllMembersForSearch already filters by agentId but not programId in search mode —
-      // filter client-side by flat programId field
       const r = await fetchAllMembersForSearch(val, 'all')
       setDisplayed(r.filter(m => m.programId === selectedProg))
       setSearchMode(true); setHasMore(false)
@@ -292,7 +288,10 @@ const MarriageClosingDrawer = ({ visible, onClose, members: allMembers = [], pro
   }, [step, selectedProg])
 
   // ── storage helpers ────────────────────────────────────────────────────────
-  const delFile = async (url) => { if (!url) return; try { await deleteObject(ref(storage, url)) } catch (e) { console.error(e) } }
+  const delFile = async (url) => {
+    if (!url) return
+    try { await deleteObject(ref(storage, url)) } catch (e) { console.error('delFile error:', e) }
+  }
 
   const removeMember = async (id) => {
     await delFile(details[id]?.invitationUrl).catch(console.error)
@@ -320,8 +319,8 @@ const MarriageClosingDrawer = ({ visible, onClose, members: allMembers = [], pro
     } else { resetAll(); onClose() }
   }
 
-  const defaultDetail  = () => ({ marriageDate: dayjs(), note: '', invitationUrl: '' })
-  const updateDetail   = (id, field, val) => setDetails(p => ({ ...p, [id]: { ...p[id], [field]: val } }))
+  const defaultDetail   = () => ({ marriageDate: dayjs(), note: '', invitationUrl: '' })
+  const updateDetail    = (id, field, val) => setDetails(p => ({ ...p, [id]: { ...p[id], [field]: val } }))
   const isAlreadyClosed = (member) => (member.closedStatus || []).some(cs => cs.programId === selectedProg && cs.closingGroupId)
 
   const handleToggle = async (member, checked) => {
@@ -347,38 +346,84 @@ const MarriageClosingDrawer = ({ visible, onClose, members: allMembers = [], pro
     }
   }
 
-  const eligibleOnPage    = displayed.filter(m => !isAlreadyClosed(m))
-  const allPageSelected   = eligibleOnPage.length > 0 && eligibleOnPage.every(m => selectedIds.includes(m.id))
+  const eligibleOnPage     = displayed.filter(m => !isAlreadyClosed(m))
+  const allPageSelected    = eligibleOnPage.length > 0 && eligibleOnPage.every(m => selectedIds.includes(m.id))
   const alreadyClosedCount = displayed.filter(m => isAlreadyClosed(m)).length
 
+  // ── uploader — stores URL directly into detailsRef so submit always gets it ─
   const makeUploader = (memberId) => ({ file, onSuccess: ok, onError: err, onProgress }) => {
     const ext  = file.name.split('.').pop()
     const path = `closing-invitations/${memberId}/${Date.now()}.${ext}`
     const task = uploadBytesResumable(ref(storage, path), file)
     setUploadProgress(p => ({ ...p, [memberId]: 0 }))
-    task.on('state_changed',
+
+    task.on(
+      'state_changed',
       snap => {
         const pct = Math.round(snap.bytesTransferred / snap.totalBytes * 100)
-        setUploadProgress(p => ({ ...p, [memberId]: pct })); onProgress({ percent: pct })
+        setUploadProgress(p => ({ ...p, [memberId]: pct }))
+        onProgress({ percent: pct })
       },
-      e => { setUploadProgress(p => ({ ...p, [memberId]: 'error' })); message.error('Upload failed'); err(e) },
+      e => {
+        console.error('Upload error:', e)
+        setUploadProgress(p => ({ ...p, [memberId]: 'error' }))
+        message.error('Upload failed — please retry')
+        err(e)
+      },
       async () => {
-        const url = await getDownloadURL(task.snapshot.ref)
-        updateDetail(memberId, 'invitationUrl', url)
-        setUploadProgress(p => ({ ...p, [memberId]: 'done' }))
-        message.success('Invitation uploaded!'); ok({ url })
+        try {
+          const url = await getDownloadURL(task.snapshot.ref)
+          console.log('✅ Upload done, URL:', url)
+
+          // Update both state AND ref so submit always has the latest URL
+          setDetails(prev => {
+            const updated = {
+              ...prev,
+              [memberId]: { ...(prev[memberId] || {}), invitationUrl: url },
+            }
+            detailsRef.current = updated   // ← sync ref immediately
+            return updated
+          })
+          setUploadProgress(p => ({ ...p, [memberId]: 'done' }))
+          message.success('Invitation uploaded!')
+          ok({ url })
+        } catch (e) {
+          console.error('getDownloadURL error:', e)
+          setUploadProgress(p => ({ ...p, [memberId]: 'error' }))
+          message.error('Could not get file URL')
+          err(e)
+        }
       }
     )
   }
 
   const handleRemoveFile = async (id) => {
     await delFile(details[id]?.invitationUrl)
-    updateDetail(id, 'invitationUrl', ''); setUploadProgress(p => ({ ...p, [id]: 0 }))
+    updateDetail(id, 'invitationUrl', '')
+    setUploadProgress(p => ({ ...p, [id]: 0 }))
   }
 
+  // ── submit — reads from detailsRef (always fresh, no stale closure) ─────────
   const handleSubmit = async () => {
-    const noDate = selectedIds.filter(id => !details[id]?.marriageDate)
-    if (noDate.length) { message.warning('Please set marriage date for all members'); return }
+    // Read latest details from ref — avoids stale closure inside confirm()
+    const latestDetails = detailsRef.current
+
+    const noDate = selectedIds.filter(id => !latestDetails[id]?.marriageDate)
+    if (noDate.length) {
+      message.warning('Please set marriage date for all members')
+      return
+    }
+
+    // Warn if any upload still in progress
+    const stillUploading = selectedIds.some(id => {
+      const p = uploadProgress[id]
+      return typeof p === 'number' && p > 0 && p < 100
+    })
+    if (stillUploading) {
+      message.warning('Please wait — some files are still uploading')
+      return
+    }
+
     confirm({
       title: 'Confirm Marriage Closing',
       icon: <HeartFilled style={{ color: C.primary }} />,
@@ -387,39 +432,69 @@ const MarriageClosingDrawer = ({ visible, onClose, members: allMembers = [], pro
       onOk: async () => {
         setProcessing(true)
         try {
-          const groupId = `${selectedProg}${Date.now()}`
+          // Read from ref inside onOk — state would be stale here
+          const freshDetails = detailsRef.current
+
+          const groupId = `${selectedProg}_${Date.now()}`
+
           const memberClosingList = selectedIds.map(memberId => {
-            const d = details[memberId]
+            const d   = freshDetails[memberId] || {}
+            const mem = selectedMap[memberId]  || {}
+
+            console.log(`[submit] memberId=${memberId}  invitationUrl=${d.invitationUrl}`)
+
             return {
-              id:                   `${groupId}_${memberId}`,
-              closed_memberId:      memberId,
+              id:                          `${groupId}_${memberId}`,
+              closed_memberId:             memberId,
               groupId,
-              member_closed_program: selectedProg,
-              closed_date:          d.marriageDate ? d.marriageDate.toISOString() : new Date().toISOString(),
-              closed_note:          d.note || '',
-              closed_invitation_url: d.invitationUrl || '',
+              member_closed_program:       selectedProg,
+              closed_date:                 d.marriageDate
+                                             ? d.marriageDate.toISOString()
+                                             : new Date().toISOString(),
+              closed_note:                 d.note              || '',
+              closed_invitation_url:       d.invitationUrl     || '',   // ← now always correct
+              closing_Name:                mem.displayName     || '',
+              closing_fatherName:          mem.fatherName      || '',
+              closing_village:             mem.village         || '',
+              closingPhone:                mem.phone           || '',
+              closing_registrationNumber:  mem.registrationNumber || '',
+              closed_photoURL:             mem.photoURL        || '',
             }
           })
+
+          console.log('[submit] memberClosingList:', memberClosingList)
+
           const result = await paymentApi.closedPaymentEntry({
-            count: selectedIds.length,
-            memberIds: selectedIds,
-            closedBy: currentUser?.uid,
+            count:            selectedIds.length,
+            memberIds:        selectedIds,
+            closedBy:         currentUser?.uid,
             groupId,
-            closedByName: currentUser?.displayName || 'Unknown',
-            programId: selectedProg,
+            closedByName:     currentUser?.displayName || 'Unknown',
+            programId:        selectedProg,
             ageGroups,
             memberGroups,
             memberClosingList,
           })
+
           if (!result?.success) throw new Error(result?.message || 'API returned failure')
-          const processed = result.summary?.membersProcessed ?? selectedIds.length
-          const skipped   = result.summary?.skippedMembers   ?? []
-          if (skipped.length) message.warning(`Closed ${processed} member(s). ${skipped.length} skipped.`)
-          else                message.success(`Marriage closed for ${processed} member(s)`)
-          await resetAll(); onSuccess()
+
+          const processed = result.summary?.closedCount       ?? selectedIds.length
+          const skipped   = result.summary?.skipped           ?? []
+
+          if (skipped.length) {
+            message.warning(`Closed ${processed} member(s). ${skipped.length} skipped.`)
+          } else {
+            message.success(`Marriage closed for ${processed} member(s)`)
+          }
+
+          await resetAll()
+          onSuccess?.()
         } catch (e) {
-          console.error(e); message.error(e?.message || 'Failed to process. Please try again.')
-        } finally { setProcessing(false) }
+          console.error('[submit] Error:', e)
+          message.error(e?.message || 'Failed to process. Please try again.')
+        } finally {
+          setProcessing(false)
+        }
       },
     })
   }
@@ -468,10 +543,10 @@ const MarriageClosingDrawer = ({ visible, onClose, members: allMembers = [], pro
         {selectedProg && (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10, marginBottom: 18 }}>
             {[
-              { label: 'Loaded',    value: displayed.length + (hasMore ? '+' : ''), color: C.info,    icon: <TeamOutlined /> },
-              { label: 'Closed',    value: alreadyClosedCount,                      color: C.warning,  icon: <CheckCircleOutlined /> },
-              { label: 'Selected',  value: selectedIds.length,                      color: C.primary,  icon: <CheckCircleOutlined /> },
-              { label: 'Complete',  value: `${completedCount}/${selectedIds.length}`, color: C.success, icon: <HeartFilled /> },
+              { label: 'Loaded',   value: displayed.length + (hasMore ? '+' : ''), color: C.info,    icon: <TeamOutlined /> },
+              { label: 'Closed',   value: alreadyClosedCount,                      color: C.warning,  icon: <CheckCircleOutlined /> },
+              { label: 'Selected', value: selectedIds.length,                      color: C.primary,  icon: <CheckCircleOutlined /> },
+              { label: 'Complete', value: `${completedCount}/${selectedIds.length}`, color: C.success, icon: <HeartFilled /> },
             ].map(s => (
               <div key={s.label} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 10 }}>
                 <div style={{ width: 32, height: 32, borderRadius: 7, background: s.color + '15', display: 'flex', alignItems: 'center', justifyContent: 'center', color: s.color, fontSize: 15 }}>{s.icon}</div>
