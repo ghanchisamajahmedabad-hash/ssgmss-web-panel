@@ -35,7 +35,7 @@ export async function POST(req) {
 console.log(otp,"otp")
     await transporter.sendMail({
       from: `"My App" <${process.env.EMAIL_USER}>`,
-      to: "lalitkumar6458@gmail.com",
+      to: email,
       subject: "Your OTP Code",
       html: `<h3>Your OTP is <b>${otp}</b></h3><p>Valid for 1 minute</p>`,
     });

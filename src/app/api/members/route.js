@@ -56,31 +56,31 @@ export const generatePassword = (name, dobDate) => {
 };
 
 // ─── Create Firebase Auth account for member ──────────────────────────────────
-const createMemberAccount = async ({ memberId, displayName, photoURL, password, programId, registrationNumber }) => {
-  try {
+  const createMemberAccount = async ({ memberId, displayName, photoURL, password, programId, registrationNumber }) => {
     try {
-      await auth.getUser(memberId);
-      console.log("Auth already exists:", memberId);
-    } catch {
-      const email = `${registrationNumber}@ssgmsss.com`;
-      await auth.createUser({
-        uid: memberId, email, emailVerified: true,
-        displayName, photoURL: photoURL || null,
-        password: password || "Member@123"
-      });
-      // Set custom claims — single programId (string, not array)
-      await auth.setCustomUserClaims(memberId, { role: "member", programId: programId || '' });
+      try {
+        await auth.getUser(memberId);
+        console.log("Auth already exists:", memberId);
+      } catch {
+        const email = `${registrationNumber}@ssgmsss.com`;
+        await auth.createUser({
+          uid: memberId, email, emailVerified: true,
+          displayName, photoURL: photoURL || null,
+          password: password || "Member@123"
+        });
+        // Set custom claims — single programId (string, not array)
+        await auth.setCustomUserClaims(memberId, { role: "member", programId: programId || '' });
 
-      const memberDoc = await db.collection('members').doc(memberId).get();
-      if (memberDoc.exists) {
-        await memberDoc.ref.update({ uid: memberId, account_flag: true });
+        const memberDoc = await db.collection('members').doc(memberId).get();
+        if (memberDoc.exists) {
+          await memberDoc.ref.update({ uid: memberId, account_flag: true });
+        }
       }
+    } catch (e) {
+      console.error("❌ createMemberAccount error:", e);
+      throw e;
     }
-  } catch (e) {
-    console.error("❌ createMemberAccount error:", e);
-    throw e;
-  }
-};
+  };
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ADD stats — increment agent, program, org counts using flat member fields
