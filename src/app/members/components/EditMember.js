@@ -44,6 +44,7 @@ const EditMember = ({ open, setOpen, programs, agents, currentUser, memberId, on
   // Single program state
   const [selectedProgram, setSelectedProgram] = useState('')    // single ID string
   const [programDetail,   setProgramDetail]   = useState(null)  // single object
+  const [selectedMemberGroup, setSelectedMemberGroup] = useState(null)
 
   // Dates & age
   const [joinDate, setJoinDate] = useState(dayjs())
@@ -231,6 +232,8 @@ const EditMember = ({ open, setOpen, programs, agents, currentUser, memberId, on
       setProgramDetail({ programId: selectedProgram, programName: program.name, ageGroupName: ageGroup.ageGroupName, error: `No active period for ${joinDateStr}` }); return
     }
 
+    const groups = program?.memberGroups || []
+    const group  = selectedMemberGroup || groups[0] || {}
     const detail = {
       programId:       selectedProgram,
       programName:     program.name,
@@ -241,9 +244,10 @@ const EditMember = ({ open, setOpen, programs, agents, currentUser, memberId, on
       fixedJoinFees:   period.fixedJoinFees || 0,
       periodStartDate: period.startDate,
       periodEndDate:   period.endDate,
-      memberGroupId:   program?.memberGroups?.[0]?.id        || '',
-      memberGroupName: program?.memberGroups?.[0]?.groupName || '',
-      memberGroupCode: program?.memberGroups?.[0]?.code      || '',
+      memberGroupId:   group.id        || '',
+      memberGroupName: group.groupName || '',
+      memberGroupCode: group.code      || '',
+      memberGroups:    groups,
       hasPeriod:       true,
     }
     setProgramDetail(detail)
@@ -253,7 +257,7 @@ const EditMember = ({ open, setOpen, programs, agents, currentUser, memberId, on
       setPaidAmount(detail.joinFees)
       form.setFieldsValue({ paidAmount: detail.joinFees })
     }
-  }, [dobDate, selectedProgram, joinDate, programs, form, paidAmount])
+  }, [dobDate, selectedProgram, joinDate, programs, form, paidAmount, selectedMemberGroup])
 
   // ── Event handlers ───────────────────────────────────────────────────────────
   const handleDobChange = (date) => {
@@ -264,7 +268,15 @@ const EditMember = ({ open, setOpen, programs, agents, currentUser, memberId, on
 
   const handleProgramChange = (programId) => {
     setSelectedProgram(programId)
+    setSelectedMemberGroup(null)
     if (!programId) setProgramDetail(null)
+  }
+
+  const handleMemberGroupChange = (groupId) => {
+    const program = programs.find(p => p.id === selectedProgram)
+    const group   = program?.memberGroups?.find(g => g.id === groupId) || null
+    setSelectedMemberGroup(group)
+    if (dobDate) calculateProgramDetail()
   }
 
   const handleJoinDateChange = (date) => { setJoinDate(date) }
@@ -295,10 +307,21 @@ const EditMember = ({ open, setOpen, programs, agents, currentUser, memberId, on
   // ── Record payment transaction ───────────────────────────────────────────────
   const recordPaymentTransaction = async (changeAmount, newPaid, newPending, values) => {
     try {
+      const displayName = memberData?.displayName || '';
+      const regNo = memberData?.registrationNumber || '';
+      const fatherName = memberData?.fatherName || '';
+      const phone = memberData?.phone || '';
+      const aadhaarNo = memberData?.aadhaarNo || '';
+      const keyword = [displayName, regNo, fatherName, phone, aadhaarNo]
+        .filter(Boolean).join(' ').toLowerCase();
+
       await addDoc(collection(db, 'memberJoinFees'), {
         memberId:           memberId,
-        memberName:         memberData?.displayName,
-        registrationNumber: memberData?.registrationNumber,
+        memberName:         displayName,
+        memberFatherName:   fatherName,
+        registrationNumber: regNo,
+        memberPhone:        phone,
+        memberAadhaar:      aadhaarNo,
         programId:          selectedProgram   || '',
         programName:        programDetail?.programName || '',
         transactionType:    changeAmount > 0 ? 'additional_payment' : 'refund_adjustment',
@@ -314,8 +337,7 @@ const EditMember = ({ open, setOpen, programs, agents, currentUser, memberId, on
         createdBy:          currentUser?.uid,
         createdAt:          serverTimestamp(),
         updated_at:         serverTimestamp(),
-        search_memberName:  memberData?.displayName?.toLowerCase() || '',
-        search_date:        dayjs().format('YYYY-MM-DD'),
+        search_keyword:     keyword,
       })
     } catch (e) {
       console.error('Transaction record failed:', e)
@@ -508,11 +530,13 @@ const EditMember = ({ open, setOpen, programs, agents, currentUser, memberId, on
               joinDate={joinDate}
               handleJoinDateChange={handleJoinDateChange}
               programs={programs}
-              selectedProgram={selectedProgram}          // ← single string
-              handleProgramChange={handleProgramChange}  // ← sets single ID
+              selectedProgram={selectedProgram}
+              handleProgramChange={handleProgramChange}
               dobDate={dobDate}
-              programDetail={programDetail}              // ← single object
+              programDetail={programDetail}
               isEditMode={true}
+              selectedMemberGroup={selectedMemberGroup}
+              handleMemberGroupChange={handleMemberGroupChange}
             />
 
             <AddedByForm

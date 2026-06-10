@@ -20,17 +20,18 @@ import { db } from "../../../../lib/firbase-client";
 ===================================================== */
 export const buildMembersQuery = (filters = {}) => {
   const {
-    search        = "",
-    programId     = null,
-    agentId       = null,
-    status        = "all",
-    paymentStatus = "all",
-    fromDate      = null,
-    toDate        = null,
-    pageSize      = 10,
-    lastDoc       = null,
-    sortField     = "createdAt",
-    sortOrder     = "desc"
+    search              = "",
+    programId           = null,
+    agentId             = null,
+    status              = "all",
+    paymentStatus       = "all",
+    closingPaymentStatus = "all",
+    fromDate            = null,
+    toDate              = null,
+    pageSize            = 10,
+    lastDoc             = null,
+    sortField           = "createdAt",
+    sortOrder           = "desc"
   } = filters;
 
   const membersRef = collection(db, "members");
@@ -54,6 +55,8 @@ export const buildMembersQuery = (filters = {}) => {
     conditions.push(where("active_flag", "==", true));
   } else if (status === "inactive") {
     conditions.push(where("active_flag", "==", false));
+  } else if (status === "closed") {
+    conditions.push(where("member_closed", "==", true));
   }
 
   // ── Payment status filter ─────────────────────────────────────────────────
@@ -106,6 +109,11 @@ export const getTotalMembersCount = async (filters = {}) => {
     fromDate      = null,
     toDate        = null
   } = filters;
+  // Note: closingPaymentStatus is not applied to count (client-side filter)
+
+  if (filters.closingPaymentStatus && filters.closingPaymentStatus !== 'all') {
+    console.warn('[getTotalMembersCount] closingPaymentStatus not applied to count (client-side filter)');
+  }
 
   const membersRef = collection(db, "members");
   const conditions = [
@@ -121,6 +129,7 @@ export const getTotalMembersCount = async (filters = {}) => {
 
   if (status === "active")   conditions.push(where("active_flag", "==", true));
   if (status === "inactive") conditions.push(where("active_flag", "==", false));
+  if (status === "closed")   conditions.push(where("member_closed", "==", true));
 
   if (paymentStatus === "paid")    conditions.push(where("paymentPercentage", "==", 100));
   if (paymentStatus === "pending") conditions.push(where("paymentPercentage", "==", 0));
@@ -157,9 +166,21 @@ export const fetchMembersPaginated = async (filters = {}) => {
       updated_at: doc.data().updated_at?.toDate?.() || null
     }));
 
-    // Client-side filter for partial
+    // Client-side filter for partial (join fees)
     if (filters.paymentStatus === "partial") {
       members = members.filter(m => m.paymentPercentage > 0 && m.paymentPercentage < 100);
+    }
+
+    // Client-side filter for closing payment status
+    if (filters.closingPaymentStatus === "closedPaid") {
+      members = members.filter(m => (m.closing_paymentPercentage || 0) === 100 || ((m.closing_totalAmount || 0) > 0 && (m.closing_pendingAmount || 0) === 0));
+    } else if (filters.closingPaymentStatus === "closedPending") {
+      members = members.filter(m => (m.closing_totalAmount || 0) > 0 && (m.closing_paidAmount || 0) === 0);
+    } else if (filters.closingPaymentStatus === "closedPartial") {
+      members = members.filter(m => {
+        const pct = m.closing_paymentPercentage || 0;
+        return pct > 0 && pct < 100;
+      });
     }
 
     const lastVisible = querySnapshot.docs[querySnapshot.docs.length - 1];

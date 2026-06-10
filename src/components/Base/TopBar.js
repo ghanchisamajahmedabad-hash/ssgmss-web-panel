@@ -18,6 +18,7 @@ import { useRouter } from 'next/navigation';
 import { signOut } from 'firebase/auth';
 import { auth, db } from '../../../lib/firbase-client';
 import { deleteDoc, doc, onSnapshot } from 'firebase/firestore';
+import GoogleTranslateWrapper from './GoogleTranslateWrapper';
 
 const { Header } = Layout;
 
@@ -174,7 +175,9 @@ const isSuperAdmin = (user) => user?.role === 'superadmin';
             <span className="hidden sm:inline">Add Yojna</span>
           </Button>) : null
           }
-         
+
+          {/* Google Translate */}
+          <GoogleTranslateWrapper />
 
           {/* Notifications */}
           <Badge count={unreadCount} offset={[-5, 5]}>
@@ -270,6 +273,25 @@ const isSuperAdmin = (user) => user?.role === 'superadmin';
       </Drawer>
 
       <style jsx global>{`
+        /* ── Google Translate Banner Hiding ────────────────────── */
+        .goog-te-banner-frame,
+        .goog-te-balloon-frame,
+        iframe.skiptranslate,
+        .goog-te-menu-frame,
+        .goog-te-ctab {
+          display: none !important;
+          visibility: hidden !important;
+          height: 0px !important;
+          width: 0px !important;
+          position: fixed !important;
+          top: -9999px !important;
+          left: -9999px !important;
+          opacity: 0 !important;
+          pointer-events: none !important;
+        }
+        .goog-logo-link { display: none !important; }
+        .goog-te-gadget { color: transparent !important; }
+        body { top: 0px !important; }
         .ant-layout-header {
           background: var(--surface) !important;
           border-bottom: 1px solid var(--border) !important;

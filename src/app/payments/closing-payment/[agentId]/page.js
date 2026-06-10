@@ -13,7 +13,7 @@ import {
   UserOutlined, SearchOutlined, TeamOutlined, BankOutlined,
   WalletOutlined, ClockCircleOutlined, HistoryOutlined,
   DollarCircleOutlined, CheckCircleOutlined, ThunderboltOutlined,
-  FileTextOutlined, ArrowRightOutlined, InfoCircleOutlined,
+  ArrowRightOutlined, InfoCircleOutlined,
   SortAscendingOutlined, CalendarOutlined, SwapOutlined,
   RiseOutlined, FallOutlined, OrderedListOutlined,
   FilePdfOutlined, FilterOutlined, CloseCircleOutlined,
@@ -311,17 +311,18 @@ const ClosingMemberPaymentPage = () => {
 
   const confirmPayment = async () => {
     try {
-      setUploading(true);
-      let fileUrl;
-      if (uploadedFile) {
-        fileUrl = await uploadFile(uploadedFile, `memberpayments/JoinFees/${agentId}/${Date.now()}_${uploadedFile.name}`);
-      }
       if (!auth.currentUser) { message.error('No authenticated user'); return; }
+      setUploading(true);
+      let fileUrl = null;
+      if (uploadedFile) {
+        const result = await uploadFile(uploadedFile, `memberpayments/JoinFees/${agentId}/${Date.now()}_${uploadedFile.name}`);
+        fileUrl = result?.url || null;
+      }
       const res = await paymentApi.closedPaymentUpdate({
         memberPayments: processingPayments,
         paymentDate: paymentDate.toISOString(),
         paymentMethod, paymentNote, transactionId,
-        fileUrl: uploadedFile ? fileUrl.url : null,
+        fileUrl,
         totalAmount: processingPayments.reduce((s, p) => s + p.amount, 0),
         agentId,
         programId: selectedProgram !== 'all' ? selectedProgram : null,

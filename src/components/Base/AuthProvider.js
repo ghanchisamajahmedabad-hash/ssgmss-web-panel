@@ -1,16 +1,17 @@
 "use client";
 import { createContext, useContext, useEffect, useState } from "react";
 import { onAuthStateChanged } from "firebase/auth";
-import { doc, getDoc } from "firebase/firestore";
+import { doc, getDoc, collection, query, where, getDocs } from "firebase/firestore";
 import { message } from "antd";
 import { useRouter, usePathname } from "next/navigation";
 import { auth, db } from "../../../lib/firbase-client";
 import { Provider } from "react-redux";
 import store from "@/Redux/store";
+import { useDispatch } from "react-redux";
+import { setUser as setReduxUser, clearUser } from "@/Redux/Slice/userSlice";
 
 const AuthContext = createContext();
 
-// ── Pages that never need a permission check ──────────────────────────────────
 const PUBLIC_PATHS = [
   "/auth/login",
   "/auth/register",
@@ -18,7 +19,6 @@ const PUBLIC_PATHS = [
   "/auth/reset-password",
 ];
 
-// ── Exact same logic as SideBar — must stay in sync ──────────────────────────
 function isSuperAdmin(user) {
   return user?.role === "superadmin";
 }
@@ -26,29 +26,16 @@ function isSuperAdmin(user) {
 function hasPageAccess(user, pageKey) {
   if (!user) return false;
   if (isSuperAdmin(user)) return true;
-
-  // Exact match only
   const pages = user.permissions?.pages || [];
-  return pages.includes(pageKey);
+  if (pages.includes(pageKey)) return true;
+  if (pageKey === '/' && pages.includes('/dashboard')) return true;
+  return false;
 }
 
-/**
- * For nested routes like /settings/security/sessions we also accept access if
- * the EXACT child path is listed — but we do NOT grant access just because a
- * parent is listed (that was the original bug).
- *
- * We DO allow the parent path itself to be "visited" as a passthrough when the
- * user has at least one child under it, because Ant Menu parent items are
- * clickable. The actual page content for that parent key should handle the
- * redirect internally, but we don't hard-block it here.
- */
 function canVisit(user, pathname) {
   if (!user) return false;
   if (isSuperAdmin(user)) return true;
-
-  // Allow root dashboard path always for authenticated users
-  if (pathname === "/") return true;   // ← ADD THIS
-
+  if (pathname === "/") return true;
   const pages = user.permissions?.pages || [];
   if (pages.includes(pathname)) return true;
   const hasChildAccess = pages.some(
@@ -57,54 +44,101 @@ function canVisit(user, pathname) {
   return hasChildAccess;
 }
 
+const DEFAULT_PERMISSIONS = {
+  pages: ['/'],
+  actions: { create: false, edit: false, delete: false, view: true, download: false },
+  moduleAccess: { dashboard: true },
+  pagePermissions: {},
+};
 
-// ── Provider ──────────────────────────────────────────────────────────────────
-export function AuthProvider({ children }) {
-  const [user, setUser]       = useState(null);
+function AuthProviderInner({ children }) {
+  const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [messageApi, contextHolder] = message.useMessage();
-
-  const router   = useRouter();
+  const dispatch = useDispatch();
+  const router = useRouter();
   const pathname = usePathname();
 
-  // ── Auth state ──────────────────────────────────────────────────────────────
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       try {
         if (firebaseUser) {
-          const userDoc = await getDoc(doc(db, "users", firebaseUser.uid));
-          if (userDoc.exists()) {
-            setUser({
-              tokens: firebaseUser?.stsTokenManager,
-              ...userDoc.data(),
-            });
+          let mergedUser = { tokens: firebaseUser?.stsTokenManager };
+
+          // 1. Try users/{uid} first
+          const userDocSnap = await getDoc(doc(db, "users", firebaseUser.uid));
+          if (userDocSnap.exists()) {
+            mergedUser = { ...mergedUser, ...userDocSnap.data() };
           } else {
-            setUser(firebaseUser);
+            // 2. Fallback: try agents/{uid} or find user by email
+            const agentSnap = await getDoc(doc(db, "agents", firebaseUser.uid));
+            if (agentSnap.exists()) {
+              const agentData = agentSnap.data();
+              mergedUser = {
+                ...mergedUser,
+                uid: firebaseUser.uid,
+                name: agentData.name || firebaseUser.displayName || '',
+                email: firebaseUser.email || '',
+                phone: agentData.phone1 || firebaseUser.phoneNumber || '',
+                photoURL: agentData.photoURL || firebaseUser.photoURL || '',
+                role: 'agent',
+                permissions: agentData.permissions || DEFAULT_PERMISSIONS,
+              };
+              // Try to get permissions from users/{uid} if it was created later
+              const userDocRetry = await getDoc(doc(db, "users", firebaseUser.uid));
+              if (userDocRetry.exists() && userDocRetry.data().permissions) {
+                mergedUser.permissions = userDocRetry.data().permissions;
+                mergedUser.role = userDocRetry.data().role || 'agent';
+              }
+            } else {
+              // 3. Last resort: use token claims for role
+              let role = 'member';
+              try {
+                const tokenResult = await firebaseUser.getIdTokenResult();
+                role = tokenResult.claims.role || 'member';
+              } catch {}
+              mergedUser = {
+                ...mergedUser,
+                uid: firebaseUser.uid,
+                name: firebaseUser.displayName || '',
+                email: firebaseUser.email || '',
+                phone: firebaseUser.phoneNumber || '',
+                photoURL: firebaseUser.photoURL || '',
+                role,
+                permissions: DEFAULT_PERMISSIONS,
+              };
+            }
           }
+
+          // Ensure permissions object always exists
+          if (!mergedUser.permissions) {
+            mergedUser.permissions = DEFAULT_PERMISSIONS;
+          }
+
+          setUser(mergedUser);
+          dispatch(setReduxUser(mergedUser));
         } else {
           setUser(null);
+          dispatch(clearUser());
         }
       } catch (error) {
-        console.error("Error fetching user data:", error);
+        console.error("AuthProvider error:", error);
         messageApi.error("Failed to load user data");
         setUser(null);
+        dispatch(clearUser());
       } finally {
         setLoading(false);
       }
     });
 
     return () => unsubscribe();
-  }, [messageApi]);
+  }, [messageApi, dispatch]);
 
-  // ── Route guard — runs on every pathname change ─────────────────────────────
   useEffect(() => {
-    if (loading) return; // wait until auth state is resolved
-
+    if (loading) return;
     const isPublic = PUBLIC_PATHS.some(
       (p) => pathname === p || pathname.startsWith(p + "/")
     );
-
-    // Not logged in → send to login
     if (!user) {
       if (!isPublic) {
         messageApi.error("Please login to continue");
@@ -112,14 +146,10 @@ export function AuthProvider({ children }) {
       }
       return;
     }
-
-    // Logged in but on a public/auth page → send to dashboard
     if (isPublic) {
       router.replace("/");
       return;
     }
-
-    // Logged in — check page permission
     if (!canVisit(user, pathname)) {
       messageApi.error("You don't have permission to access this page");
       router.replace("/unauthorized");
@@ -128,11 +158,17 @@ export function AuthProvider({ children }) {
 
   return (
     <AuthContext.Provider value={{ user, loading, messageApi }}>
-      <Provider store={store}>
-        {contextHolder}
-        {children}
-      </Provider>
+      {contextHolder}
+      {children}
     </AuthContext.Provider>
+  );
+}
+
+export function AuthProvider({ children }) {
+  return (
+    <Provider store={store}>
+      <AuthProviderInner children={children} />
+    </Provider>
   );
 }
 

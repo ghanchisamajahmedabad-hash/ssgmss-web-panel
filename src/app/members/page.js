@@ -13,7 +13,8 @@ import {
   UserOutlined, PhoneOutlined, IdcardOutlined,
   CheckCircleOutlined, ClockCircleOutlined,
   FileTextOutlined, FilterOutlined, DownloadOutlined,
-  ReloadOutlined, UserSwitchOutlined
+  ReloadOutlined, UserSwitchOutlined, PrinterOutlined,
+  TableOutlined
 } from '@ant-design/icons'
 import { useAuth } from '@/components/Base/AuthProvider'
 import dayjs from 'dayjs'
@@ -26,7 +27,7 @@ import {
   fetchAllMembersForSearch
 } from './components/firebase-helpers'
 import { auth, db } from '../../../lib/firbase-client'
-import { doc, updateDoc } from 'firebase/firestore'
+import { doc, updateDoc, query, where, orderBy, collection, getDocs } from 'firebase/firestore'
 import { PDFDownloadLink } from '@react-pdf/renderer'
 import CertificateCom from './components/MemberPdf/CertificateCom'
 import RasidDrawer from './components/RasidCom/RasidDrawer'
@@ -44,7 +45,11 @@ const Page = () => {
   const [openCertificate,      setOpenCertificate]      = useState(false)
   const [detailDrawerVisible,  setDetailDrawerVisible]  = useState(false)
   const [filterModalVisible,   setFilterModalVisible]   = useState(false)
-  const [rasidDrawerOpen,      setRasidDrawerOpen]      = useState(false)
+  const [rasidDrawerOpen,         setRasidDrawerOpen]         = useState(false)
+  const [allMembersForExport,     setAllMembersForExport]     = useState(null)
+  const [allMembersExportLoading, setAllMembersExportLoading] = useState(false)
+  const [selectedRowKeys, setSelectedRowKeys] = useState([])
+  const [isCertDownloading, setIsCertDownloading] = useState(false)
   const currentUser = auth.currentUser
 
   const [searchMode,    setSearchMode]    = useState('paginated')
@@ -58,6 +63,7 @@ const Page = () => {
   const [filters, setFilters] = useState({
     search: '', programId: 'all', agentId: 'all',
     status: 'all', paymentStatus: 'all',
+    closingPaymentStatus: 'all',
     fromDate: null, toDate: null,
     sortField: 'createdAt', sortOrder: 'desc'
   })
@@ -69,6 +75,7 @@ const Page = () => {
   const programList = useSelector((state) => state.data.programList)
   const agentList   = useSelector((state) => state.data.agentList)
   const { user }    = useAuth()
+  console.log('User permissions:', user)
 const isSuperAdmin = (user) => user?.role === 'superadmin';
   const usersPermissions = user?.permissions || {};
   const [filterForm]    = Form.useForm()
@@ -161,7 +168,7 @@ const isSuperAdmin = (user) => user?.role === 'superadmin';
   }
 
   const resetFilters = () => {
-    const reset = { programId: 'all', agentId: 'all', status: 'all', paymentStatus: 'all', fromDate: null, toDate: null, sortField: 'createdAt', sortOrder: 'desc' }
+    const reset = { programId: 'all', agentId: 'all', status: 'all', paymentStatus: 'all', closingPaymentStatus: 'all', fromDate: null, toDate: null, sortField: 'createdAt', sortOrder: 'desc' }
     setFilters(prev => ({ ...prev, ...reset }))
     filterForm.resetFields()
     setSearchMode('paginated'); setSearchResults([])
@@ -171,10 +178,11 @@ const isSuperAdmin = (user) => user?.role === 'superadmin';
 
   const getActiveFilterCount = () => {
     let c = 0
-    if (filters.programId     !== 'all') c++
-    if (filters.agentId       !== 'all') c++
-    if (filters.status        !== 'all') c++
-    if (filters.paymentStatus !== 'all') c++
+    if (filters.programId          !== 'all') c++
+    if (filters.agentId            !== 'all') c++
+    if (filters.status             !== 'all') c++
+    if (filters.paymentStatus      !== 'all') c++
+    if (filters.closingPaymentStatus !== 'all') c++
     if (filters.fromDate) c++
     if (filters.toDate)   c++
     return c
@@ -211,6 +219,61 @@ const isSuperAdmin = (user) => user?.role === 'superadmin';
       programName: programData.hindiName || member.programName || ''
     })
     setOpenCertificate(true)
+  }
+
+  const downloadMultipleCertificates = async (membersArray) => {
+    if (!membersArray || membersArray.length === 0) {
+      message.warning('No members selected for certificate download');
+      return;
+    }
+    setIsCertDownloading(true);
+    const loadingMessage = message.loading('Generating certificates, please wait...', 0);
+    const membersData = membersArray.map(member => {
+      const agentData   = agentList?.find(a => a.id === member.agentId) || {}
+      const programData = programList?.find(p => p.id === member.programId) || {}
+      return {
+        ...member,
+        ageGroupName:  member.ageGroupName || member.memberGroupName || member.ageGroup || '',
+        agentName:     agentData.displayName || agentData.name || 'Admin/System',
+        agentPhone:    agentData.phone1 || '',
+        programName:   programData.hindiName || member.programName || ''
+      }
+    });
+    const memberProgram = programList?.find(p => p.id === filters.programId) ||
+      programList?.find(p => p.id === membersArray[0]?.programId) || {}
+    try {
+      const response = await fetch('/api/certificate-send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ memberData: membersData, memberProgram }),
+      });
+      const data = await response.json();
+      const binaryString = atob(data.base64);
+      const bytes = new Uint8Array(binaryString.length);
+      for (let i = 0; i < binaryString.length; i++) bytes[i] = binaryString.charCodeAt(i);
+      const blob = new Blob([bytes], { type: 'application/pdf' });
+      const url = URL.createObjectURL(blob);
+      window.open(url, '_blank');
+      setTimeout(() => URL.revokeObjectURL(url), 100);
+      message.success('Certificate generated successfully!');
+    } catch (error) {
+      console.error('Error:', error);
+      message.error('Failed to generate certificates. Please try again.');
+    } finally {
+      loadingMessage();
+      setIsCertDownloading(false);
+    }
+  }
+
+  const handleBatchCertSelected = () => {
+    const selected = selectedRowKeys.map(id => displayedMembers.find(m => m.id === id)).filter(Boolean)
+    downloadMultipleCertificates(selected)
+  }
+
+  const handleBatchCertAll = async () => {
+    const data = allMembersForExport || await fetchAllMembersForExport()
+    if (!data || data.length === 0) { message.warning('No members found'); return }
+    downloadMultipleCertificates(data)
   }
 
   const handleEditMember = (member) => { setEditMemberId(member.id); setOpenEditMember(true) }
@@ -316,6 +379,13 @@ const handleDeleteMember = (member) => {
       },
     },
     {
+      title: 'Age Group', key: 'ageGroup', width: 90,
+      render: (_, r) => {
+        const age = r.ageGroupName || r.memberGroupName || r.ageGroup || '-'
+        return <Tag color="cyan" style={{ fontSize: '10px' }}>{age}</Tag>
+      },
+    },
+    {
       title: 'Join Fees', key: 'payment', width: 140,
       sorter: searchMode === 'paginated',
       render: (_, r) => {
@@ -414,15 +484,17 @@ const handleDeleteMember = (member) => {
     },
   ]
 
-  const exportToCSV = () => {
-    const headers = ['Registration No','Name','Father Name','Phone','Aadhaar','Village','City','Program','Join Date','Status','Payment %','Paid Amount','Agent Name']
-    const rows = displayedMembers.map(m => [
+  const exportToCSV = (data) => {
+    const list = data || displayedMembers
+    const headers = ['Registration No','Name','Father Name','Phone','Aadhaar','Village','City','Program','Age Group','Join Date','Status','Payment %','Paid Amount','Pending Amount','Agent Name']
+    const rows = list.map(m => [
       m.registrationNumber, m.displayName, m.fatherName, m.phone, m.aadhaarNo,
       m.village, m.city,
       m.programName || (programList?.find(p => p.id === m.programId)?.name || ''),
+      m.ageGroupName || m.memberGroupName || m.ageGroup || '',
       m.dateJoin,
       m.active_flag ? 'Active' : 'Inactive',
-      m.paymentPercentage || 0, m.paidAmount || 0,
+      m.paymentPercentage || 0, m.paidAmount || 0, m.pendingAmount || 0,
       getAgentName(m.agentId)
     ])
     const csv  = [headers, ...rows].map(r => r.join(',')).join('\n')
@@ -430,6 +502,210 @@ const handleDeleteMember = (member) => {
     const url  = window.URL.createObjectURL(blob)
     const a    = document.createElement('a')
     a.href = url; a.download = `members_${dayjs().format('YYYY-MM-DD')}.csv`; a.click()
+  }
+
+  const fetchAllMembersForExport = async () => {
+    setAllMembersExportLoading(true)
+    try {
+      let q = collection(db, 'members')
+      const constraints = []
+      if (filters.programId !== 'all') constraints.push(where('programId', '==', filters.programId))
+      if (filters.status === 'active') constraints.push(where('active_flag', '==', true))
+      else if (filters.status === 'inactive') constraints.push(where('active_flag', '==', false))
+      else if (filters.status === 'closed') constraints.push(where('member_closed', '==', true))
+      if (filters.paymentStatus === 'paid') constraints.push(where('paymentPercentage', '==', 100))
+      else if (filters.paymentStatus === 'partial') constraints.push(where('paymentPercentage', '>', 0), where('paymentPercentage', '<', 100))
+      else if (filters.paymentStatus === 'pending') constraints.push(where('paymentPercentage', '==', 0))
+      if (filters.agentId !== 'all') constraints.push(where('agentId', '==', filters.agentId))
+      if (filters.fromDate) constraints.push(where('createdAt', '>=', dayjs(filters.fromDate).startOf('day').toDate()))
+      if (filters.toDate) constraints.push(where('createdAt', '<=', dayjs(filters.toDate).endOf('day').toDate()))
+      constraints.push(orderBy('createdAt', 'desc'))
+      q = query(q, ...constraints)
+      let snap = await getDocs(q)
+      let data = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+
+      // Client-side closing payment filter
+      if (filters.closingPaymentStatus === 'closedPaid') {
+        data = data.filter(m => (m.closing_paymentPercentage || 0) === 100 || ((m.closing_totalAmount || 0) > 0 && (m.closing_pendingAmount || 0) === 0))
+      } else if (filters.closingPaymentStatus === 'closedPending') {
+        data = data.filter(m => (m.closing_totalAmount || 0) > 0 && (m.closing_paidAmount || 0) === 0)
+      } else if (filters.closingPaymentStatus === 'closedPartial') {
+        data = data.filter(m => {
+          const pct = m.closing_paymentPercentage || 0
+          return pct > 0 && pct < 100
+        })
+      }
+      setAllMembersForExport(data)
+      return data
+    } catch (err) {
+      console.error('Error fetching all members for export:', err)
+      message.error('Failed to fetch all members for export')
+      return null
+    } finally {
+      setAllMembersExportLoading(false)
+    }
+  }
+
+  const exportAllToCSV = async () => {
+    const data = allMembersForExport || await fetchAllMembersForExport()
+    if (data && data.length > 0) {
+      exportToCSV(data)
+      message.success(`Exported ${data.length} members to CSV`)
+    } else {
+      message.warning('No members found to export')
+    }
+  }
+
+  const printMembers = async () => {
+    const data = allMembersForExport || await fetchAllMembersForExport()
+    if (!data || data.length === 0) {
+      message.warning('No members found to print')
+      return
+    }
+
+    const filterParts = []
+    if (filters.programId !== 'all') filterParts.push(`Yojna: ${programList?.find(p => p.id === filters.programId)?.name || filters.programId}`)
+    if (filters.agentId !== 'all') filterParts.push(`Agent: ${getAgentName(filters.agentId)}`)
+    if (filters.status !== 'all') filterParts.push(`Status: ${filters.status}`)
+    if (filters.paymentStatus !== 'all') filterParts.push(`Payment: ${filters.paymentStatus}`)
+    if (filters.fromDate) filterParts.push(`From: ${formatDate(filters.fromDate)}`)
+    if (filters.toDate) filterParts.push(`To: ${formatDate(filters.toDate)}`)
+    if (filters.search) filterParts.push(`Search: ${filters.search}`)
+    const filterHtml = filterParts.length > 0
+      ? `<div class="filters">Filters: ${filterParts.map(f => `<span class="filter-tag">${f}</span>`).join('')}</div>`
+      : ''
+
+    const rowsHtml = data.map((m, i) => {
+      const progName = m.programName || (programList?.find(p => p.id === m.programId)?.name || '-')
+      const ageGroup = m.ageGroupName || m.memberGroupName || m.ageGroup || '-'
+      return `
+      <tr>
+        <td class="c">${i + 1}</td>
+        <td class="reg">${m.registrationNumber || ''}</td>
+        <td class="l"><b>${m.displayName || ''}</b><div class="sub">${m.fatherName || ''}</div></td>
+        <td class="c">${m.phone || '-'}</td>
+        <td class="c mono">${m.aadhaarNo || '-'}</td>
+        <td class="c">${progName}</td>
+        <td class="c">${ageGroup}</td>
+        <td class="c">${m.village || '-'}</td>
+        <td class="amt">₹${(m.payAmount || 0).toLocaleString()}</td>
+      </tr>`
+    }).join('')
+
+    const printWindow = window.open('', '_blank')
+    printWindow.document.write(`<!DOCTYPE html><html lang="hi"><head>
+<meta charset="utf-8">
+<title>Member List — SSGMS</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Devanagari:wght@400;500;600;700&family=Noto+Serif+Devanagari:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+  @page { size: A4 landscape; margin: 5mm 4mm 16mm 4mm; @bottom-center { content: "Page " counter(page); font-size: 8px; color: #9ca3af; font-family: 'Noto Sans Devanagari', sans-serif; } }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:'Noto Sans Devanagari',sans-serif;background:#fff;color:#1f2937;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+
+  .bless{display:flex;justify-content:space-between;padding:0 6px;margin-bottom:6px}
+  .bless span{font-size:10px;color:#D3292F;font-weight:700;font-family:'Noto Serif Devanagari',serif;letter-spacing:.5px}
+
+  .hdr{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:4px}
+  .logo-box{width:70px;flex-shrink:0;display:flex;flex-direction:column;align-items:center;justify-content:center}
+  .logo-fb{width:55px;height:50px;border-radius:4px;background:linear-gradient(135deg,#E8EFF7,#d0dcec);border:2px solid #b5c5d8;display:flex;align-items:center;justify-content:center;font-size:9px;color:#1B385A;font-weight:700;text-align:center;line-height:1.3;font-family:'Noto Serif Devanagari',serif}
+  .logo-fb2{background:linear-gradient(135deg,#f5ece0,#ede0cc)!important;border-color:#c9a87a!important;color:#7a4a1e!important}
+  .logo{width:55px;height:50px;border-radius:4px;object-fit:cover}
+  .center-block{flex:1;text-align:center;padding:0 6px}
+  .org-title{font-size:20px;font-weight:700;color:#1B385A;font-family:'Noto Serif Devanagari',serif;letter-spacing:.5px;line-height:1.3}
+  .org-sub{font-size:15px;font-weight:700;color:#1B385A;margin-bottom:2px}
+  .org-addr{font-size:10px;color:#000;line-height:1.5;margin-bottom:2px}
+  .org-contact{font-size:10px;color:#000;line-height:1.5}
+  .org-contact .blue{color:#1B385A;font-weight:700}
+
+  .since-bar{display:flex;justify-content:space-between;border-bottom:1.5px solid #1B385A;padding:4px 6px 6px;margin-bottom:5px}
+  .since-bar span{font-size:10px;font-weight:700;color:#1B385A;letter-spacing:.6px}
+
+  .title-area{text-align:center;margin:8px 0}
+  .title-area .title{display:inline-block;border:2px solid #D3292F;border-radius:6px;padding:5px 30px;font-size:14px;font-weight:700;color:#D3292F;font-family:'Noto Serif Devanagari',serif;letter-spacing:.6px}
+
+  .filters{margin:5px 0 6px;font-size:10px;color:#6b7280;display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+  .filter-tag{background:#fef2f2;color:#D3292F;padding:2px 8px;border-radius:3px;border:1px solid #fecaca;font-size:9px}
+
+  .summary{display:flex;gap:12px;justify-content:space-between;align-items:center;margin-bottom:6px;font-size:10px}
+  .summary .count{background:#1B385A;color:#fff;padding:4px 16px;border-radius:4px;font-weight:700;font-size:11px}
+  .summary .date{color:#9ca3af;font-size:9px}
+
+  table{width:100%;border-collapse:collapse;font-size:9px;border:1.5px solid #bbb}
+  thead th{background:#1B385A;color:#fff;padding:6px 4px;border:1px solid #2a4a6a;text-align:center;font-size:9px;font-weight:700;letter-spacing:.4px;font-family:'Noto Serif Devanagari',serif;white-space:nowrap}
+  tbody td{padding:5px 4px;border:0.8px solid #d1d5db;vertical-align:middle}
+  tbody tr:nth-child(even){background:#f8fafc}
+  td.c{text-align:center}
+  td.l{text-align:left;padding-left:8px;word-break:break-word}
+  td.reg{font-weight:700;color:#1e3a8a;text-align:center;font-size:10px}
+  td.amt{text-align:right;font-weight:700;font-size:10px;padding-right:6px}
+  td.mono{font-family:monospace;font-size:9px}
+  .sub{font-size:8px;color:#6b7280}
+
+  .footer{text-align:center;margin-top:8px;padding-top:6px;border-top:1px solid #D3292F;font-size:8px;color:#9ca3af}
+
+  @media print{body{background:#fff}.no-print{display:none!important}}
+</style></head><body>
+
+<div class="bless">
+  <span>॥ श्री गणेशाय नमः ॥</span>
+  <span>॥ श्री शनिदेवाय नमः ॥</span>
+  <span>॥ श्री सांवलाजी महाराज नमः ॥</span>
+</div>
+
+<div class="hdr">
+  <div class="logo-box"><img src="/Images/logoT.png" class="logo" onerror="this.style.display='none';this.nextSibling.style.display='flex'" alt=""></div>
+  <div class="center-block">
+    <div class="org-title">श्री क्षत्रिय घांची मोदी समाज सेवा संस्थान ट्रस्ट</div>
+    <div class="org-sub">अहमदाबाद, गुजरात</div>
+    <div class="org-addr"><b>हेड ऑफिस :</b> 68, वृंदावन शॉपिंग सेंटर, गुजरात हाउसिंग बोर्ड बी. एस. स्कूल के पास, चांदखेडा, साबरमती, अहमदाबाद - 382424 &nbsp; (O) 9898535345</div>
+    <div class="org-contact"><b>संपर्क सूत्र :</b> <span class="blue">अध्यक्ष श्री वोरारामजी टी. बोराणा</span></div>
+    <div class="org-contact"><span class="blue">9374934004</span> &nbsp;&nbsp; <b>ऑफिस :</b> <span class="blue"> 9898535345</span></div>
+  </div>
+   <div class="logo-box"><img src="/Images/sanidevImg.jpeg" class="logo" onerror="this.style.display='none';this.nextSibling.style.display='flex'" alt=""></div>
+</div>
+
+<div class="since-bar">
+  <span>SINCE : 2024</span>
+  <span>Reg. No: A/5231</span>
+</div>
+
+<div class="title-area">
+  <div class="title">सदस्य सूची</div>
+</div>
+
+${filterHtml}
+
+<div class="summary">
+  <span class="count">कुल सदस्य: ${data.length}</span>
+  <span class="date">${new Date().toLocaleDateString('en-IN', { year:'numeric', month:'long', day:'numeric' })}</span>
+</div>
+
+<table>
+  <thead><tr>
+    <th style="width:18px">#</th>
+    <th style="width:54px">Reg No</th>
+    <th style="width:160px">नाम / पिता</th>
+    <th style="width:64px">फोन</th>
+    <th style="width:78px">आधार</th>
+    <th style="width:90px">योजना</th>
+    <th style="width:54px">आयु वर्ग</th>
+    <th style="width:64px">गाँव</th>
+    <th style="width:54px">राशि</th>
+  </tr></thead>
+  <tbody>${rowsHtml}</tbody>
+</table>
+
+<div style="text-align:center;margin-top:6px;font-size:7px;color:#9ca3af">
+  Generated by SSGMS Web Panel • ${new Date().toLocaleString('en-IN')}
+</div>
+
+<script>
+  (function(){var p=document.querySelectorAll('.logo');p.forEach(function(i){if(i.naturalWidth===0){i.style.display='none';var fb=i.nextElementSibling;if(fb)fb.style.display='flex'}});
+  setTimeout(function(){window.print()},400)})();
+</script>
+</body></html>`)
+    printWindow.document.close()
   }
 
   const fileName = selectedMember
@@ -483,13 +759,18 @@ const handleDeleteMember = (member) => {
                 </Tag>
               )}
               {filters.status !== 'all' && (
-                <Tag color="green" closable onClose={() => { setFilters(p => ({...p, status:'all'})); fetchMembers(1,true) }}>
-                  Status: {filters.status}
+                <Tag color={filters.status === 'closed' ? 'purple' : 'green'} closable onClose={() => { setFilters(p => ({...p, status:'all'})); fetchMembers(1,true) }}>
+                  Status: {filters.status === 'closed' ? 'Closed' : filters.status}
                 </Tag>
               )}
               {filters.paymentStatus !== 'all' && (
                 <Tag color="orange" closable onClose={() => { setFilters(p => ({...p, paymentStatus:'all'})); fetchMembers(1,true) }}>
-                  Payment: {filters.paymentStatus}
+                  Join Fees: {filters.paymentStatus}
+                </Tag>
+              )}
+              {filters.closingPaymentStatus !== 'all' && (
+                <Tag color="purple" closable onClose={() => { setFilters(p => ({...p, closingPaymentStatus:'all'})); fetchMembers(1,true) }}>
+                  Closing: {filters.closingPaymentStatus.replace('closed', '')}
                 </Tag>
               )}
               {filters.fromDate && (
@@ -508,9 +789,26 @@ const handleDeleteMember = (member) => {
               Filters {getActiveFilterCount() > 0 && `(${getActiveFilterCount()})`}
             </Button>
             {
-              isSuperAdmin(user) || usersPermissions?.actions?.download && ( <Tooltip title="Export to CSV">
-              <Button icon={<DownloadOutlined />} onClick={exportToCSV}>Export</Button>
-            </Tooltip>)
+              (isSuperAdmin(user) || usersPermissions?.actions?.download) && (
+              <Dropdown
+                menu={{
+                  items: [
+                    { key: 'csv_current', icon: <TableOutlined />, label: 'CSV (Current View)', onClick: () => exportToCSV() },
+                    { key: 'csv_all', icon: <TableOutlined />, label: 'CSV (All Members)', onClick: exportAllToCSV, disabled: allMembersExportLoading },
+                    { type: 'divider' },
+                    { key: 'print', icon: <PrinterOutlined />, label: 'Print List (A4)', onClick: printMembers },
+                    { type: 'divider' },
+                    { key: 'cert_selected', icon: <FileTextOutlined />, label: `Certificate (${selectedRowKeys.length} selected)`, onClick: handleBatchCertSelected, disabled: selectedRowKeys.length === 0 || isCertDownloading },
+                    { key: 'cert_all', icon: <FileTextOutlined />, label: 'Certificate (All Filtered)', onClick: handleBatchCertAll, disabled: isCertDownloading },
+                  ]
+                }}
+                trigger={['click']}
+              >
+                <Button icon={<DownloadOutlined />} loading={allMembersExportLoading}>
+                  Download
+                </Button>
+              </Dropdown>
+            )
             }
            
             <Tooltip title="Refresh">
@@ -527,6 +825,11 @@ const handleDeleteMember = (member) => {
           dataSource={displayedMembers}
           rowKey="id"
           loading={loading || searchLoading}
+          rowSelection={{
+            selectedRowKeys,
+            onChange: setSelectedRowKeys,
+            preserveSelectedRowKeys: true,
+          }}
           pagination={{
             current:  pagination.current,
             pageSize: pagination.pageSize,
@@ -575,15 +878,25 @@ const handleDeleteMember = (member) => {
                 <Option value="all">All Status</Option>
                 <Option value="active">Active</Option>
                 <Option value="inactive">Inactive</Option>
+                <Option value="closed">Closed (Marriage)</Option>
               </Select>
             </Form.Item>
 
-            <Form.Item label="Payment Status" name="paymentStatus">
-              <Select placeholder="Select Payment Status">
-                <Option value="all">All Payments</Option>
+            <Form.Item label="Join Fees" name="paymentStatus">
+              <Select placeholder="Select Join Fees Payment">
+                <Option value="all">All</Option>
                 <Option value="paid">Paid</Option>
                 <Option value="partial">Partial</Option>
                 <Option value="pending">Pending</Option>
+              </Select>
+            </Form.Item>
+
+            <Form.Item label="Closing Payment" name="closingPaymentStatus">
+              <Select placeholder="Select Closing Payment">
+                <Option value="all">All</Option>
+                <Option value="closedPaid">Paid</Option>
+                <Option value="closedPending">Pending</Option>
+                <Option value="closedPartial">Partial</Option>
               </Select>
             </Form.Item>
 
@@ -626,7 +939,7 @@ const handleDeleteMember = (member) => {
           footer={
             <div className="flex justify-end gap-3">
               <Button onClick={() => setOpenCertificate(false)}>Close</Button>
-              <PDFDownloadLink document={<CertificateCom data={selectedMember} />} fileName={fileName}>
+              <PDFDownloadLink document={<CertificateCom data={selectedMember} memberProgram={programList?.find(p => p.id === selectedMember?.programId) || {}} />} fileName={fileName}>
                 {({ loading: pdfLoading }) => (
                   <Button type="primary" loading={pdfLoading} disabled={pdfLoading}
                     onClick={() => setTimeout(() => setOpenCertificate(false), 500)}>

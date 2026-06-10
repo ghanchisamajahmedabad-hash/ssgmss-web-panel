@@ -162,7 +162,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     borderBottomWidth: 0.5,
     borderBottomColor: BORDER,
-    flex: 1,           // each row shares height equally
   },
 
   cellNo: {
@@ -182,6 +181,12 @@ const styles = StyleSheet.create({
     borderRightWidth: 0.5, borderRightColor: BORDER,
     paddingHorizontal: 4, paddingVertical: 3,
     justifyContent: 'center',
+  },
+  cellVillage: {
+    width: 60,
+    borderRightWidth: 0.5, borderRightColor: BORDER,
+    paddingHorizontal: 2, paddingVertical: 3,
+    alignItems: 'center', justifyContent: 'center',
   },
   cellDate: {
     width: 66,
@@ -347,12 +352,20 @@ const RasidPage = ({ data }) => {
           </Text>
         </View>
 
+        {/* ══ Village ══ */}
+        <View style={styles.infoRow}>
+          <Text>
+            <Text style={styles.infoLabel}>गाँव : </Text>
+            <Text style={styles.infoValue}>{data.village || '—'}</Text>
+          </Text>
+        </View>
+
         {/* ══ Yojana + Sahyog Rashi ══ */}
         <View style={styles.infoRow}>
           <View style={styles.infoLeft}>
             <Text>
               <Text style={styles.infoLabel}>योजना : </Text>
-              <Text style={styles.infoValue}>{data.yojana} Group : {data.group}</Text>
+              <Text style={styles.infoValue}>{data.yojana} वय ग्रुप : {data.ageGroup || '—'}</Text>
             </Text>
           </View>
           <View style={styles.infoRight}>
@@ -376,6 +389,9 @@ const RasidPage = ({ data }) => {
             <View style={styles.cellName}>
               <Text style={[styles.headerCellText, { textAlign: 'center' }]}>नाम</Text>
             </View>
+            <View style={styles.cellVillage}>
+              <Text style={styles.headerCellText}>गाँव</Text>
+            </View>
             <View style={styles.cellDate}>
               <Text style={styles.headerCellText}>दिनांक</Text>
             </View>
@@ -395,6 +411,9 @@ const RasidPage = ({ data }) => {
               </View>
               <View style={styles.cellName}>
                 <Text style={styles.cellTextLeft}>{entry ? entry.name : ''}</Text>
+              </View>
+              <View style={styles.cellVillage}>
+                <Text style={styles.cellTextCenter}>{entry ? entry.village || '' : ''}</Text>
               </View>
               <View style={styles.cellDate}>
                 <Text style={styles.cellTextCenter}>{entry ? entry.date : ''}</Text>

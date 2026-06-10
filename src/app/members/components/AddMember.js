@@ -37,6 +37,7 @@ const AddMember = ({ open, setOpen, programs, agents, currentUser, onSuccess }) 
   // ── Single program (flat) ──────────────────────────────────────────────────
   const [selectedProgram, setSelectedProgram] = useState('')   // single ID string
   const [programDetail,   setProgramDetail]   = useState(null) // single object
+  const [selectedMemberGroup, setSelectedMemberGroup] = useState(null) // member group object
 
   // ── Dates & age ────────────────────────────────────────────────────────────
   const [joinDate, setJoinDate] = useState(dayjs())
@@ -149,6 +150,8 @@ const AddMember = ({ open, setOpen, programs, agents, currentUser, onSuccess }) 
       }); return
     }
 
+    const groups = program?.memberGroups || []
+    const group  = selectedMemberGroup || groups[0] || {}
     const detail = {
       programId:       selectedProgram,
       programName:     program.name,
@@ -160,9 +163,10 @@ const AddMember = ({ open, setOpen, programs, agents, currentUser, onSuccess }) 
       payAmount:       period.payAmount       || 0,
       periodStartDate: period.startDate,
       periodEndDate:   period.endDate,
-      memberGroupId:   program?.memberGroups?.[0]?.id        || '',
-      memberGroupName: program?.memberGroups?.[0]?.groupName || '',
-      memberGroupCode: program?.memberGroups?.[0]?.code      || '',
+      memberGroupId:   group.id        || '',
+      memberGroupName: group.groupName || '',
+      memberGroupCode: group.code      || '',
+      memberGroups:    groups,
       hasPeriod:       true,
     }
     setProgramDetail(detail)
@@ -172,7 +176,7 @@ const AddMember = ({ open, setOpen, programs, agents, currentUser, onSuccess }) 
       setPaidAmount(detail.joinFees)
       form.setFieldsValue({ paidAmount: detail.joinFees })
     }
-  }, [dobDate, selectedProgram, joinDate, programs, joinFeesDone, form])
+  }, [dobDate, selectedProgram, joinDate, programs, joinFeesDone, form, selectedMemberGroup])
 
   // ── Event handlers ─────────────────────────────────────────────────────────
   const handleDobChange = (date) => {
@@ -184,7 +188,15 @@ const AddMember = ({ open, setOpen, programs, agents, currentUser, onSuccess }) 
 
   const handleProgramChange = (programId) => {
     setSelectedProgram(programId || '')
+    setSelectedMemberGroup(null)
     if (!programId) setProgramDetail(null)
+  }
+
+  const handleMemberGroupChange = (groupId) => {
+    const program = programs.find(p => p.id === selectedProgram)
+    const group   = program?.memberGroups?.find(g => g.id === groupId) || null
+    setSelectedMemberGroup(group)
+    if (dobDate) calculateProgramDetail()
   }
 
   const handleJoinDateChange = (date) => { setJoinDate(date) }
@@ -310,11 +322,13 @@ const AddMember = ({ open, setOpen, programs, agents, currentUser, onSuccess }) 
               joinDate={joinDate}
               handleJoinDateChange={handleJoinDateChange}
               programs={programs}
-              selectedProgram={selectedProgram}          // ← single string
-              handleProgramChange={handleProgramChange}  // ← sets single ID
+              selectedProgram={selectedProgram}
+              handleProgramChange={handleProgramChange}
               dobDate={dobDate}
-              programDetail={programDetail}              // ← single object
+              programDetail={programDetail}
               existingMember={existingMember}
+              selectedMemberGroup={selectedMemberGroup}
+              handleMemberGroupChange={handleMemberGroupChange}
             />
 
             <AddedByForm

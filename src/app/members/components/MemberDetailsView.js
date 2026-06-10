@@ -21,6 +21,9 @@ import {
   PlusOutlined, MoneyCollectOutlined, CalculatorOutlined,
   UploadOutlined
 } from '@ant-design/icons'
+import { PDFDownloadLink } from '@react-pdf/renderer'
+import PaymentHistoryPdf from './MemberPdf/PaymentHistoryPdf'
+import MemberDetailsPdf from './MemberPdf/MemberDetailsPdf'
 import { collection, query, where, getDocs, orderBy, doc, getDoc } from 'firebase/firestore'
 import dayjs from 'dayjs'
 import relativeTime from 'dayjs/plugin/relativeTime'
@@ -31,17 +34,19 @@ dayjs.extend(relativeTime)
 const { Title, Text } = Typography
 
 const MemberDetailDrawer = ({ member, visible, onClose, programList }) => {
-  const [transactions,   setTransactions]   = useState([])
-  const [programData,    setProgramData]    = useState(null)   // single object
-  const [loading,        setLoading]        = useState({ transactions: false, program: false })
-  const [previewVisible, setPreviewVisible] = useState(false)
-  const [previewImage,   setPreviewImage]   = useState('')
-  const [activeTab,      setActiveTab]      = useState('overview')
+  const [transactions,        setTransactions]        = useState([])
+  const [closingTransactions, setClosingTransactions] = useState([])
+  const [programData,         setProgramData]          = useState(null)   // single object
+  const [loading,             setLoading]              = useState({ transactions: false, closing: false, program: false })
+  const [previewVisible,      setPreviewVisible]       = useState(false)
+  const [previewImage,        setPreviewImage]          = useState('')
+  const [activeTab,           setActiveTab]             = useState('overview')
 
   useEffect(() => {
     if (member && visible) {
       setActiveTab('overview')
       fetchTransactions()
+      fetchClosingTransactions()
       fetchProgramData()
     }
   }, [member, visible])
@@ -92,6 +97,21 @@ const MemberDetailDrawer = ({ member, visible, onClose, programList }) => {
     }
   }
 
+  const fetchClosingTransactions = async () => {
+    if (!member?.id) return
+    setLoading(prev => ({ ...prev, closing: true }))
+    try {
+      const q    = query(collection(db, 'memberClosingFees'), where('memberId', '==', member.id), orderBy('createdAt', 'desc'))
+      const snap = await getDocs(q)
+      const data = snap.docs.map(d => ({ id: d.id, ...d.data(), date: d.data().createdAt?.toDate?.() || new Date() }))
+      setClosingTransactions(data)
+    } catch (err) {
+      console.error('Error fetching closing transactions:', err)
+    } finally {
+      setLoading(prev => ({ ...prev, closing: false }))
+    }
+  }
+
   const handlePreview = (url) => { window.open(url, '_blank') }
 
   // ── Payment stats from flat member fields ──────────────────────────────────
@@ -101,6 +121,13 @@ const MemberDetailDrawer = ({ member, visible, onClose, programList }) => {
     { title: 'Pending Amount',  value: member?.pendingAmount || 0,     prefix: '₹', color: (member?.pendingAmount || 0) > 0 ? '#ff4d4f' : '#52c41a', icon: <ClockCircleOutlined />, description: 'Balance to be paid' },
     { title: 'Payment Progress',value: member?.paymentPercentage || 0, prefix: '',  suffix: '%', color: member?.paymentPercentage === 100 ? '#52c41a' : member?.paymentPercentage > 0 ? '#faad14' : '#ff4d4f', icon: <PercentageOutlined />, description: 'Completion' },
   ]
+
+  const closingStats = (member?.closing_totalAmount || 0) > 0 ? [
+    { title: 'Total Closing',  value: member?.closing_totalAmount || 0,    prefix: '₹', color: '#722ed1', icon: <MoneyCollectOutlined />, description: 'Total closing amount' },
+    { title: 'Closing Paid',   value: member?.closing_paidAmount || 0,     prefix: '₹', color: '#52c41a', icon: <CheckCircleOutlined />, description: 'Closing amount paid' },
+    { title: 'Closing Pending',value: member?.closing_pendingAmount || 0,  prefix: '₹', color: (member?.closing_pendingAmount || 0) > 0 ? '#ff4d4f' : '#52c41a', icon: <ClockCircleOutlined />, description: 'Closing balance' },
+    { title: 'Closing Count',  value: member?.totalClosingCount || 0,      prefix: '',  suffix: '',   color: '#1890ff', icon: <CalculatorOutlined />, description: `Paid: ${member?.paidClosingCount || 0} / Pending: ${member?.pendingClosingCount || 0}` },
+  ] : []
 
   const documents = [
     { type: 'Member Photo',            url: member?.photoURL,            icon: <UserOutlined />,    color: '#1890ff', required: true  },
@@ -156,6 +183,19 @@ const MemberDetailDrawer = ({ member, visible, onClose, programList }) => {
               <span><Text type="secondary">Paid:</Text> <Text strong style={{ color: '#52c41a' }}>₹{member.paidAmount || 0}</Text></span>
               <span><Text type="secondary">Pending:</Text> <Text strong style={{ color: (member.pendingAmount || 0) > 0 ? '#ff4d4f' : '#52c41a' }}>₹{member.pendingAmount || 0}</Text></span>
             </div>
+
+            {(member?.closing_totalAmount || 0) > 0 && (
+              <>
+                <Divider className="my-2" />
+                <div className="text-sm font-medium text-purple-700 mb-1"><MoneyCollectOutlined className="mr-1" />Closing</div>
+                <div className="flex gap-6 text-sm">
+                  <span><Text type="secondary">Total:</Text> <Text strong>₹{member.closing_totalAmount}</Text></span>
+                  <span><Text type="secondary">Paid:</Text> <Text strong style={{ color: '#52c41a' }}>₹{member.closing_paidAmount || 0}</Text></span>
+                  <span><Text type="secondary">Pending:</Text> <Text strong style={{ color: (member.closing_pendingAmount || 0) > 0 ? '#ff4d4f' : '#52c41a' }}>₹{member.closing_pendingAmount || 0}</Text></span>
+                  <span><Text type="secondary">Count:</Text> <Text strong>{member.paidClosingCount || 0}/{member.totalClosingCount || 0} paid</Text></span>
+                </div>
+              </>
+            )}
           </div>
         </div>
       </Card>
@@ -207,6 +247,49 @@ const MemberDetailDrawer = ({ member, visible, onClose, programList }) => {
     },
   ]
 
+  // ── Closing transaction columns ──────────────────────────────────────────────
+  const closingTransactionColumns = [
+    {
+      title: 'Transaction', key: 'transaction', width: 280,
+      render: (_, r) => (
+        <div className="space-y-1">
+          <div className="flex items-center gap-2">
+            <div className="w-9 h-9 rounded-full flex items-center justify-center bg-purple-50">
+              <MoneyCollectOutlined className="text-purple-600" style={{ fontSize: 14 }} />
+            </div>
+            <div>
+              <div className="font-semibold text-sm">Closing Payment</div>
+              <div className="text-xs text-gray-500">{dayjs(r.date).format('DD MMM YYYY, hh:mm A')}</div>
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-1 mt-1">
+            <Tag style={{ fontSize: 10, margin: 0 }} color="purple">{r.groupId?.slice(-6) || '—'}</Tag>
+            {r.programName && <Tag style={{ fontSize: 10, margin: 0 }} color="pink">{r.programName}</Tag>}
+          </div>
+          {r.paymentNote && <div className="text-xs text-gray-500 bg-gray-50 p-1.5 rounded mt-1">{r.paymentNote}</div>}
+        </div>
+      ),
+    },
+    {
+      title: 'Amount & Mode', key: 'amt', width: 140,
+      render: (_, r) => (
+        <div>
+          <div className="text-lg font-bold text-purple-600">₹{(r.amount || r.amountPaid || 0).toLocaleString()}</div>
+          <Tag color={{ cash: 'green', online: 'blue', cheque: 'purple' }[r.paymentMode] || 'default'} className="uppercase" style={{ fontSize: 10 }}>
+            {r.paymentMode}
+          </Tag>
+          {r.transactionId && <div className="text-2xs font-mono bg-gray-100 px-1.5 py-0.5 rounded mt-1 truncate max-w-[130px]" title={r.transactionId}>ID: {r.transactionId}</div>}
+        </div>
+      ),
+    },
+    {
+      title: 'Date', key: 'txnDate', width: 100,
+      render: (_, r) => (
+        <div className="text-sm">{r.transactionDate || dayjs(r.date).format('DD/MM/YYYY')}</div>
+      ),
+    },
+  ]
+
   return (
     <>
       <Drawer
@@ -229,35 +312,70 @@ const MemberDetailDrawer = ({ member, visible, onClose, programList }) => {
         open={visible}
         width={1000}
         destroyOnClose
+        extra={
+          <Space size={4}>
+            <PDFDownloadLink
+              document={<MemberDetailsPdf member={member} />}
+              fileName={`${member?.registrationNumber || 'member'}_details.pdf`}
+            >
+              {({ loading }) => (
+                <Button icon={<FilePdfOutlined />} size="small" loading={loading}
+                  style={{ background: '#1B385A', borderColor: '#1B385A', color: '#fff' }}>
+                  Profile
+                </Button>
+              )}
+            </PDFDownloadLink>
+            <PDFDownloadLink
+              document={<PaymentHistoryPdf member={member} transactions={transactions} closingTransactions={closingTransactions} />}
+              fileName={`${member?.registrationNumber || 'member'}_payment_history.pdf`}
+            >
+              {({ loading: pdfLoading }) => (
+                <Button icon={<FilePdfOutlined />} size="small" loading={pdfLoading}
+                  style={{ background: '#D3292F', borderColor: '#D3292F', color: '#fff' }}
+                  disabled={!transactions.length && !closingTransactions.length}>
+                  Payments
+                </Button>
+              )}
+            </PDFDownloadLink>
+          </Space>
+        }
       >
-        {/* Quick stats */}
-        <Card className="mb-4" bodyStyle={{ padding: 0 }}>
-          <Row gutter={0}>
-            {paymentStats.map((s, i) => (
-              <Col xs={24} sm={12} lg={6} key={i} className="border-r last:border-r-0">
-                <div className="p-4">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <div className="text-sm text-gray-500">{s.title}</div>
-                      <div className="text-2xl font-bold mt-1" style={{ color: s.color }}>
-                        {s.prefix}{s.value?.toLocaleString()}{s.suffix}
-                      </div>
-                      <div className="text-xs text-gray-400 mt-1">{s.description}</div>
-                    </div>
-                    <div className="w-12 h-12 rounded-full flex items-center justify-center" style={{ backgroundColor: `${s.color}20` }}>
-                      {React.cloneElement(s.icon, { style: { color: s.color, fontSize: '20px' } })}
-                    </div>
-                  </div>
+        {/* Quick stats — compact */}
+        <div className="mb-4 grid grid-cols-2 sm:grid-cols-4 gap-2">
+          {paymentStats.map((s, i) => (
+            <div key={i} className="bg-white rounded-lg border p-3 flex items-center gap-3">
+              <div className="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0" style={{ backgroundColor: `${s.color}15` }}>
+                {React.cloneElement(s.icon, { style: { color: s.color, fontSize: '16px' } })}
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-2xs text-gray-500 truncate">{s.title}</div>
+                <div className="text-base font-bold" style={{ color: s.color }}>
+                  {s.prefix}{s.value?.toLocaleString()}{s.suffix}
                 </div>
-              </Col>
-            ))}
-          </Row>
-        </Card>
+                <div className="text-2xs text-gray-400 truncate">{s.description}</div>
+              </div>
+            </div>
+          ))}
+          {closingStats.map((s, i) => (
+            <div key={`cls-${i}`} className="bg-white rounded-lg border p-3 flex items-center gap-3">
+              <div className="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0" style={{ backgroundColor: `${s.color}15` }}>
+                {React.cloneElement(s.icon, { style: { color: s.color, fontSize: '16px' } })}
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-2xs text-gray-500 truncate">{s.title}</div>
+                <div className="text-base font-bold" style={{ color: s.color }}>
+                  {s.prefix}{s.value?.toLocaleString()}{s.suffix}
+                </div>
+                <div className="text-2xs text-gray-400 truncate">{s.description}</div>
+              </div>
+            </div>
+          ))}
+        </div>
 
         <Tabs activeKey={activeTab} onChange={setActiveTab} items={[
           { key: 'overview',     label: <span><UserOutlined /> Overview</span> },
           { key: 'program',      label: <span><TrophyOutlined /> Program</span> },
-          { key: 'transactions', label: <span><CreditCardOutlined /> Transactions {transactions.length > 0 && `(${transactions.length})`}</span> },
+          { key: 'transactions', label: <span><CreditCardOutlined /> Transactions ({transactions.length + closingTransactions.length})</span> },
           { key: 'documents',    label: <span><FileTextOutlined /> Documents ({documents.filter(d=>d.url).length}/{documents.length})</span> },
         ]} />
 
@@ -267,7 +385,7 @@ const MemberDetailDrawer = ({ member, visible, onClose, programList }) => {
             <Row gutter={[16, 16]}>
               {/* Personal info */}
               <Col xs={24} lg={12}>
-                <Card title={<span><UserOutlined className="text-blue-600 mr-2" />Personal Information</span>} className="h-full">
+                <Card size="small" title={<span className="text-sm"><UserOutlined className="text-blue-600 mr-2" />Personal Information</span>} className="h-full">
                   <div className="flex items-center gap-3 mb-4">
                     <Avatar src={member?.photoURL} size={80} icon={<UserOutlined />} className="border-2 border-blue-500" />
                     <div>
@@ -296,7 +414,7 @@ const MemberDetailDrawer = ({ member, visible, onClose, programList }) => {
 
               {/* Contact & Address */}
               <Col xs={24} lg={12}>
-                <Card title={<span><HomeOutlined className="text-green-600 mr-2" />Contact & Address</span>} className="h-full">
+                <Card size="small" title={<span className="text-sm"><HomeOutlined className="text-green-600 mr-2" />Contact & Address</span>} className="h-full">
                   <div className="space-y-3">
                     <div className="flex items-center gap-3"><PhoneOutlined className="text-blue-600" /><div><div className="font-semibold">{member?.phone}</div><div className="text-xs text-gray-500">Primary</div></div></div>
                     {member?.phoneAlt && <div className="flex items-center gap-3 ml-6"><PhoneOutlined className="text-gray-400 text-sm" /><div className="text-gray-700">{member.phoneAlt}</div></div>}
@@ -316,7 +434,7 @@ const MemberDetailDrawer = ({ member, visible, onClose, programList }) => {
 
               {/* Guardian */}
               <Col xs={24}>
-                <Card title={<span><SafetyOutlined className="text-orange-600 mr-2" />Guardian Information</span>}>
+                <Card size="small" title={<span className="text-sm"><SafetyOutlined className="text-orange-600 mr-2" />Guardian Information</span>}>
                   <div className="flex items-start gap-4">
                     <Avatar src={member?.guardianPhotoURL} size={70} icon={<UserOutlined />} className="border-2 border-orange-500" />
                     <div>
@@ -329,7 +447,7 @@ const MemberDetailDrawer = ({ member, visible, onClose, programList }) => {
             </Row>
 
             {/* Program summary on overview */}
-            <Card title={<span><TrophyOutlined className="text-purple-600 mr-2" />Program</span>}>
+            <Card size="small" title={<span className="text-sm"><TrophyOutlined className="text-purple-600 mr-2" />Program</span>}>
               {renderProgramCard()}
             </Card>
           </div>
@@ -338,31 +456,52 @@ const MemberDetailDrawer = ({ member, visible, onClose, programList }) => {
         {/* ── Program Tab ──────────────────────────────────────────────────── */}
         {activeTab === 'program' && (
           <div className="mt-4">
-            <Card>
-              <div className="flex justify-between items-center mb-4">
-                <Title level={4} className="mb-0">Enrolled Program</Title>
+            <Card size="small">
+              <div className="flex justify-between items-center mb-3">
+                <span className="font-semibold">Enrolled Program</span>
               </div>
               {renderProgramCard()}
 
-              {/* Financial breakdown */}
+              {/* Financial breakdown — Join Fees */}
               {member?.programId && (
-                <div className="mt-6 pt-6 border-t">
-                  <Title level={5} className="mb-4">Financial Summary</Title>
-                  <Row gutter={[16, 16]}>
+                <div className="mt-4 pt-4 border-t">
+                  <span className="font-semibold text-sm mb-3 block"><DollarOutlined className="mr-1" />Financial Summary — Join Fees</span>
+                  <div className="grid grid-cols-3 gap-3">
                     {[
                       { label: 'Total Fees',   value: member.joinFees    || 0, color: '#1890ff' },
                       { label: 'Paid',         value: member.paidAmount  || 0, color: '#52c41a' },
                       { label: 'Pending',      value: member.pendingAmount || 0, color: (member.pendingAmount||0) > 0 ? '#ff4d4f' : '#52c41a' },
                     ].map((item, i) => (
-                      <Col xs={24} sm={8} key={i}>
-                        <Card className="text-center" bodyStyle={{ padding: 20 }}>
-                          <div className="text-2xl font-bold mb-1" style={{ color: item.color }}>₹{item.value.toLocaleString()}</div>
-                          <div className="text-gray-500">{item.label}</div>
-                          <Progress percent={member.joinFees ? Math.round((item.value / member.joinFees) * 100) : 0} showInfo={false} strokeColor={item.color} className="mt-2" />
-                        </Card>
-                      </Col>
+                      <div key={i} className="text-center bg-gray-50 rounded-lg p-3">
+                        <div className="text-lg font-bold" style={{ color: item.color }}>₹{item.value.toLocaleString()}</div>
+                        <div className="text-2xs text-gray-500">{item.label}</div>
+                        <Progress percent={member.joinFees ? Math.round((item.value / member.joinFees) * 100) : 0} showInfo={false} strokeColor={item.color} size="small" className="mt-1" />
+                      </div>
                     ))}
-                  </Row>
+                  </div>
+                </div>
+              )}
+
+              {(member?.closing_totalAmount || 0) > 0 && (
+                <div className="mt-4 pt-4 border-t">
+                  <span className="font-semibold text-sm mb-3 block"><MoneyCollectOutlined className="mr-1" />Financial Summary — Closing</span>
+                  <div className="grid grid-cols-3 gap-3">
+                    {[
+                      { label: 'Total Closing', value: member.closing_totalAmount || 0, color: '#722ed1' },
+                      { label: 'Paid',          value: member.closing_paidAmount || 0,  color: '#52c41a' },
+                      { label: 'Pending',       value: member.closing_pendingAmount || 0, color: (member.closing_pendingAmount||0) > 0 ? '#ff4d4f' : '#52c41a' },
+                    ].map((item, i) => (
+                      <div key={i} className="text-center bg-gray-50 rounded-lg p-3">
+                        <div className="text-lg font-bold" style={{ color: item.color }}>₹{item.value.toLocaleString()}</div>
+                        <div className="text-2xs text-gray-500">{item.label}</div>
+                        <Progress percent={member.closing_totalAmount ? Math.round((item.value / member.closing_totalAmount) * 100) : 0} showInfo={false} strokeColor={item.color} size="small" className="mt-1" />
+                      </div>
+                    ))}
+                  </div>
+                  <div className="text-xs text-gray-500 mt-2 text-center">
+                    Count: {member.paidClosingCount || 0} paid / {member.totalClosingCount || 0} total
+                    {member.pendingClosingCount > 0 && <span className="text-orange-500"> — {member.pendingClosingCount} pending</span>}
+                  </div>
                 </div>
               )}
             </Card>
@@ -371,51 +510,82 @@ const MemberDetailDrawer = ({ member, visible, onClose, programList }) => {
 
         {/* ── Transactions Tab ─────────────────────────────────────────────── */}
         {activeTab === 'transactions' && (
-          <div className="mt-4">
-            <Card>
-              <div className="flex justify-between items-center mb-4">
-                <Title level={4} className="mb-0">Payment Transactions</Title>
-                <Text type="secondary">{transactions.length} record(s) • ₹{member?.paidAmount?.toLocaleString()} paid</Text>
+          <div className="mt-4 space-y-6">
+            {/* ── Join-Fee Transactions ── */}
+            <Card size="small">
+              <div className="flex justify-between items-center mb-3">
+                <span className="font-semibold text-sm"><DollarOutlined className="text-blue-600 mr-1" />Join Fee Transactions</span>
+                <Text type="secondary" style={{ fontSize: 11 }}>{transactions.length} record(s) • ₹{member?.paidAmount?.toLocaleString()} paid</Text>
               </div>
 
               {transactions.length > 0 ? (
                 <Table columns={transactionColumns} dataSource={transactions} rowKey="id"
-                  loading={loading.transactions} pagination={false} size="middle" />
+                  loading={loading.transactions} pagination={false} size="small" />
               ) : (
-                <Empty description="No transactions found" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+                <Empty description="No join-fee transactions" image={Empty.PRESENTED_IMAGE_SIMPLE} />
               )}
 
               {transactions.length > 0 && (
-                <Row gutter={[16, 16]} className="mt-6 pt-6" style={{ borderTop: '1px solid #f0f0f0' }}>
-                  <Col xs={24} md={12}>
-                    <Card title="Summary" size="small">
-                      <Descriptions column={1} size="small">
-                        <Descriptions.Item label="Total">{transactions.length} transaction(s)</Descriptions.Item>
-                        <Descriptions.Item label="Total Amount"><Text strong>₹{transactions.reduce((s,t) => s+(t.amount||0), 0).toLocaleString()}</Text></Descriptions.Item>
-                        <Descriptions.Item label="Last">{transactions[0] ? dayjs(transactions[0].date).format('DD MMM YYYY') : 'N/A'}</Descriptions.Item>
-                        <Descriptions.Item label="Status">
-                          <Badge status={member?.paymentPercentage === 100 ? 'success' : 'warning'}
-                            text={member?.paymentPercentage === 100 ? 'Fully Paid' : 'Partially Paid'} />
-                        </Descriptions.Item>
-                      </Descriptions>
-                    </Card>
-                  </Col>
-                  <Col xs={24} md={12}>
-                    <Card title="Payment Methods" size="small">
-                      {Object.entries(
-                        transactions.reduce((acc, t) => {
-                          const m = t.paymentMode?.toLowerCase() || 'unknown'
-                          acc[m] = (acc[m] || 0) + 1; return acc
-                        }, {})
-                      ).map(([mode, count], i) => (
-                        <div key={i} className="flex items-center justify-between py-2">
-                          <Tag color={{ cash:'green', online:'blue', cheque:'purple' }[mode] || 'default'} className="uppercase">{mode}</Tag>
-                          <span className="font-medium">{count} txn{count > 1 ? 's' : ''}</span>
-                        </div>
-                      ))}
-                    </Card>
-                  </Col>
-                </Row>
+                <div className="mt-3 pt-3 border-t flex gap-4 flex-wrap text-xs text-gray-500">
+                  <span>Total: <b>{transactions.length} txn</b></span>
+                  <span>Amount: <b className="text-blue-600">₹{transactions.reduce((s,t) => s+(t.amount||0), 0).toLocaleString()}</b></span>
+                  <span>Last: {transactions[0] ? dayjs(transactions[0].date).format('DD MMM YYYY') : 'N/A'}</span>
+                  <span>Status:
+                    <Badge status={member?.paymentPercentage === 100 ? 'success' : 'warning'}
+                      text={<span style={{fontSize:11}}>{member?.paymentPercentage === 100 ? 'Fully Paid' : 'Partially Paid'}</span>} />
+                  </span>
+                  <span>Methods:
+                    {Object.entries(
+                      transactions.reduce((acc, t) => {
+                        const m = t.paymentMode?.toLowerCase() || 'unknown'
+                        acc[m] = (acc[m] || 0) + 1; return acc
+                      }, {})
+                    ).map(([mode, count], i) => (
+                      <Tag key={i} color={{ cash:'green', online:'blue', cheque:'purple' }[mode] || 'default'}>
+                        {mode} ×{count}
+                      </Tag>
+                    ))}
+                  </span>
+                </div>
+              )}
+            </Card>
+
+            {/* ── Closing Transactions ── */}
+            <Card size="small">
+              <div className="flex justify-between items-center mb-3">
+                <span className="font-semibold text-sm"><MoneyCollectOutlined className="text-purple-600 mr-1" />Closing Payment Transactions</span>
+                <Text type="secondary" style={{ fontSize: 11 }}>{closingTransactions.length} record(s) • ₹{member?.closing_paidAmount?.toLocaleString()} paid</Text>
+              </div>
+
+              {closingTransactions.length > 0 ? (
+                <Table columns={closingTransactionColumns} dataSource={closingTransactions} rowKey="id"
+                  loading={loading.closing} pagination={false} size="small" />
+              ) : (
+                <Empty description="No closing transactions" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+              )}
+
+              {closingTransactions.length > 0 && (
+                <div className="mt-3 pt-3 border-t flex gap-4 flex-wrap text-xs text-gray-500">
+                  <span>Total: <b>{closingTransactions.length} txn</b></span>
+                  <span>Amount: <b className="text-purple-600">₹{closingTransactions.reduce((s,t) => s+(t.amount||t.amountPaid||0), 0).toLocaleString()}</b></span>
+                  <span>Last: {closingTransactions[0] ? dayjs(closingTransactions[0].date).format('DD MMM YYYY') : 'N/A'}</span>
+                  <span>Status:
+                    <Badge status={(member?.closing_pendingAmount || 0) === 0 ? 'success' : 'warning'}
+                      text={<span style={{fontSize:11}}>{(member?.closing_pendingAmount || 0) === 0 ? 'Fully Paid' : 'Pending'}</span>} />
+                  </span>
+                  <span>Methods:
+                    {Object.entries(
+                      closingTransactions.reduce((acc, t) => {
+                        const m = t.paymentMode?.toLowerCase() || 'unknown'
+                        acc[m] = (acc[m] || 0) + 1; return acc
+                      }, {})
+                    ).map(([mode, count], i) => (
+                      <Tag key={i} color={{ cash:'green', online:'blue', cheque:'purple' }[mode] || 'default'} style={{fontSize:9, margin:0, marginLeft:4}}>
+                        {mode} ×{count}
+                      </Tag>
+                    ))}
+                  </span>
+                </div>
               )}
             </Card>
           </div>

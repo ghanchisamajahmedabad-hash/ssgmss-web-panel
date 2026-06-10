@@ -53,12 +53,16 @@ import {
 import dayjs from 'dayjs';
 import { collection, query, where, getDocs, orderBy, limit, doc, getDoc } from 'firebase/firestore';
 import { db } from '../../lib/firbase-client';
+import { useAuth } from '@/components/Base/AuthProvider';
 
 const { Title, Text } = Typography;
 const { Option } = Select;
 const { RangePicker } = DatePicker;
 
 const DashboardHomePage = () => {
+  const { user } = useAuth();
+  const isSuperAdmin = user?.role === 'superadmin';
+  const can = (key) => isSuperAdmin || user?.permissions?.actions?.[key];
   const [loading, setLoading] = useState(false);
   const [stats, setStats] = useState({
     totalMembers: 0,
@@ -890,7 +894,7 @@ const fetchProgramDetailsStats = async () => {
         </div>
 
         {/* Main Stats Cards */}
-        <Row gutter={[16, 16]} className="mb-6">
+        {can('dashboard_summary') && <Row gutter={[16, 16]} className="mb-6">
           {mainStatsCards.map((stat, index) => (
             <Col xs={24} sm={12} lg={6} key={index}>
               <Card className="shadow-sm hover:shadow-md transition-all duration-300 h-full">
@@ -930,10 +934,10 @@ const fetchProgramDetailsStats = async () => {
               </Card>
             </Col>
           ))}
-        </Row>
+        </Row>}
 
         {/* Join Fees Stats Cards */}
-        <Row gutter={[16, 16]} className="mb-6">
+        {can('dashboard_join_fees') && <Row gutter={[16, 16]} className="mb-6">
           {joinFeesStatsCards.map((stat, index) => (
             <Col xs={24} sm={8} lg={8} key={index}>
               <Card className="shadow-sm hover:shadow-md transition-all duration-300 h-full bg-gradient-to-br from-white to-gray-50">
@@ -959,10 +963,10 @@ const fetchProgramDetailsStats = async () => {
               </Card>
             </Col>
           ))}
-        </Row>
+        </Row>}
 
         {/* Closing Stats Cards */}
-        <Row gutter={[16, 16]} className="mb-6">
+        {can('dashboard_closing') && <Row gutter={[16, 16]} className="mb-6">
           {closingStatsCards.map((stat, index) => (
             <Col xs={24} sm={8} lg={8} key={index}>
               <Card className="shadow-sm hover:shadow-md transition-all duration-300 h-full bg-gradient-to-br from-white to-gray-50">
@@ -988,11 +992,11 @@ const fetchProgramDetailsStats = async () => {
               </Card>
             </Col>
           ))}
-        </Row>
+        </Row>}
 
         {/* Program Stats Row */}
        
-<Row gutter={[16, 16]} className="mb-6">
+{can('dashboard_programs') && <Row gutter={[16, 16]} className="mb-6">
   <Col xs={24} lg={24}>
     <Card 
       title={
@@ -1099,7 +1103,7 @@ const fetchProgramDetailsStats = async () => {
       </Row>
     </Card>
   </Col>
-</Row>
+</Row>}
          
 
         {/* Recent Members and Top Agents */}

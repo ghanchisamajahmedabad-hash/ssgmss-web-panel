@@ -9,7 +9,12 @@ import { userEmailSendTampalet } from "../../utils/emailTamplates";
 const db = admin.firestore();
 const auth = admin.auth();
 
-
+const DEFAULT_PERMISSIONS = {
+  pages: ['/'],
+  actions: { create: false, edit: false, delete: false, view: true, download: false },
+  moduleAccess: { dashboard: true },
+  pagePermissions: {},
+};
 
 // Helper to send welcome email
 const sendWelcomeEmail = async (email, name, tempPassword, loginUrl) => {
@@ -140,8 +145,7 @@ export async function GET(req) {
     // Get total count
     const countQuery = query;
     const countSnapshot = await countQuery.get();
-    const total = countSnapshot.size;
-    const totalPages = Math.ceil(total / limit);
+    const countTotal = countSnapshot.size;
 
     // Apply pagination
     const offset = (page - 1) * limit;
@@ -152,9 +156,36 @@ export async function GET(req) {
       .get();
 
     const users = [];
+    const userDocIds = new Set();
     usersSnapshot.forEach(doc => {
       users.push({ id: doc.id, ...doc.data() });
+      userDocIds.add(doc.id);
     });
+
+    // Also fetch agents that don't have a users/{uid} doc, so they appear in the user list
+    if (!role || role === 'all' || role === 'agent') {
+      const agentsQuery = db.collection('agents').orderBy('createdAt', 'desc').limit(limit);
+      const agentsSnap = await agentsQuery.get();
+      agentsSnap.forEach(doc => {
+        if (!userDocIds.has(doc.id)) {
+          const a = doc.data();
+          users.push({
+            id: doc.id,
+            uid: a.uid || doc.id,
+            name: a.name || '',
+            email: a.email || '',
+            phone: a.phone1 || '',
+            photoURL: a.photoURL || '',
+            role: 'agent',
+            status: a.status || 'active',
+            permissions: a.permissions || null,
+            createdAt: a.createdAt || null,
+          });
+        }
+      });
+    }
+
+    const totalPages = Math.ceil(Math.max(countTotal, users.length) / limit);
 
     return NextResponse.json({
       success: true,
@@ -162,7 +193,7 @@ export async function GET(req) {
       pagination: {
         page,
         limit,
-        total,
+        total: users.length + (page - 1) * limit,
         totalPages,
         hasNextPage: page < totalPages,
         hasPrevPage: page > 1
@@ -420,16 +451,36 @@ export async function PUT(req) {
       );
     }
 
-    // Get target user
+    // Get target user — auto-create doc if missing and permissions are being set
+    let targetUser;
     const userDoc = await db.collection("users").doc(id).get();
     if (!userDoc.exists) {
-      return NextResponse.json(
-        { success: false, message: "User not found" },
-        { status: 404 }
-      );
+      if (permissions === undefined) {
+        return NextResponse.json(
+          { success: false, message: "User not found" },
+          { status: 404 }
+        );
+      }
+      // Create user doc on the fly with basic info from Firebase Auth
+      let fbUser = null;
+      try { fbUser = await admin.auth().getUser(id); } catch {}
+      const now = admin.firestore.FieldValue.serverTimestamp();
+      await db.collection("users").doc(id).set({
+        uid: id,
+        name: fbUser?.displayName || '',
+        email: fbUser?.email || '',
+        phone: fbUser?.phoneNumber?.replace('+91', '') || '',
+        photoURL: fbUser?.photoURL || '',
+        role: 'agent',
+        status: 'active',
+        permissions: DEFAULT_PERMISSIONS,
+        createdAt: now,
+        updatedAt: now,
+      });
+      targetUser = { uid: id, role: 'agent', permissions: DEFAULT_PERMISSIONS };
+    } else {
+      targetUser = userDoc.data();
     }
-
-    const targetUser = userDoc.data();
     
     // Permission checks
     // 1. Users can edit their own profile (except role)

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import admin from "../db/firebaseAdmin";
 import { checkRole, verifyToken } from "../../../../middleware/authMiddleware";
+import { creditCommissionStandalone } from "../commission/route";
 
 const db = admin.firestore();
 const INC = admin.firestore.FieldValue.increment;
@@ -12,11 +13,11 @@ const chunkArr = (arr, n) =>
     arr.slice(i * n, i * n + n)
   );
 
-// Fetch closing_payment docs for a member — returns all pending docs for that member
+// Fetch closing_payment docs for a member — returns pending or partially-paid docs
 const fetchClosingPaymentDocs = async (memberId) => {
   const snap = await db.collection("closing_payment")
     .where("memberId", "==", memberId)
-    .where("status", "==", "pending")
+    .where("status", "in", ["pending", "partial"])
     .get();
   return snap.docs.map(d => ({ id: d.id, ...d.data() }));
 };
@@ -63,6 +64,7 @@ export async function POST(req) {
     let grandTotalPaid  = 0;
     let grandTotalCount = 0;
     const memberAllocations = {};
+    const commissionMembers = [];
 
     // ── Per-member loop ────────────────────────────────────────────────────
     for (const payment of memberPayments) {
@@ -76,6 +78,7 @@ export async function POST(req) {
       const pId            = memberData.programId   || '';
       const programName    = memberData.programName || '';
       const closingPending = Number(memberData.closing_pendingAmount || 0);
+      const pendingCnt     = Number(memberData.pendingClosingCount  || 0);
 
       if (closingPending <= 0) {
         console.warn(`[closingPayment] Member ${memberId} has no closing_pendingAmount — skipping`);
@@ -86,25 +89,10 @@ export async function POST(req) {
       const deduction       = Math.min(requestedAmount, closingPending);
       if (deduction <= 0) continue;
 
-      // ── Update member doc ────────────────────────────────────────────────
-      const closingTotal = memberData.closing_totalAmount || 0;
-      const newPaid      = (memberData.closing_paidAmount || 0) + deduction;
-      const paymentPct   = closingTotal > 0 ? Math.min((newPaid / closingTotal) * 100, 100) : 0;
-      const isFullyPaid  = (closingPending - deduction) <= 0;
-
-      batch.update(memberRef, {
-        closing_paidAmount:         INC(deduction),
-        closing_pendingAmount:      INC(-deduction),
-        closing_paymentPercentage:  Number(paymentPct.toFixed(2)),
-        paidClosingCount:           INC(1),
-        pendingClosingCount:        INC(-1),
-        updated_at:                 timestamp,
-      });
-
       // ── Update closing_payment collection ────────────────────────────────
-      // Find all pending closing_payment docs for this member and update them.
-      // Strategy: distribute deduction across pending docs oldest-first,
-      // marking each as "paid" or "partial" as the amount covers them.
+      // Distribute deduction across pending/partial closing_payment docs oldest-first,
+      // marking each as "paid" or "partial".
+      let paidDocsCount = 0;
       try {
         const pendingClosingDocs = await fetchClosingPaymentDocs(memberId);
 
@@ -120,18 +108,16 @@ export async function POST(req) {
 
           if (docPending <= 0) continue;
 
-          const coverAmount = Math.min(remainingDeduction, docPending);
-          const newDocPaid  = docPaidSoFar + coverAmount;
-          const docFullyPaid = newDocPaid >= docTotal;
+          const coverAmount   = Math.min(remainingDeduction, docPending);
+          const newDocPaid    = docPaidSoFar + coverAmount;
+          const docFullyPaid  = newDocPaid >= docTotal;
+          const wasPending    = cpDoc.status === 'pending';
 
           batch.update(cpRef, {
-            // payment tracking
             paidAmount:        newDocPaid,
             pendingAmount:     Math.max(0, docTotal - newDocPaid),
             status:            docFullyPaid ? "paid" : "partial",
             paymentPercentage: docTotal > 0 ? Number(((newDocPaid / docTotal) * 100).toFixed(2)) : 100,
-
-            // payment details
             lastPaymentAmount:   coverAmount,
             lastPaymentDate:     paymentDate || now,
             lastPaymentMethod:   paymentMethod,
@@ -142,39 +128,46 @@ export async function POST(req) {
             lastPaidBy:          authResult.user.uid,
             lastPaidByName:      authResult.user.displayName || null,
             lastUpdatedAt:       timestamp,
-
-            // append to payment history array
             paymentHistory: admin.firestore.FieldValue.arrayUnion({
-              amount:          coverAmount,
-              paymentDate:     paymentDate || now,
-              paymentMethod,
-              paymentGroupId:  paymentGroupRef.id,
-              transactionId:   transactionId || null,
-              fileUrl:         fileUrl       || null,
-              note:            paymentNote   || null,
-              paidBy:          authResult.user.uid,
-              paidAt:          now,
+              amount: coverAmount, paymentDate: paymentDate || now, paymentMethod,
+              paymentGroupId: paymentGroupRef.id, transactionId: transactionId || null,
+              fileUrl: fileUrl || null, note: paymentNote || null,
+              paidBy: authResult.user.uid, paidAt: now,
             }),
           });
 
           remainingDeduction -= coverAmount;
+          if (wasPending) paidDocsCount += 1;
         }
       } catch (cpErr) {
-        // Non-fatal — log but don't fail the whole payment
         console.error(`[closingPayment] closing_payment update failed for ${memberId}:`, cpErr);
       }
 
-      // ── Global program stats ──────────────────────────────────────────────
+      // ── Update member doc (after counting actual paid docs) ──────────────
+      const closingTotal = memberData.closing_totalAmount || 0;
+      const newPaid      = (memberData.closing_paidAmount || 0) + deduction;
+      const paymentPct   = closingTotal > 0 ? Math.min((newPaid / closingTotal) * 100, 100) : 0;
+      const decrementCnt = Math.min(paidDocsCount, pendingCnt);
+
+      batch.update(memberRef, {
+        closing_paidAmount:         INC(deduction),
+        closing_pendingAmount:      INC(-deduction),
+        closing_paymentPercentage:  Number(paymentPct.toFixed(2)),
+        paidClosingCount:           INC(paidDocsCount),
+        pendingClosingCount:        decrementCnt > 0 ? INC(-decrementCnt) : INC(0),
+        updated_at:                 timestamp,
+      });
+
+      // ── Program stats — use actual paidDocsCount ─────────────────────────
       if (pId) {
         batch.set(db.collection('programs').doc(pId), {
           totalClosingPaidAmount:    INC(deduction),
           totalClosingPendingAmount: INC(-deduction),
-          paidClosingCount:          INC(1),
-          pendingClosingCount:       INC(-1),
+          paidClosingCount:          INC(paidDocsCount),
+          pendingClosingCount:       INC(-paidDocsCount),
           updated_at:                timestamp,
         }, { merge: true });
 
-        // ── Agent program stats ───────────────────────────────────────────
         if (!updatedProgramStats[pId])
           updatedProgramStats[pId] = {
             totalClosingPaidAmount: 0, totalClosingPendingAmount: 0,
@@ -182,18 +175,38 @@ export async function POST(req) {
           };
         updatedProgramStats[pId].totalClosingPaidAmount     = (updatedProgramStats[pId].totalClosingPaidAmount     || 0) + deduction;
         updatedProgramStats[pId].totalClosingPendingAmount  = (updatedProgramStats[pId].totalClosingPendingAmount  || 0) - deduction;
-        updatedProgramStats[pId].paidClosingCount           = (updatedProgramStats[pId].paidClosingCount           || 0) + 1;
-        updatedProgramStats[pId].pendingClosingCount        = (updatedProgramStats[pId].pendingClosingCount        || 0) - 1;
+        updatedProgramStats[pId].paidClosingCount           = (updatedProgramStats[pId].paidClosingCount           || 0) + paidDocsCount;
+        updatedProgramStats[pId].pendingClosingCount        = (updatedProgramStats[pId].pendingClosingCount        || 0) - paidDocsCount;
         updatedProgramStats[pId].lastUpdated                = new Date();
       }
 
-      memberAllocations[memberId] = { programId: pId, programName, amount: deduction };
+      commissionMembers.push({
+        memberId,
+        memberName: memberData.displayName || memberName,
+        memberFatherName: memberData.fatherName || '',
+        memberRegNo: memberData.registrationNumber || '',
+        deduction, programId: pId, programName
+      });
+
+      memberAllocations[memberId] = { programId: pId, programName, amount: deduction, paidDocsCount };
       grandTotalPaid  += deduction;
-      grandTotalCount += 1;
+      grandTotalCount += paidDocsCount;
 
       // ── Transaction record ─────────────────────────────────────────────
+      const fatherName = memberData.fatherName || '';
+      const phone = memberData.phone || '';
+      const regNo = memberData.registrationNumber || '';
+      const aadhaarNo = memberData.aadhaarNo || '';
+      const displayName = memberData.displayName || memberName;
+      const keyword = [displayName, regNo, fatherName, phone, aadhaarNo]
+        .filter(Boolean).join(' ').toLowerCase();
+
       batch.set(db.collection('memberClosingFees').doc(), {
-        memberId, memberName,
+        memberId, memberName: displayName,
+        memberFatherName: fatherName,
+        memberPhone: phone,
+        memberRegNo: regNo,
+        memberAadhaar: aadhaarNo,
         programId: pId, programName,
         amount: deduction, requestedAmount,
         paymentMode:     paymentMethod,
@@ -205,7 +218,7 @@ export async function POST(req) {
         groupId:         paymentGroupRef.id,
         paymentType:     'closingPayment',
         createdAt:       timestamp,
-        search_memberName: memberName.toLowerCase(),
+        search_keyword: keyword,
       });
     }
 
@@ -237,6 +250,25 @@ export async function POST(req) {
     }, { merge: true });
 
     await batch.commit();
+
+    // ── Commission — 5% of each closing payment credited to agent wallet ──
+    const agentSnap = await agentRef.get();
+    const agentName = agentSnap.exists ? agentSnap.data().name || '' : '';
+    const commissionPromises = commissionMembers.map(c =>
+      creditCommissionStandalone({
+        agentId, agentName,
+        amount: c.deduction,
+        source: 'closingPayment',
+        sourceId: c.memberId,
+        memberName: c.memberName,
+        memberFatherName: c.memberFatherName,
+        memberRegNo: c.memberRegNo,
+        programId: c.programId,
+        programName: c.programName,
+        createdBy: authResult.user.uid,
+      })
+    );
+    await Promise.allSettled(commissionPromises);
 
     return NextResponse.json({
       success: true,

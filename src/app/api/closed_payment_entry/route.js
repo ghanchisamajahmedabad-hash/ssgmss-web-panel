@@ -449,11 +449,27 @@ export async function DELETE(req) {
 
         const memberRef = db.collection("members").doc(memberId);
 
+        // Read the closing_payment doc to get actual paid amount for this group
+        let paidForThisGroup = 0;
+        let countForThisGroup = count;
+        try {
+          const cpSnap = await db.collection("closing_payment").doc(`${memberId}_${closingGroupId}`).get();
+          if (cpSnap.exists) {
+            const cpData = cpSnap.data();
+            paidForThisGroup = Number(cpData.paidAmount || 0);
+            countForThisGroup = Number(cpData.closingCount || count);
+          }
+        } catch (_) { /* fallback to group-level amounts */ }
+
+        const pendingForThisGroup = Math.max(0, amount - paidForThisGroup);
+
         mb.update(memberRef, {
           closing_totalAmount: INC(-amount),
-          closing_pendingAmount: INC(-amount),
+          closing_paidAmount: INC(-Math.min(paidForThisGroup, m.closing_paidAmount || 0)),
+          closing_pendingAmount: INC(-Math.min(pendingForThisGroup, m.closing_pendingAmount || 0)),
           totalClosingCount: INC(-count),
-          pendingClosingCount: INC(-count),
+          paidClosingCount: INC(-Math.min(countForThisGroup, m.paidClosingCount || 0)),
+          pendingClosingCount: INC(-Math.min(countForThisGroup, m.pendingClosingCount || 0)),
           updated_at: ts,
           closingGroupIds: admin.firestore.FieldValue.arrayRemove(closingGroupId),
           [`closingGroupAmounts.${closingGroupId}`]: DEL(),

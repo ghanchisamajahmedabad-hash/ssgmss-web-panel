@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import admin from "../db/firebaseAdmin";
 import { checkRole, verifyToken } from "../../../../middleware/authMiddleware";
+import { creditCommissionStandalone } from "../commission/route";
 
 const db = admin.firestore();
 
@@ -35,6 +36,10 @@ export async function POST(req) {
 
     let updatedProgramStats = { ...(agentDoc.data().programStats || {}) };
 
+    // Track actual deduction sum — some members may be skipped, so body.totalAmount
+    // may be larger than what is actually deducted.
+    let actualTotalPaid = 0;
+
     // ── Payment group (one record per batch) ──────────────────────────────────
     const paymentGroupRef = db.collection('paymentGroups').doc();
     batch.set(paymentGroupRef, {
@@ -51,6 +56,7 @@ export async function POST(req) {
     });
 
     // ── Process each member ───────────────────────────────────────────────────
+    const commissionMembers = [];
     for (const payment of memberPayments) {
       const { memberId, memberName, amount } = payment;
 
@@ -118,31 +124,53 @@ export async function POST(req) {
         updatedProgramStats[programId].lastUpdated          = new Date();
       }
 
-      // ── Transaction record ────────────────────────────────────────────────
-      const feeRef = db.collection('memberJoinFees').doc();
-      batch.set(feeRef, {
-        memberId,
-        memberName,
-        programId,
-        programName,
-        amount:           deduction,          // actual applied amount
-        requestedAmount,                       // original requested amount
-        paymentMode:      paymentMethod,
-        transactionId:    transactionId || '',
-        transactionDate:  paymentDate,
-        status:           'completed',
-        createdBy:        authResult.user.uid,
-        paymentNote,
-        groupId:          paymentGroupRef.id,
-        createdAt:        admin.firestore.FieldValue.serverTimestamp(),
-        search_memberName: memberName.toLowerCase()
-      });
-    }
+      actualTotalPaid += deduction;
 
-    // ── Agent totals ──────────────────────────────────────────────────────────
+    // ── Transaction record ────────────────────────────────────────────────
+    const fatherName = memberData.fatherName || '';
+    const phone = memberData.phone || '';
+    const regNo = memberData.registrationNumber || '';
+    const aadhaarNo = memberData.aadhaarNo || '';
+    const displayName = memberData.displayName || memberName;
+    const keyword = [displayName, regNo, fatherName, phone, aadhaarNo]
+      .filter(Boolean).join(' ').toLowerCase();
+
+    const feeRef = db.collection('memberJoinFees').doc();
+    batch.set(feeRef, {
+      memberId,
+      memberName: displayName,
+      memberFatherName: fatherName,
+      memberPhone: phone,
+      memberRegNo: regNo,
+      memberAadhaar: aadhaarNo,
+      programId,
+      programName,
+      amount:           deduction,          // actual applied amount
+      requestedAmount,                       // original requested amount
+      paymentMode:      paymentMethod,
+      transactionId:    transactionId || '',
+      transactionDate:  paymentDate,
+      status:           'completed',
+      createdBy:        authResult.user.uid,
+      paymentNote,
+      groupId:          paymentGroupRef.id,
+      createdAt:        admin.firestore.FieldValue.serverTimestamp(),
+      search_keyword: keyword
+    });
+
+    commissionMembers.push({
+      memberId,
+      memberName: memberData.displayName || memberName,
+      memberFatherName: memberData.fatherName || '',
+      memberRegNo: memberData.registrationNumber || '',
+      deduction, programId, programName
+    });
+  }
+
+    // ── Agent totals (use actualTotalPaid, not body.totalAmount — some members may have been skipped) ──
     batch.set(agentRef, {
-      totalJoinFeesPaid:    admin.firestore.FieldValue.increment(numTotalAmount),
-      totalJoinFeesPending: admin.firestore.FieldValue.increment(-numTotalAmount),
+      totalJoinFeesPaid:    admin.firestore.FieldValue.increment(actualTotalPaid),
+      totalJoinFeesPending: admin.firestore.FieldValue.increment(-actualTotalPaid),
       programStats:         updatedProgramStats,
       updated_at:           admin.firestore.FieldValue.serverTimestamp()
     }, { merge: true });
@@ -150,12 +178,32 @@ export async function POST(req) {
     // ── Org totals ────────────────────────────────────────────────────────────
     const orgRef = db.collection('organizationStats').doc('current');
     batch.set(orgRef, {
-      totalJoinFeesPaid:    admin.firestore.FieldValue.increment(numTotalAmount),
-      totalJoinFeesPending: admin.firestore.FieldValue.increment(-numTotalAmount),
+      totalJoinFeesPaid:    admin.firestore.FieldValue.increment(actualTotalPaid),
+      totalJoinFeesPending: admin.firestore.FieldValue.increment(-actualTotalPaid),
       updated_at:           admin.firestore.FieldValue.serverTimestamp()
     }, { merge: true });
 
     await batch.commit();
+
+    // ── Commission processing — 5% of each payment credited to agent wallet ──
+    const agentSnap = await agentRef.get();
+    const agentName = agentSnap.exists ? agentSnap.data().name || '' : '';
+    const commissionPromises = commissionMembers.map(c =>
+      creditCommissionStandalone({
+        agentId, agentName,
+        amount: c.deduction,
+        source: 'joinFees',
+        sourceId: c.memberId,
+        memberName: c.memberName,
+        memberFatherName: c.memberFatherName,
+        memberRegNo: c.memberRegNo,
+        programId: c.programId,
+        programName: c.programName,
+        createdBy: authResult.user.uid,
+      })
+    );
+    await Promise.allSettled(commissionPromises);
+
     return NextResponse.json({ success: true, message: "Payment processed successfully" });
 
   } catch (error) {

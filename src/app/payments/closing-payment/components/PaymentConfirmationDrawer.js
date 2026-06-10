@@ -174,8 +174,10 @@ const ClosingPaymentConfirmationDrawer = ({
                   return false;
                 }}
                 onRemove={() => setUploadedFile(null)}
+                fileList={uploadedFile ? [{ uid: '-1', name: uploadedFile.name, status: 'done' }] : []}
                 maxCount={1}
                 listType="picture"
+                accept="image/*,.pdf"
               >
                 <Button 
                   size="middle" 

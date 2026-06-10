@@ -2,6 +2,7 @@
 import { NextResponse } from "next/server";
 import admin from "../db/firebaseAdmin";
 import { checkRole, verifyToken } from "../../../../middleware/authMiddleware";
+import { creditCommissionStandalone } from "../commission/route";
 
 const db   = admin.firestore();
 const auth = admin.auth();
@@ -35,6 +36,13 @@ const getMemberData = async (memberId) => {
       pendingAmount: pending,
       agentId:  d.agentId  || null,
       hasData:  true,
+      // closing fields (needed for removeMemberStats)
+      closing_totalAmount: d.closing_totalAmount || 0,
+      closing_paidAmount: d.closing_paidAmount || 0,
+      closing_pendingAmount: d.closing_pendingAmount || 0,
+      totalClosingCount: d.totalClosingCount || 0,
+      paidClosingCount: d.paidClosingCount || 0,
+      pendingClosingCount: d.pendingClosingCount || 0,
     };
   } catch (e) {
     console.error("❌ getMemberData error:", e);
@@ -165,7 +173,9 @@ const addMemberStats = async (memberInfo) => {
 // REMOVE stats — decrement (reverse) agent, program, org counts
 // ─────────────────────────────────────────────────────────────────────────────
 const removeMemberStats = async (memberInfo) => {
-  const { agentId, programId, joinFees, paidAmount, pendingAmount } = memberInfo;
+  const { agentId, programId, joinFees, paidAmount, pendingAmount,
+    closing_totalAmount, closing_paidAmount, closing_pendingAmount,
+    totalClosingCount, paidClosingCount, pendingClosingCount } = memberInfo;
   const batch = db.batch();
 
   // ── Agent ──────────────────────────────────────────────────────────────────
@@ -199,6 +209,12 @@ const removeMemberStats = async (memberInfo) => {
         totalJoinFees:        Math.max(0, (agentData.totalJoinFees        || 0) - joinFees),
         totalJoinFeesPaid:    Math.max(0, (agentData.totalJoinFeesPaid    || 0) - paidAmount),
         totalJoinFeesPending: Math.max(0, (agentData.totalJoinFeesPending || 0) - pendingAmount),
+        closing_totalAmount:    Math.max(0, (agentData.closing_totalAmount    || 0) - closing_totalAmount),
+        closing_paidAmount:     Math.max(0, (agentData.closing_paidAmount     || 0) - closing_paidAmount),
+        closing_pendingAmount:  Math.max(0, (agentData.closing_pendingAmount  || 0) - closing_pendingAmount),
+        totalClosingCount:      Math.max(0, (agentData.totalClosingCount      || 0) - totalClosingCount),
+        paidClosingCount:       Math.max(0, (agentData.paidClosingCount       || 0) - paidClosingCount),
+        pendingClosingCount:    Math.max(0, (agentData.pendingClosingCount    || 0) - pendingClosingCount),
         programStats,
         updated_at: STS()
       });
@@ -215,6 +231,10 @@ const removeMemberStats = async (memberInfo) => {
         totalJoinFees:        Math.max(0, (pd.totalJoinFees        || 0) - joinFees),
         totalJoinFeesPaid:    Math.max(0, (pd.totalJoinFeesPaid    || 0) - paidAmount),
         totalJoinFeesPending: Math.max(0, (pd.totalJoinFeesPending || 0) - pendingAmount),
+        totalClosingAmount:       Math.max(0, (pd.totalClosingAmount       || 0) - closing_totalAmount),
+        totalClosingPaidAmount:   Math.max(0, (pd.totalClosingPaidAmount   || 0) - closing_paidAmount),
+        totalClosingPendingAmount: Math.max(0, (pd.totalClosingPendingAmount || 0) - closing_pendingAmount),
+        totalClosingCount:        Math.max(0, (pd.totalClosingCount        || 0) - totalClosingCount),
         updated_at:           STS()
       });
     }
@@ -229,6 +249,10 @@ const removeMemberStats = async (memberInfo) => {
       totalJoinFees:        Math.max(0, (od.totalJoinFees        || 0) - joinFees),
       totalJoinFeesPaid:    Math.max(0, (od.totalJoinFeesPaid    || 0) - paidAmount),
       totalJoinFeesPending: Math.max(0, (od.totalJoinFeesPending || 0) - pendingAmount),
+      totalClosingAmount:          Math.max(0, (od.totalClosingAmount          || 0) - closing_totalAmount),
+      totalClosingPaidAmount:      Math.max(0, (od.totalClosingPaidAmount      || 0) - closing_paidAmount),
+      totalClosingPendingAmount:   Math.max(0, (od.totalClosingPendingAmount   || 0) - closing_pendingAmount),
+      totalClosingCount:           Math.max(0, (od.totalClosingCount           || 0) - totalClosingCount),
       updated_at:           STS()
     });
   }
@@ -265,11 +289,32 @@ export async function POST(req) {
       return NextResponse.json({ success: false, message: 'Insufficient permissions' }, { status: 403 });
 
     const body = await req.json();
-    const { isOnlyAccountCreate = false, memberData, memberId, agentId, operation = 'add' } = body;
+    const { isOnlyAccountCreate = false, memberData, memberId, agentId, operation = 'add', commissionData } = body;
 
     // Update counts (reads from member doc directly)
     if (!isOnlyAccountCreate && memberId) {
       await handleMemberCountUpdate(operation, memberId, agentId);
+    }
+
+    // Credit commission if join fees were paid and agent is set
+    if (commissionData && commissionData.agentId && commissionData.amount > 0) {
+      try {
+        await creditCommissionStandalone({
+          agentId: commissionData.agentId,
+          amount: commissionData.amount,
+          source: 'joinFees',
+          sourceId: memberId,
+          memberName: commissionData.memberName || '',
+          memberFatherName: commissionData.memberFatherName || '',
+          memberRegNo: commissionData.memberRegNo || '',
+          programId: commissionData.programId || '',
+          programName: commissionData.programName || '',
+          description: commissionData.description || 'Join Fee Commission (25%) - New Member',
+          createdBy: authResult.user.uid,
+        });
+      } catch (comErr) {
+        console.error('Commission credit failed:', comErr);
+      }
     }
 
     // Create Firebase Auth account
