@@ -158,13 +158,13 @@ export async function POST(req) {
         updated_at:                 timestamp,
       });
 
-      // ── Program stats — use actual paidDocsCount ─────────────────────────
+      // ── Program stats — use capped decrementCnt ─────────────────────────
       if (pId) {
         batch.set(db.collection('programs').doc(pId), {
           totalClosingPaidAmount:    INC(deduction),
           totalClosingPendingAmount: INC(-deduction),
           paidClosingCount:          INC(paidDocsCount),
-          pendingClosingCount:       INC(-paidDocsCount),
+          pendingClosingCount:       decrementCnt > 0 ? INC(-decrementCnt) : INC(0),
           updated_at:                timestamp,
         }, { merge: true });
 
@@ -174,9 +174,9 @@ export async function POST(req) {
             paidClosingCount: 0, pendingClosingCount: 0,
           };
         updatedProgramStats[pId].totalClosingPaidAmount     = (updatedProgramStats[pId].totalClosingPaidAmount     || 0) + deduction;
-        updatedProgramStats[pId].totalClosingPendingAmount  = (updatedProgramStats[pId].totalClosingPendingAmount  || 0) - deduction;
+        updatedProgramStats[pId].totalClosingPendingAmount  = Math.max(0, (updatedProgramStats[pId].totalClosingPendingAmount || 0) - deduction);
         updatedProgramStats[pId].paidClosingCount           = (updatedProgramStats[pId].paidClosingCount           || 0) + paidDocsCount;
-        updatedProgramStats[pId].pendingClosingCount        = (updatedProgramStats[pId].pendingClosingCount        || 0) - paidDocsCount;
+        updatedProgramStats[pId].pendingClosingCount        = Math.max(0, (updatedProgramStats[pId].pendingClosingCount || 0) - decrementCnt);
         updatedProgramStats[pId].lastUpdated                = new Date();
       }
 

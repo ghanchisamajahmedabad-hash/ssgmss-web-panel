@@ -572,6 +572,23 @@ export const addAdditionalPayment = async (memberId, paymentData, currentUser) =
       updated_at: serverTimestamp()
     })
     
+    // Sync aggregated counters
+    try {
+      const token = await auth.currentUser?.getIdToken();
+      await fetch('/api/members/adjust-stats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({
+          agentId: memberData.agentId || (currentUser?.uid && currentUser?.role === 'agent' ? currentUser.uid : null),
+          programId: memberData.programId || '',
+          paidDelta: additionalAmount,
+          type: 'joinFees',
+        }),
+      });
+    } catch (e) {
+      console.warn('Failed to sync counters:', e);
+    }
+    
     return {
       success: true,
       transactionId: transactionId,

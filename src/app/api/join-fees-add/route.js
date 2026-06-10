@@ -120,7 +120,7 @@ export async function POST(req) {
           updatedProgramStats[programId] = { totalJoinFeesPaid: 0, totalJoinFeesPending: 0 };
         }
         updatedProgramStats[programId].totalJoinFeesPaid    = (updatedProgramStats[programId].totalJoinFeesPaid    || 0) + deduction;
-        updatedProgramStats[programId].totalJoinFeesPending = (updatedProgramStats[programId].totalJoinFeesPending || 0) - deduction;
+        updatedProgramStats[programId].totalJoinFeesPending = Math.max(0, (updatedProgramStats[programId].totalJoinFeesPending || 0) - deduction);
         updatedProgramStats[programId].lastUpdated          = new Date();
       }
 

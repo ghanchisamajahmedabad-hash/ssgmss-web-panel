@@ -465,6 +465,24 @@ const EditMember = ({ open, setOpen, programs, agents, currentUser, memberId, on
       // Record transaction if payment amount changed
       if (paymentDiff !== 0 && joinFeesDone) {
         await recordPaymentTransaction(paymentDiff, currentPaid, pendingAmount, values)
+        // Sync aggregated counters
+        const agentIdVal = addedByRole === 'agent' ? selectedAgent : memberData?.agentId;
+        const programIdVal = programDetail?.programId || memberData?.programId;
+        try {
+          const token = await auth.currentUser?.getIdToken();
+          await fetch('/api/members/adjust-stats', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+            body: JSON.stringify({
+              agentId: agentIdVal,
+              programId: programIdVal,
+              paidDelta: paymentDiff,
+              type: 'joinFees',
+            }),
+          });
+        } catch (e) {
+          console.warn('Failed to sync counters:', e);
+        }
       }
 
       message.success('Member updated successfully!')
