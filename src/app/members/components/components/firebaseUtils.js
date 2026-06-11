@@ -192,6 +192,7 @@ export const recordJoinFeeTransaction = async (memberData, paymentData) => {
       verified: true,
       notes: paymentData.notes || 'Initial join fee payment',
 
+      agentId: memberData.agentId || '',
       createdBy: memberData.createdBy,
       createdAt: serverTimestamp(),
       updated_at: serverTimestamp(),
@@ -471,6 +472,7 @@ export const handleSubmit = async (values, context, message) => {
         fatherName: values.fatherName,
         aadhaarNo: values.aadhaarNo,
         phone: values.phone,
+        agentId: addedByRole === 'agent' ? selectedAgent : null,
         createdBy: currentUser?.uid
       }, {
         paidAmount: actualPaidAmount,
@@ -548,6 +550,7 @@ export const addAdditionalPayment = async (memberId, paymentData, currentUser) =
       fatherName: memberData.fatherName,
       aadhaarNo: memberData.aadhaarNo,
       phone: memberData.phone,
+      agentId: memberData.agentId || '',
       createdBy: currentUser?.uid
     }, {
       transactionType: 'additional_payment',

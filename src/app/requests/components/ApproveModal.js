@@ -203,6 +203,7 @@ const ApproveModal = ({ open, setOpen, selectedMember, setSelectedMember, fetchA
             fatherName:         selectedMember.fatherName,
             aadhaarNo:          selectedMember.aadhaarNo,
             phone:              selectedMember.phone,
+            agentId:            selectedMember.agentId || '',
             createdBy:          user?.uid,
           },
           {

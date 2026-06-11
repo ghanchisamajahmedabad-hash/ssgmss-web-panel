@@ -154,6 +154,7 @@ export async function POST(req) {
       createdBy:        authResult.user.uid,
       paymentNote,
       groupId:          paymentGroupRef.id,
+      agentId:          agentId || '',
       createdAt:        admin.firestore.FieldValue.serverTimestamp(),
       search_keyword: keyword
     });

@@ -217,6 +217,7 @@ export async function POST(req) {
         paymentNote,
         groupId:         paymentGroupRef.id,
         paymentType:     'closingPayment',
+        agentId:         agentId || '',
         createdAt:       timestamp,
         search_keyword: keyword,
       });

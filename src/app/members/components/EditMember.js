@@ -252,8 +252,8 @@ const EditMember = ({ open, setOpen, programs, agents, currentUser, memberId, on
     }
     setProgramDetail(detail)
 
-    // Auto-fill paid amount if zero
-    if (!paidAmount && detail.joinFees > 0) {
+    // Auto-fill paid amount only if join fees payment is enabled
+    if (!paidAmount && joinFeesDone && detail.joinFees > 0) {
       setPaidAmount(detail.joinFees)
       form.setFieldsValue({ paidAmount: detail.joinFees })
     }
@@ -335,6 +335,7 @@ const EditMember = ({ open, setOpen, programs, agents, currentUser, memberId, on
         verified:           true,
         notes:              'Payment updated via member edit',
         createdBy:          currentUser?.uid,
+        agentId:            memberData?.agentId || '',
         createdAt:          serverTimestamp(),
         updated_at:         serverTimestamp(),
         search_keyword:     keyword,

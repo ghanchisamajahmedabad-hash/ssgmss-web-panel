@@ -16,6 +16,7 @@ import {
   TagOutlined,
   InboxOutlined,
   DeleteOutlined,
+  TrophyOutlined,
 } from '@ant-design/icons';
 import { usePathname, useRouter } from 'next/navigation';
 import { useAuth } from './AuthProvider';
@@ -77,6 +78,10 @@ const buildMenuItems = (user, pendingCount, collapsed) => {
       icon: <UserSwitchOutlined />,
       label: label('Agents'),
       module: 'agents',
+      children: [
+        { key: '/agents', label: 'All Agents', module: 'agents' },
+        { key: '/agents/performance', label: 'Performance', icon: <TrophyOutlined />, module: 'agents' },
+      ],
     },
     {
       key: '/members',
