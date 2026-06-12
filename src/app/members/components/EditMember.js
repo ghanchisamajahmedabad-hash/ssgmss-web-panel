@@ -11,6 +11,7 @@ import {
 } from 'firebase/firestore'
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage'
 import { db, storage } from '../../../../lib/firbase-client'
+import { notifyAgent } from '@/app/utils/notifyAgent'
 
 // Import form section components
 import BasicInfoForm    from './components/BasicInfoForm'
@@ -487,6 +488,16 @@ const EditMember = ({ open, setOpen, programs, agents, currentUser, memberId, on
       }
 
       message.success('Member updated successfully!')
+      // Notify new agent if agent assignment changed
+      const newAgentId = addedByRole === 'agent' ? selectedAgent : null
+      if (newAgentId && newAgentId !== memberData?.agentId) {
+        notifyAgent(
+          newAgentId,
+          "New Member Assigned",
+          `${memberData?.displayName || values.name} has been assigned to you.`,
+          { click_action: "/members" }
+        )
+      }
       if (onSuccess) onSuccess()
       setOpen(false)
       return true

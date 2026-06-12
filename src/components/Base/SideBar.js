@@ -17,6 +17,8 @@ import {
   InboxOutlined,
   DeleteOutlined,
   TrophyOutlined,
+  WhatsAppOutlined,
+  FundOutlined,
 } from '@ant-design/icons';
 import { usePathname, useRouter } from 'next/navigation';
 import { useAuth } from './AuthProvider';
@@ -113,6 +115,7 @@ const buildMenuItems = (user, pendingCount, collapsed) => {
         { key: '/payments/join-fees', label: 'Join Fees', module: 'payments' },
         { key: '/payments/closing-payment', label: 'Closing Payment', module: 'payments' },
         { key: '/payments/history', label: 'Payment History', module: 'payments' },
+        { key: '/payments/whatsapp', label: 'WhatsApp', icon: <WhatsAppOutlined />, module: 'payments' },
       ],
     },
     {
@@ -143,7 +146,13 @@ const buildMenuItems = (user, pendingCount, collapsed) => {
       children: [
         { key: '/settings/about', label: 'About', module: 'settings' },
         { key: '/settings/contact', label: 'Contact', module: 'settings' },
-        {
+    {
+      key: '/activity',
+      icon: <FundOutlined />,
+      label: label('Activity'),
+      module: 'activity',
+    },
+    {
           key: '/settings/security',
           label: 'Security',
           module: 'settings',
@@ -153,6 +162,12 @@ const buildMenuItems = (user, pendingCount, collapsed) => {
           ],
         },
       ],
+    },
+    {
+      key: '/activity',
+      icon: <FundOutlined />,
+      label: label('Activity'),
+      module: 'activity',
     },
     {
       key: '/trash',

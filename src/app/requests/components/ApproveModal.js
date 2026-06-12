@@ -10,6 +10,7 @@ import { auth } from '../../../../lib/firbase-client'
 import dayjs from 'dayjs'
 import isBetween from 'dayjs/plugin/isBetween'
 import { createClosingPayment, createSearchIndex, generateRegistrationNumber, memberAccoiuntCreate, recordJoinFeeTransaction } from '@/app/members/components/components/firebaseUtils'
+import { notifyAgent } from '@/app/utils/notifyAgent'
 
 dayjs.extend(isBetween)
 
@@ -236,6 +237,15 @@ const ApproveModal = ({ open, setOpen, selectedMember, setSelectedMember, fetchA
       await memberAccoiuntCreate({ ...selectedMember, ...memberUpdate, id: selectedMember.id }, commissionPayload)
       await createClosingPayment({ ...selectedMember, id: selectedMember.id })
       message.success(`Member approved! Registration: ${finalRegNumber}`)
+      // Notify agent
+      if (selectedMember.agentId) {
+        notifyAgent(
+          selectedMember.agentId,
+          "New Member Approved",
+          `${selectedMember.displayName} has been approved. Registration: ${finalRegNumber}`,
+          { click_action: "/members" }
+        )
+      }
       setOpen(false)
       setSelectedMember(null)
       resetForm()

@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react'
 import {
   Button, Card, Space, Tag, Avatar, Badge, Tooltip, Row, Col,
   message, Modal, Drawer, Descriptions, Divider, Tabs, Timeline,
-  Alert, Typography, Empty, Statistic, Progress, Spin, Image
+  Alert, Typography, Empty, Statistic, Progress, Spin
 } from 'antd'
 import {
   CheckCircleOutlined, CloseCircleOutlined,
@@ -265,7 +265,11 @@ const ViewRequests = ({
 const isSuperAdmin =  user?.role === 'superadmin';
   const usersPermissions = user?.permissions || {};
   const progName = getProgramName(selectedMember, programList)
+  const [aadhaarModalOpen, setAadhaarModalOpen] = useState(false)
+  const [zoomFront, setZoomFront] = useState(100)
+  const [zoomBack, setZoomBack] = useState(100)
   return (
+    <>
     <Drawer
       title={
         <Space align="center">
@@ -325,65 +329,67 @@ const isSuperAdmin =  user?.role === 'superadmin';
             key: 'details',
             label: <span><UserOutlined className="mr-1" />Personal</span>,
             children: (
-              <div className="space-y-4">
-                {/* Personal */}
-                <Card title="Basic Information" size="small">
-                  <Descriptions column={2} bordered size="small">
-                    <Descriptions.Item label="Full Name" span={2}>
-                      <Text strong>{selectedMember.displayName} {selectedMember.fatherName} {selectedMember.surname}</Text>
-                    </Descriptions.Item>
-                    <Descriptions.Item label="Phone">
-                      <PhoneOutlined className="mr-1" />{selectedMember.phone}
-                      {selectedMember.phoneAlt && <span className="text-gray-500 ml-2">/ {selectedMember.phoneAlt}</span>}
-                    </Descriptions.Item>
-                    <Descriptions.Item label="Email">
-                      <MailOutlined className="mr-1" />{selectedMember.email || 'N/A'}
-                    </Descriptions.Item>
-                    <Descriptions.Item label="Date of Birth">
-                      <CalendarOutlined className="mr-1" />{fmtDate(selectedMember.dobDate)} (Age: {selectedMember.age})
-                    </Descriptions.Item>
-                    <Descriptions.Item label="Aadhaar">
-                      <IdcardOutlined className="mr-1" /><span className="font-mono">{selectedMember.aadhaarNo}</span>
-                    </Descriptions.Item>
-                    <Descriptions.Item label="Caste">
-                      <Tag color="purple">{selectedMember.caste || 'N/A'}</Tag>
-                    </Descriptions.Item>
-                    <Descriptions.Item label="Age Group">
-                      <Tag color="blue">{selectedMember.ageGroup?.toUpperCase() || 'N/A'}</Tag>
-                    </Descriptions.Item>
-                    <Descriptions.Item label="Agent" span={2}>
-                      <UserSwitchOutlined className="mr-1" style={{color:'#1890ff'}} />
-                      {getAgentName(selectedMember.agentId, agentList)}
-                    </Descriptions.Item>
-                  </Descriptions>
-                </Card>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                <Card title={<span style={{ fontSize: 16 }}><UserOutlined className="mr-2" />Basic Information</span>}>
+                      <Descriptions column={2} bordered>
+                        <Descriptions.Item label={<b>Full Name</b>} span={2}>
+                          <span style={{ fontSize: 15, fontWeight: 600 }}>{selectedMember.displayName} {selectedMember.fatherName} {selectedMember.surname}</span>
+                        </Descriptions.Item>
+                        <Descriptions.Item label={<b>Phone</b>}>
+                          <PhoneOutlined className="mr-1" /><span style={{ fontSize: 14 }}>{selectedMember.phone}</span>
+                          {selectedMember.phoneAlt && <span className="text-gray-500 ml-2">/ {selectedMember.phoneAlt}</span>}
+                        </Descriptions.Item>
+                        <Descriptions.Item label={<b>Email</b>}>
+                          <MailOutlined className="mr-1" /><span style={{ fontSize: 14 }}>{selectedMember.email || 'N/A'}</span>
+                        </Descriptions.Item>
+                        <Descriptions.Item label={<b>Date of Birth</b>}>
+                          <CalendarOutlined className="mr-1" /><span style={{ fontSize: 14 }}>{fmtDate(selectedMember.dobDate)} (Age: {selectedMember.age})</span>
+                        </Descriptions.Item>
+                        <Descriptions.Item label={<b>Aadhaar</b>}>
+                          <IdcardOutlined className="mr-1" /><span style={{ fontSize: 14 }} className="font-mono">{selectedMember.aadhaarNo}</span>
+                          {selectedMember.documentFrontURL && (
+                            <Button type="link" size="small" icon={<IdcardOutlined />} onClick={() => setAadhaarModalOpen(true)} style={{ marginLeft: 8 }}>
+                              Verify Card
+                            </Button>
+                          )}
+                        </Descriptions.Item>
+                        <Descriptions.Item label={<b>Caste</b>}>
+                          <Tag color="purple" style={{ fontSize: 13 }}>{selectedMember.caste || 'N/A'}</Tag>
+                        </Descriptions.Item>
+                        <Descriptions.Item label={<b>Age Group</b>}>
+                          <Tag color="blue" style={{ fontSize: 13 }}>{selectedMember.ageGroup?.toUpperCase() || 'N/A'}</Tag>
+                        </Descriptions.Item>
+                        <Descriptions.Item label={<b>Agent</b>} span={2}>
+                          <UserSwitchOutlined className="mr-1" style={{ color: '#1890ff' }} />
+                          <span style={{ fontSize: 14 }}>{getAgentName(selectedMember.agentId, agentList)}</span>
+                        </Descriptions.Item>
+                      </Descriptions>
+                    </Card>
 
-                {/* Address */}
-                <Card title="Address" size="small">
-                  <Descriptions column={2} bordered size="small">
-                    <Descriptions.Item label="Address" span={2}>
-                      <EnvironmentOutlined className="mr-1" />{selectedMember.currentAddress}
-                    </Descriptions.Item>
-                    <Descriptions.Item label="Village">{selectedMember.village || 'N/A'}</Descriptions.Item>
-                    <Descriptions.Item label="City">{selectedMember.city}</Descriptions.Item>
-                    <Descriptions.Item label="District">{selectedMember.district}</Descriptions.Item>
-                    <Descriptions.Item label="State">{selectedMember.state}</Descriptions.Item>
-                    <Descriptions.Item label="PIN">{selectedMember.pinCode}</Descriptions.Item>
-                  </Descriptions>
-                </Card>
+                    <Card title={<span style={{ fontSize: 16 }}><EnvironmentOutlined className="mr-2" />Address</span>}>
+                      <Descriptions column={2} bordered>
+                        <Descriptions.Item label={<b>Address</b>} span={2}>
+                          <span style={{ fontSize: 14 }}>{selectedMember.currentAddress}</span>
+                        </Descriptions.Item>
+                        <Descriptions.Item label={<b>Village</b>}><span style={{ fontSize: 14 }}>{selectedMember.village || 'N/A'}</span></Descriptions.Item>
+                        <Descriptions.Item label={<b>City</b>}><span style={{ fontSize: 14 }}>{selectedMember.city}</span></Descriptions.Item>
+                        <Descriptions.Item label={<b>District</b>}><span style={{ fontSize: 14 }}>{selectedMember.district}</span></Descriptions.Item>
+                        <Descriptions.Item label={<b>State</b>}><span style={{ fontSize: 14 }}>{selectedMember.state}</span></Descriptions.Item>
+                        <Descriptions.Item label={<b>PIN</b>}><span style={{ fontSize: 14 }}>{selectedMember.pinCode}</span></Descriptions.Item>
+                      </Descriptions>
+                    </Card>
 
-                {/* Guardian */}
-                <Card title="Guardian Information" size="small">
-                  <Descriptions column={2} bordered size="small">
-                    <Descriptions.Item label="Guardian Name" span={2}>
-                      <SafetyCertificateOutlined className="mr-1" /><Text strong>{selectedMember.guardian}</Text>
-                    </Descriptions.Item>
-                    <Descriptions.Item label="Relation">
-                      <Tag color="cyan">{selectedMember.guardianRelation}</Tag>
-                    </Descriptions.Item>
-                  </Descriptions>
-                </Card>
-              </div>
+                    <Card title={<span style={{ fontSize: 16 }}><SafetyCertificateOutlined className="mr-2" />Guardian Information</span>}>
+                      <Descriptions column={2} bordered>
+                        <Descriptions.Item label={<b>Guardian Name</b>} span={2}>
+                          <span style={{ fontSize: 15, fontWeight: 600 }}>{selectedMember.guardian}</span>
+                        </Descriptions.Item>
+                        <Descriptions.Item label={<b>Relation</b>}>
+                          <Tag color="cyan" style={{ fontSize: 13 }}>{selectedMember.guardianRelation}</Tag>
+                        </Descriptions.Item>
+                      </Descriptions>
+                    </Card>
+                  </div>
             )
           },
           {
@@ -454,7 +460,90 @@ const isSuperAdmin =  user?.role === 'superadmin';
         ]}
       />
     </Drawer>
+
+      {/* ── Aadhaar Verify Modal ─────────────────────────────────────────── */}
+      <Modal
+        title={<span style={{ fontSize: 18 }}><IdcardOutlined style={{ color: '#faad14', marginRight: 10 }} />Aadhaar Card Verification</span>}
+        open={aadhaarModalOpen}
+        onCancel={() => setAadhaarModalOpen(false)}
+        footer={null}
+        width={800}
+        centered
+      >
+        <Row gutter={24}>
+          <Col xs={24} md={10}>
+            <Card size="small" style={{ height: '100%' }}>
+              <Descriptions column={1} bordered size="small">
+                <Descriptions.Item label={<b>Name</b>}>
+                  <span style={{ fontSize: 15, fontWeight: 600 }}>{selectedMember.displayName} {selectedMember.fatherName} {selectedMember.surname}</span>
+                </Descriptions.Item>
+                <Descriptions.Item label={<b>DOB</b>}>
+                  <span style={{ fontSize: 15 }}>{fmtDate(selectedMember.dobDate)}</span>
+                </Descriptions.Item>
+                <Descriptions.Item label={<b>Aadhaar No</b>}>
+                  <span style={{ fontSize: 15, fontWeight: 600, letterSpacing: 2 }} className="font-mono">{selectedMember.aadhaarNo}</span>
+                </Descriptions.Item>
+                <Descriptions.Item label={<b>Father's Name</b>}>
+                  <span style={{ fontSize: 15 }}>{selectedMember.fatherName || '—'}</span>
+                </Descriptions.Item>
+                <Descriptions.Item label={<b>Gender</b>}>
+                  <span style={{ fontSize: 15 }}>{selectedMember.gender || 'N/A'}</span>
+                </Descriptions.Item>
+                <Descriptions.Item label={<b>Phone</b>}>
+                  <span style={{ fontSize: 15 }}>{selectedMember.phone}</span>
+                </Descriptions.Item>
+                <Descriptions.Item label={<b>Address</b>}>
+                  <span style={{ fontSize: 14 }}>{selectedMember.currentAddress}, {selectedMember.village}, {selectedMember.city}, {selectedMember.district}, {selectedMember.state} - {selectedMember.pinCode}</span>
+                </Descriptions.Item>
+                <Descriptions.Item label={<b>Registration</b>}>
+                  <span style={{ fontSize: 14 }}>{selectedMember.registrationNumber}</span>
+                </Descriptions.Item>
+              </Descriptions>
+            </Card>
+          </Col>
+          <Col xs={24} md={14}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              {selectedMember.documentFrontURL && (
+                <div>
+                  <div style={{ fontWeight: 600, marginBottom: 6, fontSize: 14, color: '#faad14' }}>Aadhaar Card (Front)</div>
+                  <div style={{ border: '1px solid #f0f0f0', borderRadius: 8, padding: 8, background: '#fafafa', textAlign: 'center', overflow: 'auto', maxHeight: 420 }}>
+                    <img
+                      src={selectedMember.documentFrontURL}
+                      alt="Aadhaar Front"
+                      style={{ transform: `scale(${zoomFront / 100})`, transformOrigin: 'top left', transition: 'transform 0.15s', maxWidth: '100%', display: 'block' }}
+                    />
+                  </div>
+                  <ZoomControls zoom={zoomFront} onZoomIn={() => setZoomFront(p => Math.min(300, p + 25))} onZoomOut={() => setZoomFront(p => Math.max(50, p - 25))} onReset={() => setZoomFront(100)} />
+                </div>
+              )}
+              {selectedMember.documentBackURL && (
+                <div>
+                  <div style={{ fontWeight: 600, marginBottom: 6, fontSize: 14, color: '#fa8c16' }}>Aadhaar Card (Back)</div>
+                  <div style={{ border: '1px solid #f0f0f0', borderRadius: 8, padding: 8, background: '#fafafa', textAlign: 'center', overflow: 'auto', maxHeight: 420 }}>
+                    <img
+                      src={selectedMember.documentBackURL}
+                      alt="Aadhaar Back"
+                      style={{ transform: `scale(${zoomBack / 100})`, transformOrigin: 'top left', transition: 'transform 0.15s', maxWidth: '100%', display: 'block' }}
+                    />
+                  </div>
+                  <ZoomControls zoom={zoomBack} onZoomIn={() => setZoomBack(p => Math.min(300, p + 25))} onZoomOut={() => setZoomBack(p => Math.max(50, p - 25))} onReset={() => setZoomBack(100)} />
+                </div>
+              )}
+            </div>
+          </Col>
+        </Row>
+      </Modal>
+    </>
   )
 }
 
 export default ViewRequests
+
+const ZoomControls = ({ zoom, onZoomIn, onZoomOut, onReset }) => (
+  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: 6 }}>
+    <Button size="small" onClick={onZoomOut} disabled={zoom <= 50}>−</Button>
+    <span style={{ fontSize: 12, minWidth: 50, textAlign: 'center', fontWeight: 600 }}>{zoom}%</span>
+    <Button size="small" onClick={onZoomIn} disabled={zoom >= 300}>+</Button>
+    {zoom !== 100 && <Button size="small" type="text" onClick={onReset} style={{ fontSize: 11 }}>Reset</Button>}
+  </div>
+)

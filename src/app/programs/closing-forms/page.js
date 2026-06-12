@@ -117,7 +117,7 @@ const ClosingGroupModal = ({ group, visible, onClose, programList }) => {
         ) : (
           <List size="small" dataSource={groupMembers}
             renderItem={m => (
-              <List.Item extra={<Space>{m.closed_invitation_url ? <Button size="small" type="link" onClick={() => window.open(m.closed_invitation_url)}>View Card</Button> : null}<Tag color="blue">₹{m.amount}</Tag></Space>}>
+              <List.Item extra={<Space>{m.closed_invitation_url ? <Button size="small" type="link" onClick={() => window.open(`/api/closing-card/view?memberId=${m.id}`)}>View Card</Button> : null}<Tag color="blue">₹{m.amount}</Tag></Space>}>
                 <List.Item.Meta
                   avatar={<Avatar src={m.photoURL} icon={<UserOutlined />} size={30} style={{ background: colors.primary + '30', color: colors.primary }} />}
                   title={<Space size={4}><span style={{ fontWeight: 600, fontSize: 13 }}>{m.memberName}</span><Tag style={{ fontSize: 10 }}>{m.registrationNumber}</Tag></Space>}
@@ -268,7 +268,7 @@ const ClosingMembersPage = () => {
     },
     {
       title: 'Invitation', key: 'invitation', width: 110,
-      render: (_, r) => r.closed_invitation_url ? <Button type="link" size="small" onClick={() => window.open(r.closed_invitation_url)}>View Card</Button> : <Tag color="warning">No Card</Tag>
+      render: (_, r) => r.closed_invitation_url ? <Button type="link" size="small" onClick={() => window.open(`/api/closing-card/view?memberId=${r.id}`)}>View Card</Button> : <Tag color="warning">No Card</Tag>
     },
     { title: 'Note', key: 'note', width: 200, render: (_, r) => <span style={{ fontSize: 12, color: '#555' }}>{r.closed_note || '—'}</span> },
     { title: 'Action', key: 'action', width: 80, render: (_, r) => <Button type="text" icon={<EyeOutlined />} onClick={() => handleViewMember(r)} /> },

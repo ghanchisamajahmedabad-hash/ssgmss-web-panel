@@ -7,6 +7,7 @@ import { ref, uploadBytes, getDownloadURL } from 'firebase/storage'
 import dayjs from 'dayjs'
 import { auth, db, storage } from '../../../../../lib/firbase-client'
 import { message } from 'antd'
+import { notifyAgent } from '@/app/utils/notifyAgent'
 
 // File upload utility
 export const uploadFile = async (file, folder, fileName) => {
@@ -505,6 +506,16 @@ export const handleSubmit = async (values, context, message) => {
     await memberAccoiuntCreate({ ...memberData, id: memberId }, commissionPayload)
     await createClosingPayment({ ...memberData, id: memberId })
     message.success('Member added successfully!')
+    // Notify agent
+    const agentIdToNotify = addedByRole === 'agent' ? selectedAgent : memberData.agentId
+    if (agentIdToNotify) {
+      notifyAgent(
+        agentIdToNotify,
+        "New Member Assigned",
+        `${memberData.displayName} has been added under you. Registration: ${registrationNumber}`,
+        { click_action: "/members" }
+      )
+    }
     setOpen(false)
     return true
     
