@@ -1,5 +1,5 @@
 "use client"
-import React, { useState, useCallback, useRef, useEffect } from 'react'
+import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react'
 import {
   Drawer, Button, Checkbox, Avatar, Empty, DatePicker,
   Upload, message, Modal, Space, Row, Col, Input,
@@ -208,7 +208,7 @@ const MemberDetailRow = ({ member, details, progress, onUpdate, onRemove, onUplo
 // ═══════════════════════════════════════════════════════════════════════════════
 // MAIN COMPONENT
 // ═══════════════════════════════════════════════════════════════════════════════
-const MarriageClosingDrawer = ({ visible, onClose, members: allMembers = [], programList = [], currentUser, onSuccess }) => {
+const MarriageClosingDrawer = ({ visible, onClose, members: allMembers = [], programList = [], currentUser, closingGroups = [], onSuccess }) => {
   const [step,           setStep]           = useState(0)
   const [selectedProg,   setSelectedProg]   = useState(null)
   const [ageGroups,      setAgeGroups]      = useState([])
@@ -226,6 +226,9 @@ const MarriageClosingDrawer = ({ visible, onClose, members: allMembers = [], pro
   const [hasMore,      setHasMore]      = useState(false)
   const [lastDoc,      setLastDoc]      = useState(null)
   const [loadingMore,  setLoadingMore]  = useState(false)
+  const [mode,           setMode]           = useState('new')
+  const [groupName,      setGroupName]      = useState('')
+  const [existingGroupId, setExistingGroupId] = useState(null)
 
   // ── KEY FIX: use a ref to always read the latest details in handleSubmit ──
   // React state is stale inside confirm().onOk closure — ref gives latest value
@@ -235,6 +238,10 @@ const MarriageClosingDrawer = ({ visible, onClose, members: allMembers = [], pro
   const PAGE    = 20
   const listRef = useRef(null)
   const program = programList.find(p => p.id === selectedProg)
+  const programActiveGroups = useMemo(() =>
+    closingGroups.filter(g => g.programId === selectedProg && g.status === 'active')
+      .sort((a, b) => (b.closedAt?.toMillis?.() || 0) - (a.closedAt?.toMillis?.() || 0))
+  , [closingGroups, selectedProg])
 
   // ── load first page ────────────────────────────────────────────────────────
   const loadPage = useCallback(async (programId) => {
@@ -306,6 +313,7 @@ const MarriageClosingDrawer = ({ visible, onClose, members: allMembers = [], pro
     setStep(0); setSelectedProg(null); setAgeGroups([]); setMemberGroups([])
     setSelectedIds([]); setSelectedMap({}); setDetails({}); setUploadProgress({})
     setDisplayed([]); setSearch(''); setSearchMode(false); setHasMore(false); setLastDoc(null)
+    setMode('new'); setGroupName(''); setExistingGroupId(null)
   }
 
   const handleClose = () => {
@@ -427,7 +435,7 @@ const MarriageClosingDrawer = ({ visible, onClose, members: allMembers = [], pro
     confirm({
       title: 'Confirm Marriage Closing',
       icon: <HeartFilled style={{ color: C.primary }} />,
-      content: <p>Close marriage for <strong>{selectedIds.length}</strong> member(s)?</p>,
+      content: <p>Close marriage for <strong>{selectedIds.length}</strong> member(s){mode === 'add' ? ` into existing group` : ''}?</p>,
       okText: 'Confirm', okType: 'primary', cancelText: 'Cancel',
       onOk: async () => {
         setProcessing(true)
@@ -435,7 +443,7 @@ const MarriageClosingDrawer = ({ visible, onClose, members: allMembers = [], pro
           // Read from ref inside onOk — state would be stale here
           const freshDetails = detailsRef.current
 
-          const groupId = `${selectedProg}_${Date.now()}`
+          const groupId = mode === 'add' ? existingGroupId : `${selectedProg}_${Date.now()}`
 
           const memberClosingList = selectedIds.map(memberId => {
             const d   = freshDetails[memberId] || {}
@@ -474,6 +482,8 @@ const MarriageClosingDrawer = ({ visible, onClose, members: allMembers = [], pro
             ageGroups,
             memberGroups,
             memberClosingList,
+            groupName:        groupName || undefined,
+            ...(mode === 'add' ? { closingGroupId: existingGroupId } : {}),
           })
 
           if (!result?.success) throw new Error(result?.message || 'API returned failure')
@@ -559,15 +569,81 @@ const MarriageClosingDrawer = ({ visible, onClose, members: allMembers = [], pro
           </div>
         )}
 
-        {/* ── step 0: program ── */}
+        {/* ── step 0: mode + program + group ── */}
         {step === 0 && (
           <div>
+            {/* Mode Toggle */}
+            <SectionHeader icon={<FlagOutlined />} title="Closing Mode" subtitle="Create a new group or add to an existing one" />
+            <div style={{ display: 'flex', gap: 12, marginBottom: 20 }}>
+              <div onClick={() => { setMode('new'); setExistingGroupId(null) }} style={{
+                flex: 1, background: C.surface, border: `2px solid ${mode === 'new' ? C.primary : C.border}`,
+                borderRadius: 12, padding: '14px 18px', cursor: 'pointer', textAlign: 'center',
+                boxShadow: mode === 'new' ? `0 3px 12px ${C.primary}20` : '0 1px 3px rgba(0,0,0,.04)',
+                fontWeight: 700, fontSize: 14, color: C.fg, transition: 'all .2s',
+              }}>
+                <div style={{ fontSize: 24, marginBottom: 4 }}>➕</div>
+                New Group
+              </div>
+              <div onClick={() => setMode('add')} style={{
+                flex: 1, background: C.surface, border: `2px solid ${mode === 'add' ? C.primary : C.border}`,
+                borderRadius: 12, padding: '14px 18px', cursor: 'pointer', textAlign: 'center',
+                boxShadow: mode === 'add' ? `0 3px 12px ${C.primary}20` : '0 1px 3px rgba(0,0,0,.04)',
+                fontWeight: 700, fontSize: 14, color: C.fg, transition: 'all .2s',
+              }}>
+                <div style={{ fontSize: 24, marginBottom: 4 }}>📂</div>
+                Add to Existing
+              </div>
+            </div>
+
+            {/* Group Name (new mode) */}
+            {mode === 'new' && (
+              <div style={{ marginBottom: 20 }}>
+                <div style={{ fontWeight: 600, fontSize: 13, color: C.muted, marginBottom: 6 }}>Group Name (optional)</div>
+                <Input placeholder="e.g. Summer 2026 Batch" value={groupName} onChange={e => setGroupName(e.target.value)}
+                  style={{ borderRadius: 8, height: 40 }} />
+              </div>
+            )}
+
+            {/* Existing Group Selector (add mode) */}
+            {mode === 'add' && (
+              <div style={{ marginBottom: 20 }}>
+                <div style={{ fontWeight: 600, fontSize: 13, color: C.muted, marginBottom: 6 }}>Select Existing Group</div>
+                {programActiveGroups.length === 0 ? (
+                  <Alert type="warning" message="No active groups found for this program. Switch to New Group mode." showIcon />
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {programActiveGroups.map(g => {
+                      const active = existingGroupId === g.id
+                      const groupCount = g.closedMemberIds?.length || 0
+                      return (
+                        <div key={g.id} onClick={() => setExistingGroupId(g.id)} style={{
+                          background: C.surface, border: `2px solid ${active ? C.primary : C.border}`,
+                          borderRadius: 12, padding: '12px 16px', cursor: 'pointer',
+                          boxShadow: active ? `0 3px 12px ${C.primary}20` : '0 1px 3px rgba(0,0,0,.04)',
+                          display: 'flex', alignItems: 'center', gap: 12, transition: 'all .2s',
+                        }}>
+                          <div style={{ width: 18, height: 18, borderRadius: '50%', flexShrink: 0, border: `2px solid ${active ? C.primary : C.border}`, background: active ? C.primary : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                            {active && <div style={{ width: 7, height: 7, borderRadius: '50%', background: '#fff' }} />}
+                          </div>
+                          <div style={{ flex: 1 }}>
+                            <div style={{ fontWeight: 700, fontSize: 14, color: C.fg }}>{g.groupName || `Group ${g.id?.slice?.(0, 8) || ''}`}</div>
+                            <div style={{ fontSize: 12, color: C.muted }}>{groupCount} member{groupCount !== 1 ? 's' : ''} · {g.totalClosingCount || 0} closing{((g.totalClosingCount || 0) !== 1) ? 's' : ''} · ₹{g.totalAmount?.toLocaleString?.() || 0}</div>
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Program selector */}
             <SectionHeader icon={<FlagOutlined />} title="Select Program" subtitle="Choose the marriage program" />
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               {programList.map(prog => {
                 const active = selectedProg === prog.id
                 return (
-                  <div key={prog.id} onClick={() => setSelectedProg(prog.id)} style={{
+                  <div key={prog.id} onClick={() => { setSelectedProg(prog.id); setExistingGroupId(null) }} style={{
                     background: C.surface, border: `2px solid ${active ? C.primary : C.border}`,
                     borderRadius: 12, padding: '14px 18px', cursor: 'pointer',
                     boxShadow: active ? `0 3px 12px ${C.primary}20` : '0 1px 3px rgba(0,0,0,.04)',
@@ -583,7 +659,7 @@ const MarriageClosingDrawer = ({ visible, onClose, members: allMembers = [], pro
                 )
               })}
             </div>
-            {selectedProg && (
+            {selectedProg && (mode === 'add' ? existingGroupId : true) && (
               <div style={{ marginTop: 20, display: 'flex', justifyContent: 'flex-end' }}>
                 <Button type="primary" size="large" icon={<ArrowRightOutlined />} onClick={() => setStep(1)}
                   style={{ background: grad, border: 'none', fontWeight: 700, height: 42, paddingInline: 24 }}>

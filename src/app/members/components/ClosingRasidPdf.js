@@ -40,23 +40,22 @@ const styles = StyleSheet.create({
   infoValue: { fontSize: 10, color: BLACK },
   infoRight: { flex: 1, alignItems: 'flex-end' },
   sectionTitle: { fontSize: 11, fontWeight: 'bold', color: BLUE, marginTop: 6, marginBottom: 3, borderBottomWidth: 1, borderBottomColor: BLUE, paddingBottom: 1 },
-  detailBlock: { marginBottom: 6, padding: 6, backgroundColor: GREY, borderRadius: 3 },
-  detailLabel: { fontSize: 8, color: '#666' },
-  detailValue: { fontSize: 10, color: BLACK, fontWeight: 'bold' },
-  detailRow: { flexDirection: 'row', marginBottom: 2 },
-  detailCol: { flex: 1 },
   table: { marginTop: 4, borderWidth: 1, borderColor: BORDER },
   thRow: { flexDirection: 'row', backgroundColor: GREY, borderBottomWidth: 1, borderBottomColor: BORDER },
   tr: { flexDirection: 'row', borderBottomWidth: 0.5, borderBottomColor: BORDER },
-  cellSn: { width: 22, borderRightWidth: 0.5, borderRightColor: BORDER, padding: 3, alignItems: 'center' },
-  cellName: { flex: 1, borderRightWidth: 0.5, borderRightColor: BORDER, paddingHorizontal: 4, paddingVertical: 3 },
-  cellFather: { width: 80, borderRightWidth: 0.5, borderRightColor: BORDER, padding: 3 },
-  cellVillage: { width: 60, borderRightWidth: 0.5, borderRightColor: BORDER, padding: 3, alignItems: 'center' },
-  cellReg: { width: 72, borderRightWidth: 0.5, borderRightColor: BORDER, padding: 3, alignItems: 'center' },
-  cellPhone: { width: 72, padding: 3, alignItems: 'center' },
-  thText: { fontSize: 8, fontWeight: 'bold', color: BLUE, textAlign: 'center' },
+  cellSn: { width: 20, borderRightWidth: 0.5, borderRightColor: BORDER, padding: 3, alignItems: 'center' },
+  cellName: { flex: 1.2, borderRightWidth: 0.5, borderRightColor: BORDER, paddingHorizontal: 4, paddingVertical: 3 },
+  cellFather: { width: 72, borderRightWidth: 0.5, borderRightColor: BORDER, padding: 3 },
+  cellVillage: { width: 52, borderRightWidth: 0.5, borderRightColor: BORDER, padding: 3, alignItems: 'center' },
+  cellReg: { width: 65, borderRightWidth: 0.5, borderRightColor: BORDER, padding: 3, alignItems: 'center' },
+  cellPhone: { width: 65, borderRightWidth: 0.5, borderRightColor: BORDER, padding: 3, alignItems: 'center' },
+  cellDate: { width: 55, padding: 3, alignItems: 'center' },
+  thText: { fontSize: 7.5, fontWeight: 'bold', color: BLUE, textAlign: 'center' },
   tdText: { fontSize: 8, color: BLACK },
   tdCenter: { fontSize: 8, color: BLACK, textAlign: 'center' },
+  groupInfoRow: { flexDirection: 'row', marginTop: 2, marginBottom: 2 },
+  groupInfoLabel: { fontSize: 8, fontWeight: 'bold', color: '#666' },
+  groupInfoValue: { fontSize: 8, color: BLACK },
   summaryRow: { flexDirection: 'row', justifyContent: 'flex-end', marginTop: 4, gap: 12 },
   summaryLabel: { fontSize: 10, fontWeight: 'bold', color: BLACK },
   summaryValue: { fontSize: 11, fontWeight: 'bold', color: RED },
@@ -64,6 +63,12 @@ const styles = StyleSheet.create({
   footerText: { fontSize: 8, fontWeight: 'bold', color: RED, textAlign: 'center' },
   footerSub: { fontSize: 8, fontWeight: 'bold', color: BLUE, textAlign: 'center' },
 });
+
+const fmtDate = (d) => {
+  if (!d) return '—';
+  const parsed = dayjs(d);
+  return parsed.isValid() ? parsed.format('DD/MM/YY') : d;
+};
 
 const ClosingPage = ({ data }) => (
   <Page size="A4" style={styles.page}>
@@ -93,7 +98,7 @@ const ClosingPage = ({ data }) => (
       </View>
       <View style={styles.infoRow}>
         <Text><Text style={styles.infoLabel}>पंजीयन क्र. : </Text><Text style={styles.infoValue}>{data.registrationNumber}</Text></Text>
-        <View style={styles.infoRight}><Text><Text style={styles.infoLabel}>दिनांक : </Text><Text style={styles.infoValue}>{dayjs(data.date).format('DD/MM/YYYY')}</Text></Text></View>
+        <View style={styles.infoRight}><Text><Text style={styles.infoLabel}>दिनांक : </Text><Text style={styles.infoValue}>{fmtDate(data.date)}</Text></Text></View>
       </View>
       <View style={styles.infoRow}>
         <Text><Text style={styles.infoLabel}>फोन : </Text><Text style={styles.infoValue}>{data.phone}</Text></Text>
@@ -101,7 +106,17 @@ const ClosingPage = ({ data }) => (
       </View>
       <View style={styles.infoRow}>
         <Text><Text style={styles.infoLabel}>योजना : </Text><Text style={styles.infoValue}>{data.programName}</Text></Text>
+        <View style={styles.infoRight}><Text><Text style={styles.infoLabel}>आयु वर्ग : </Text><Text style={styles.infoValue}>{data.ageGroupName || '—'}</Text></Text></View>
       </View>
+
+      {/* Closing group info */}
+      {data.closingGroupId && (
+        <View style={styles.groupInfoRow}>
+          <Text><Text style={styles.groupInfoLabel}>ग्रुप ID : </Text><Text style={styles.groupInfoValue}>{data.closingGroupId}</Text></Text>
+          <View style={{ flex: 1 }} />
+          <Text><Text style={styles.groupInfoLabel}>स्थिति : </Text><Text style={{ ...styles.groupInfoValue, color: data.status === 'paid' ? '#52c41a' : '#ff4d4f' }}>{data.status?.toUpperCase() || '—'}</Text></Text>
+        </View>
+      )}
 
       {/* Closing entries table */}
       <Text style={styles.sectionTitle}>क्लोज़िंग विवरण</Text>
@@ -113,6 +128,7 @@ const ClosingPage = ({ data }) => (
           <View style={styles.cellVillage}><Text style={styles.thText}>गाँव</Text></View>
           <View style={styles.cellReg}><Text style={styles.thText}>पंजीयन क्र.</Text></View>
           <View style={styles.cellPhone}><Text style={styles.thText}>फोन</Text></View>
+          <View style={styles.cellDate}><Text style={styles.thText}>क्लोज़ तिथि</Text></View>
         </View>
         {(data.entries || []).map((e, i) => (
           <View key={i} style={styles.tr}>
@@ -122,6 +138,7 @@ const ClosingPage = ({ data }) => (
             <View style={styles.cellVillage}><Text style={styles.tdCenter}>{e.closed_village || ''}</Text></View>
             <View style={styles.cellReg}><Text style={styles.tdCenter}>{e.closed_registrationNumber || data.closing_registrationNumber || ''}</Text></View>
             <View style={styles.cellPhone}><Text style={styles.tdCenter}>{e.closingPhone || data.closingPhone || ''}</Text></View>
+            <View style={styles.cellDate}><Text style={styles.tdCenter}>{fmtDate(e.closed_date)}</Text></View>
           </View>
         ))}
       </View>

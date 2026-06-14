@@ -12,7 +12,7 @@ import {
   TeamOutlined, CalendarOutlined, FileTextOutlined,
   RollbackOutlined, ExclamationCircleOutlined,
   HeartFilled, ClockCircleOutlined, CheckCircleOutlined,
-  InfoCircleOutlined
+  InfoCircleOutlined, WarningOutlined
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import relativeTime from 'dayjs/plugin/relativeTime'
@@ -53,8 +53,6 @@ const ClosingGroupModal = ({ group, visible, onClose, programList }) => {
       try {
         const ids = group.closedMemberIds || group.paymentMemberIds || []
         if (!ids.length) { setGroupMembers([]); return }
-
-        // Get member details from Firestore in batches of 10
         const batchSize = 10
         const results = []
         for (let i = 0; i < ids.length; i += batchSize) {
@@ -117,7 +115,7 @@ const ClosingGroupModal = ({ group, visible, onClose, programList }) => {
         ) : (
           <List size="small" dataSource={groupMembers}
             renderItem={m => (
-              <List.Item extra={<Space>{m.closed_invitation_url ? <Button size="small" type="link" onClick={() => window.open(`/api/closing-card/view?memberId=${m.id}`)}>View Card</Button> : null}<Tag color="blue">₹{m.amount}</Tag></Space>}>
+              <List.Item extra={<Space>{m.closed_invitation_url ? <Button size="small" type="link" onClick={() => window.open(m.closed_invitation_url)}>View Card</Button> : null}<Tag color="blue">₹{m.amount}</Tag></Space>}>
                 <List.Item.Meta
                   avatar={<Avatar src={m.photoURL} icon={<UserOutlined />} size={30} style={{ background: colors.primary + '30', color: colors.primary }} />}
                   title={<Space size={4}><span style={{ fontWeight: 600, fontSize: 13 }}>{m.memberName}</span><Tag style={{ fontSize: 10 }}>{m.registrationNumber}</Tag></Space>}
@@ -147,6 +145,7 @@ const ClosingMembersPage = () => {
   const [searchText,           setSearchText]           = useState('')
   const [programFilter,        setProgramFilter]        = useState('all')
   const [groupProgramFilter,   setGroupProgramFilter]   = useState('all')
+  const [resetting,            setResetting]            = useState(false)
 
   const programList = useSelector((s) => s.data.programList || [])
   const agentList   = useSelector((s) => s.data.agentList   || [])
@@ -181,7 +180,7 @@ const ClosingMembersPage = () => {
     finally { setGroupsLoading(false) }
   }
 
-  useEffect(() => { fetchData() }, [])
+  useEffect(() => { fetchData(); fetchClosingGroups() }, [])
   useEffect(() => { if (activeTab === 'history') fetchClosingGroups() }, [activeTab])
 
   // ── Derived lists — use flat member.programId ──────────────────────────────
@@ -227,7 +226,7 @@ const ClosingMembersPage = () => {
           })
           if (res?.success) {
             message.success(`Reversed! ${res.summary?.membersRestored} members restored.`)
-            fetchData(); fetchClosingGroups()
+            await Promise.all([fetchData(), fetchClosingGroups()])
           } else { message.error(res?.message || 'Reversal failed') }
         } catch (e) { console.error(e); message.error('Reversal request failed') }
         finally { setReversingId(null) }
@@ -236,7 +235,49 @@ const ClosingMembersPage = () => {
   }
 
   const handleViewMember       = (m) => { setSelectedMember(m); setDetailDrawerVisible(true) }
-  const handleClosingComplete  = () => { fetchData(); if (activeTab === 'history') fetchClosingGroups() }
+  const handleClosingComplete  = async () => { await Promise.all([fetchData(), fetchClosingGroups()]) }
+
+  const handleResetClosing = () => {
+    confirm({
+      title: 'Reset All Closing Data?',
+      icon: <ExclamationCircleOutlined style={{ color: colors.error }} />,
+      content: (
+        <div>
+          <p style={{ color: colors.error, fontWeight: 700, marginBottom: 8 }}>
+            ⚠️ This will permanently delete ALL closing data:
+          </p>
+          <ul style={{ paddingLeft: 20, lineHeight: 2 }}>
+            <li>All <strong>closing_payment</strong> documents</li>
+            <li>All <strong>groupClosings</strong> (batches)</li>
+            <li>All members' <strong>closing fields</strong> (amounts, counts, status)</li>
+            <li>All agents' <strong>closing stats</strong></li>
+            <li>Program &amp; organization <strong>closing counters</strong></li>
+          </ul>
+          <p style={{ color: colors.warning, marginTop: 8 }}>This action cannot be undone!</p>
+        </div>
+      ),
+      okText: 'Yes, Reset Everything',
+      okType: 'danger',
+      cancelText: 'Cancel',
+      onOk: async () => {
+        setResetting(true)
+        try {
+          const data = await paymentApi.resetClosing()
+          if (data.success) {
+            message.success(`Reset complete! ${data.summary?.closingPayments || 0} payments, ${data.summary?.groupClosings || 0} groups deleted, ${data.summary?.members || 0} members reset.`)
+            await handleClosingComplete()
+          } else {
+            message.error(data.message || 'Reset failed')
+          }
+        } catch (e) {
+          console.error(e)
+          message.error('Reset request failed')
+        } finally {
+          setResetting(false)
+        }
+      },
+    })
+  }
 
   // ── Columns: Closed Members ────────────────────────────────────────────────
   const memberColumns = [
@@ -268,7 +309,7 @@ const ClosingMembersPage = () => {
     },
     {
       title: 'Invitation', key: 'invitation', width: 110,
-      render: (_, r) => r.closed_invitation_url ? <Button type="link" size="small" onClick={() => window.open(`/api/closing-card/view?memberId=${r.id}`)}>View Card</Button> : <Tag color="warning">No Card</Tag>
+      render: (_, r) => r.closed_invitation_url ? <Button type="link" size="small" onClick={() => window.open(r.closed_invitation_url)}>View Card</Button> : <Tag color="warning">No Card</Tag>
     },
     { title: 'Note', key: 'note', width: 200, render: (_, r) => <span style={{ fontSize: 12, color: '#555' }}>{r.closed_note || '—'}</span> },
     { title: 'Action', key: 'action', width: 80, render: (_, r) => <Button type="text" icon={<EyeOutlined />} onClick={() => handleViewMember(r)} /> },
@@ -288,8 +329,18 @@ const ClosingMembersPage = () => {
       )
     },
     {
-      title: 'Group ID', key: 'id', width: 130,
-      render: (_, r) => <Tooltip title={r.id}><Tag style={{ fontFamily: 'monospace', fontSize: 11, cursor: 'pointer' }} onClick={() => { setSelectedGroup(r); setGroupModalVisible(true) }}>{r.id.slice(-8)}</Tag></Tooltip>
+      title: 'Group', key: 'id', width: 200,
+      render: (_, r) => (
+        <div>
+          <div style={{ fontWeight: 600, fontSize: 13, color: colors.fg }}>{r.groupName || <span style={{ color: colors.muted, fontStyle: 'italic' }}>Unnamed</span>}</div>
+          <Tooltip title={r.id}>
+            <Tag style={{ fontFamily: 'monospace', fontSize: 10, cursor: 'pointer', marginTop: 2 }}
+              onClick={() => { setSelectedGroup(r); setGroupModalVisible(true) }}>
+              {r.id.slice(-8)}
+            </Tag>
+          </Tooltip>
+        </div>
+      )
     },
     {
       title: 'Program', key: 'program', width: 160,
@@ -385,16 +436,27 @@ const ClosingMembersPage = () => {
             { title: 'With Invitation', value: closedMembers.filter(m => m.closed_invitation_url).length,                  prefix: <FileTextOutlined />,     color: colors.warning },
           ].map(s => <Col span={4} key={s.title}><Card size="small"><Statistic title={s.title} value={s.value} prefix={s.prefix} valueStyle={{ color: s.color }} /></Card></Col>)}
         </Row>
+        <div style={{ marginTop: 12, display: 'flex', justifyContent: 'flex-end' }}>
+          <Button danger icon={<WarningOutlined />} onClick={handleResetClosing} loading={resetting}
+            style={{ fontSize: 12 }}>
+            Reset All Closing Data
+          </Button>
+        </div>
       </Card>
 
       <Card><Tabs activeKey={activeTab} onChange={setActiveTab} items={tabItems} /></Card>
 
-      <ClosingGroupModal group={selectedGroup} visible={groupModalVisible} onClose={() => { setGroupModalVisible(false); setSelectedGroup(null) }} programList={programList} />
+      <ClosingGroupModal
+        group={selectedGroup} visible={groupModalVisible}
+        onClose={() => { setGroupModalVisible(false); setSelectedGroup(null) }}
+        programList={programList}
+      />
 
       <MarriageClosingDrawer
         visible={closingFormVisible} onClose={() => setClosingFormVisible(false)}
         members={members} programList={programList} currentUser={currentUser}
-        onSuccess={() => { setClosingFormVisible(false); handleClosingComplete() }}
+        closingGroups={closingGroups}
+        onSuccess={async () => { setClosingFormVisible(false); await handleClosingComplete() }}
       />
 
       {selectedMember && (

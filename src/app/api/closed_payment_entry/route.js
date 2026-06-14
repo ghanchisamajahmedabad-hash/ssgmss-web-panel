@@ -62,12 +62,14 @@ export async function POST(req) {
   const {
     programId,
     groupId,
+    groupName,
     memberClosingList = [],
     memberIds = [],
     closedBy,
     closedByName,
     ageGroups = [],
     memberGroups = [],
+    closingGroupId,   // optional — for add-to-existing mode
   } = body;
 
   if (!programId || !memberIds.length || !memberClosingList.length) {
@@ -78,19 +80,36 @@ export async function POST(req) {
   }
 
   try {
-    const groupRef = db.collection("groupClosings").doc(groupId || undefined);
-    const closingGroupId = groupRef.id;
+    const isAddMode = !!closingGroupId;
+    const groupRef = db.collection("groupClosings").doc(closingGroupId || groupId || undefined);
+    const computedGroupId = groupRef.id;
     const ts = STS();
     const now = new Date().toISOString();
     const mb = new MultiBatch();
+
+    // ── Add-mode: validate existing group ────────────────────────────────
+    let existingClosedIds = new Set();
+    let existingPaymentIds = new Set();
+    let existingGroupData = null;
+
+    if (isAddMode) {
+      const snap = await groupRef.get();
+      if (!snap.exists)
+        return NextResponse.json({ success: false, message: "Closing group not found" }, { status: 404 });
+      if (snap.data().status === "reversed")
+        return NextResponse.json({ success: false, message: "Cannot add to a reversed group" }, { status: 400 });
+      existingGroupData = snap.data();
+      existingClosedIds = new Set(existingGroupData.closedMemberIds || []);
+      existingPaymentIds = new Set(existingGroupData.paymentMemberIds || []);
+    }
 
     // ── 1. Fetch all members in this program ──────────────────────────────
     let membersQuery = db.collection("members")
       .where("programId", "==", programId)
       .where("status", "==", "active");
 
-    if (ageGroups.length) membersQuery = membersQuery.where("ageGroupId", "in", ageGroups.slice(0, 10));
-    if (memberGroups.length) membersQuery = membersQuery.where("memberGroupId", "in", memberGroups.slice(0, 10));
+    if (!isAddMode && ageGroups.length) membersQuery = membersQuery.where("ageGroupId", "in", ageGroups.slice(0, 10));
+    if (!isAddMode && memberGroups.length) membersQuery = membersQuery.where("memberGroupId", "in", memberGroups.slice(0, 10));
 
     const membersSnap = await membersQuery.get();
     const allProgramDocs = {};
@@ -119,6 +138,9 @@ export async function POST(req) {
       const m = allProgramDocs[memberId];
       if (!m) continue;
 
+      // Add-mode: skip members already closed
+      if (isAddMode && existingClosedIds.has(memberId)) continue;
+
       const memberRef = db.collection("members").doc(memberId);
       const isBeingClosedNow = memberIds.includes(memberId);
       const payAmount = Number(m.payAmount || 0);
@@ -135,7 +157,7 @@ export async function POST(req) {
           // Build the closedStatus entry — DELETE relies on this to find & remove
           const newClosedEntry = {
             programId,
-            closingGroupId,
+            closingGroupId: computedGroupId,
             closed_date: detail.closed_date || null,
             closed_note: detail.closed_note || "",
             closed_invitation_url: detail.closed_invitation_url || null,
@@ -145,7 +167,7 @@ export async function POST(req) {
 
           mb.update(memberRef, {
             programId,
-            closingGroupId,
+            closingGroupId: computedGroupId,
             member_closed_at: now,
             member_closed_by: closedBy || null,
             closed_date: detail.closed_date || null,
@@ -162,6 +184,9 @@ export async function POST(req) {
       }
 
       // ── JOB 2: Calculate payment ──────────────────────────────────────────
+      // Add-mode: skip payment for members who already have a payment entry
+      if (isAddMode && existingPaymentIds.has(memberId)) continue;
+
       if (payAmount <= 0) continue;
 
       const joinDate = parseDate(m.dateJoin);
@@ -206,14 +231,14 @@ export async function POST(req) {
         totalClosingCount: INC(memberCount),
         pendingClosingCount: INC(memberCount),
         updated_at: ts,
-        closingGroupIds: admin.firestore.FieldValue.arrayUnion(closingGroupId),
-        [`closingGroupAmounts.${closingGroupId}`]: memberPayment,
-        [`closingGroupCounts.${closingGroupId}`]: memberCount,
+        closingGroupIds: admin.firestore.FieldValue.arrayUnion(computedGroupId),
+        [`closingGroupAmounts.${computedGroupId}`]: memberPayment,
+        [`closingGroupCounts.${computedGroupId}`]: memberCount,
       });
 
       // ── JOB 3: Write closing_payment entry for this member ────────────────
       // Doc ID: {memberId}_{closingGroupId} — unique per member per group
-      const closingPaymentRef = db.collection("closing_payment").doc(`${memberId}_${closingGroupId}`);
+      const closingPaymentRef = db.collection("closing_payment").doc(`${memberId}_${computedGroupId}`);
 
       // Pull the closing-member snapshot that the frontend sent
       const closingMemberDetail = memberClosingList.find(c => c.closed_memberId === memberId) || {};
@@ -239,7 +264,7 @@ export async function POST(req) {
       mb.set(closingPaymentRef, {
         // identifiers
         memberId,
-        closingGroupId,
+        closingGroupId: computedGroupId,
         programId,
 
         // member info snapshot (from Firestore member doc)
@@ -280,17 +305,43 @@ export async function POST(req) {
     }
 
     // ── 5. Write group doc ────────────────────────────────────────────────
-    mb.set(groupRef, {
-      id: closingGroupId,
-      programId,
-      closedMemberIds: closedIds,
-      paymentMemberIds: paymentUpdatedIds,
-      paymentBreakdown: paymentPerMember,
-      totalAmount: totalPaymentAmount,
-      totalClosingCount: totalPaymentCount,
-      status: "active",
-      closedAt: ts,
-    });
+    if (isAddMode) {
+      const freshSnap = await groupRef.get();
+      const freshData = freshSnap.data() || {};
+      const existingClosedArr = freshData.closedMemberIds || [];
+      const existingPaymentArr = freshData.paymentMemberIds || [];
+      const existingBreakdown = freshData.paymentBreakdown || {};
+
+      const mergedClosedArr = [...new Set([...existingClosedArr, ...closedIds])];
+      const mergedPaymentArr = [...new Set([...existingPaymentArr, ...paymentUpdatedIds])];
+      const mergedBreakdown = { ...existingBreakdown, ...paymentPerMember };
+
+      mb.set(groupRef, {
+        closedMemberIds: mergedClosedArr,
+        paymentMemberIds: mergedPaymentArr,
+        paymentBreakdown: mergedBreakdown,
+        memberCount: existingClosedArr.length + closedIds.length,
+        totalAmount: (freshData.totalAmount || 0) + totalPaymentAmount,
+        totalClosingCount: (freshData.totalClosingCount || 0) + totalPaymentCount,
+        ...(groupName ? { groupName } : {}),
+        status: "active",
+        updatedAt: ts,
+      }, { merge: true });
+    } else {
+      mb.set(groupRef, {
+        id: computedGroupId,
+        programId,
+        ...(groupName ? { groupName } : {}),
+        closedMemberIds: closedIds,
+        paymentMemberIds: paymentUpdatedIds,
+        paymentBreakdown: paymentPerMember,
+        totalAmount: totalPaymentAmount,
+        totalClosingCount: totalPaymentCount,
+        memberCount: closedIds.length,
+        status: "active",
+        closedAt: ts,
+      });
+    }
 
     // ── 6. Agent / Program / Org stats ────────────────────────────────────
     for (const [agentId, s] of Object.entries(agentStats)) {

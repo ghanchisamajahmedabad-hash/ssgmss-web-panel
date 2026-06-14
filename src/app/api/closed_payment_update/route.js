@@ -37,7 +37,7 @@ export async function POST(req) {
 
     const body = await req.json();
     const {
-      memberPayments, paymentDate, paymentMethod, paymentNote,
+      closingPayments, memberPayments, paymentDate, paymentMethod, paymentNote,
       totalAmount, transactionId, fileUrl, agentId, programId,
     } = body;
 
@@ -61,14 +61,56 @@ export async function POST(req) {
       createdAt: timestamp,
     });
 
+    // ── Resolve which format was sent ──────────────────────────────────────
+    // new format: closingPayments = [{ memberId, closingGroupId, amount, memberName }]
+    // old format: memberPayments = [{ memberId, memberName, amount }] — auto-distribute
+    const useNewFormat = closingPayments && closingPayments.length > 0;
+    const paymentEntries = useNewFormat ? closingPayments : (memberPayments || []);
+
     let grandTotalPaid  = 0;
     let grandTotalCount = 0;
     const memberAllocations = {};
     const commissionMembers = [];
 
-    // ── Per-member loop ────────────────────────────────────────────────────
-    for (const payment of memberPayments) {
+    // ── Helper: update single closing_payment doc ──────────────────────────
+    const updateClosingPaymentDoc = (cpDoc, coverAmount) => {
+      const docTotal     = Number(cpDoc.totalAmount || 0);
+      const docPaidSoFar = Number(cpDoc.paidAmount  || 0);
+      const newDocPaid   = docPaidSoFar + coverAmount;
+      const docFullyPaid = newDocPaid >= docTotal;
+      const cpRef        = db.collection("closing_payment").doc(cpDoc.id);
+
+      batch.update(cpRef, {
+        paidAmount:        newDocPaid,
+        pendingAmount:     Math.max(0, docTotal - newDocPaid),
+        status:            docFullyPaid ? "paid" : "partial",
+        paymentPercentage: docTotal > 0 ? Number(((newDocPaid / docTotal) * 100).toFixed(2)) : 100,
+        lastPaymentAmount:   coverAmount,
+        lastPaymentDate:     paymentDate || now,
+        lastPaymentMethod:   paymentMethod,
+        lastPaymentGroupId:  paymentGroupRef.id,
+        lastPaymentNote:     paymentNote     || null,
+        lastTransactionId:   transactionId   || null,
+        lastFileUrl:         fileUrl         || null,
+        lastPaidBy:          authResult.user.uid,
+        lastPaidByName:      authResult.user.displayName || null,
+        lastUpdatedAt:       timestamp,
+        paymentHistory: admin.firestore.FieldValue.arrayUnion({
+          amount: coverAmount, paymentDate: paymentDate || now, paymentMethod,
+          paymentGroupId: paymentGroupRef.id, transactionId: transactionId || null,
+          fileUrl: fileUrl || null, note: paymentNote || null,
+          paidBy: authResult.user.uid, paidAt: now,
+        }),
+      });
+
+      return { docFullyPaid, wasPending: cpDoc.status === 'pending', closingGroupId: cpDoc.closingGroupId };
+    };
+
+    // ── Per-member/per-group loop ────────────────────────────────────────────
+    for (const payment of paymentEntries) {
       const { memberId, memberName, amount } = payment;
+      const requestedAmount = Number(amount);
+      if (requestedAmount <= 0) continue;
 
       const memberRef = db.collection('members').doc(memberId);
       const memberDoc = await memberRef.get();
@@ -85,65 +127,65 @@ export async function POST(req) {
         continue;
       }
 
-      const requestedAmount = Number(amount);
-      const deduction       = Math.min(requestedAmount, closingPending);
+      const deduction = Math.min(requestedAmount, closingPending);
       if (deduction <= 0) continue;
 
-      // ── Update closing_payment collection ────────────────────────────────
-      // Distribute deduction across pending/partial closing_payment docs oldest-first,
-      // marking each as "paid" or "partial".
       let paidDocsCount = 0;
+      const paidGroupIds = [];
+
       try {
-        const pendingClosingDocs = await fetchClosingPaymentDocs(memberId);
+        if (useNewFormat && payment.closingGroupId) {
+          // ── NEW FORMAT: pay a specific closing group ───────────────────────
+          const cpDocId = `${memberId}_${payment.closingGroupId}`;
+          const cpSnap = await db.collection("closing_payment").doc(cpDocId).get();
+          if (cpSnap.exists) {
+            const cpData = { id: cpDocId, ...cpSnap.data() };
+            const docPending = Number(cpData.totalAmount || 0) - Number(cpData.paidAmount || 0);
+            const coverAmount = Math.min(deduction, docPending);
+            if (coverAmount > 0) {
+              const result = updateClosingPaymentDoc(cpData, coverAmount);
+              if (result.wasPending) paidDocsCount += 1;
+              paidGroupIds.push({ closingGroupId: result.closingGroupId, amount: coverAmount });
+            }
+          }
+        } else {
+          // ── OLD FORMAT: auto-distribute across pending docs oldest-first ──
+          const pendingClosingDocs = await fetchClosingPaymentDocs(memberId);
+          let remainingDeduction = deduction;
 
-        let remainingDeduction = deduction;
-
-        for (const cpDoc of pendingClosingDocs) {
-          if (remainingDeduction <= 0) break;
-
-          const cpRef        = db.collection("closing_payment").doc(cpDoc.id);
-          const docTotal     = Number(cpDoc.totalAmount || 0);
-          const docPaidSoFar = Number(cpDoc.paidAmount  || 0);
-          const docPending   = docTotal - docPaidSoFar;
-
-          if (docPending <= 0) continue;
-
-          const coverAmount   = Math.min(remainingDeduction, docPending);
-          const newDocPaid    = docPaidSoFar + coverAmount;
-          const docFullyPaid  = newDocPaid >= docTotal;
-          const wasPending    = cpDoc.status === 'pending';
-
-          batch.update(cpRef, {
-            paidAmount:        newDocPaid,
-            pendingAmount:     Math.max(0, docTotal - newDocPaid),
-            status:            docFullyPaid ? "paid" : "partial",
-            paymentPercentage: docTotal > 0 ? Number(((newDocPaid / docTotal) * 100).toFixed(2)) : 100,
-            lastPaymentAmount:   coverAmount,
-            lastPaymentDate:     paymentDate || now,
-            lastPaymentMethod:   paymentMethod,
-            lastPaymentGroupId:  paymentGroupRef.id,
-            lastPaymentNote:     paymentNote     || null,
-            lastTransactionId:   transactionId   || null,
-            lastFileUrl:         fileUrl         || null,
-            lastPaidBy:          authResult.user.uid,
-            lastPaidByName:      authResult.user.displayName || null,
-            lastUpdatedAt:       timestamp,
-            paymentHistory: admin.firestore.FieldValue.arrayUnion({
-              amount: coverAmount, paymentDate: paymentDate || now, paymentMethod,
-              paymentGroupId: paymentGroupRef.id, transactionId: transactionId || null,
-              fileUrl: fileUrl || null, note: paymentNote || null,
-              paidBy: authResult.user.uid, paidAt: now,
-            }),
-          });
-
-          remainingDeduction -= coverAmount;
-          if (wasPending) paidDocsCount += 1;
+          for (const cpDoc of pendingClosingDocs) {
+            if (remainingDeduction <= 0) break;
+            const docPending = Number(cpDoc.totalAmount || 0) - Number(cpDoc.paidAmount || 0);
+            if (docPending <= 0) continue;
+            const coverAmount = Math.min(remainingDeduction, docPending);
+            const result = updateClosingPaymentDoc(cpDoc, coverAmount);
+            remainingDeduction -= coverAmount;
+            if (result.wasPending) paidDocsCount += 1;
+            paidGroupIds.push({ closingGroupId: result.closingGroupId, amount: coverAmount });
+          }
         }
       } catch (cpErr) {
         console.error(`[closingPayment] closing_payment update failed for ${memberId}:`, cpErr);
       }
 
-      // ── Update member doc (after counting actual paid docs) ──────────────
+      // ── Build per-group update map for member doc ────────────────────────
+      const groupUpdates = {};
+      for (const g of paidGroupIds) {
+        const gId = g.closingGroupId;
+        if (!gId) continue;
+        // Read current per-group values from member doc (or default 0)
+        const currPaid   = Number((memberData.closingGroupPaidAmounts || {})[gId] || 0);
+        const currPending = Number((memberData.closingGroupPendingAmounts || {})[gId] || 0);
+        const oldTotal    = currPaid + currPending;
+        const newPaidAmt  = currPaid + g.amount;
+        const newPending  = Math.max(0, oldTotal - newPaidAmt);
+        groupUpdates[`closingGroupPaidAmounts.${gId}`]    = newPaidAmt;
+        groupUpdates[`closingGroupPendingAmounts.${gId}`] = newPending;
+        groupUpdates[`closingGroupPaidCounts.${gId}`]     = INC(1);
+        groupUpdates[`closingGroupStatus.${gId}`]         = newPending <= 0 ? "paid" : "partial";
+      }
+
+      // ── Update member doc ────────────────────────────────────────────────
       const closingTotal = memberData.closing_totalAmount || 0;
       const newPaid      = (memberData.closing_paidAmount || 0) + deduction;
       const paymentPct   = closingTotal > 0 ? Math.min((newPaid / closingTotal) * 100, 100) : 0;
@@ -156,9 +198,10 @@ export async function POST(req) {
         paidClosingCount:           INC(paidDocsCount),
         pendingClosingCount:        decrementCnt > 0 ? INC(-decrementCnt) : INC(0),
         updated_at:                 timestamp,
+        ...groupUpdates,
       });
 
-      // ── Program stats — use capped decrementCnt ─────────────────────────
+      // ── Program stats ────────────────────────────────────────────────────
       if (pId) {
         batch.set(db.collection('programs').doc(pId), {
           totalClosingPaidAmount:    INC(deduction),
@@ -180,6 +223,7 @@ export async function POST(req) {
         updatedProgramStats[pId].lastUpdated                = new Date();
       }
 
+      // ── Commission ──────────────────────────────────────────────────────
       commissionMembers.push({
         memberId,
         memberName: memberData.displayName || memberName,
@@ -188,7 +232,8 @@ export async function POST(req) {
         deduction, programId: pId, programName
       });
 
-      memberAllocations[memberId] = { programId: pId, programName, amount: deduction, paidDocsCount };
+      const closingGroupIdsStr = paidGroupIds.map(g => g.closingGroupId).filter(Boolean).join(',');
+      memberAllocations[memberId] = { programId: pId, programName, amount: deduction, paidDocsCount, closingGroupIds: closingGroupIdsStr };
       grandTotalPaid  += deduction;
       grandTotalCount += paidDocsCount;
 
@@ -216,6 +261,7 @@ export async function POST(req) {
         createdBy:       authResult.user.uid,
         paymentNote,
         groupId:         paymentGroupRef.id,
+        closingGroupId:  paidGroupIds.map(g => g.closingGroupId).filter(Boolean)[0] || '',
         paymentType:     'closingPayment',
         agentId:         agentId || '',
         createdAt:       timestamp,

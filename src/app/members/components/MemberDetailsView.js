@@ -322,9 +322,11 @@ const MemberDetailDrawer = ({ member, visible, onClose, programList }) => {
     phone: entry.closingPhone || member?.phone || '',
     village: entry.closing_village || member?.village || '',
     programName: entry.programName || member?.programName || '',
+    ageGroupName: member?.ageGroupName || '',
     totalAmount: entry.totalAmount || 0,
     date: entry.date,
     status: entry.status,
+    closingGroupId: entry.closingGroupId || '',
     entries: entry.closingDetails || [],
     closing_registrationNumber: entry.closing_registrationNumber || null,
     closingPhone: entry.closingPhone || null,
@@ -348,8 +350,9 @@ const MemberDetailDrawer = ({ member, visible, onClose, programList }) => {
               <Avatar src={member?.photoURL} size={44} icon={<UserOutlined />} className="border-2 border-blue-500" />
               <div>
                 <div className="font-bold text-lg">{member?.displayName} {member?.fatherName}</div>
-                <div className="text-sm text-gray-500 flex items-center gap-2">
+                <div className="text-sm text-gray-500 flex items-center gap-2 flex-wrap">
                   <BarcodeOutlined /> {member?.registrationNumber}
+                  {member?.ageGroupName && <Tag color="blue" style={{fontSize:10, margin:0}}>{member.ageGroupName}</Tag>}
                 </div>
               </div>
             </div>
@@ -662,14 +665,20 @@ const MemberDetailDrawer = ({ member, visible, onClose, programList }) => {
             )}
 
             {/* Filter + PDF download bar */}
-            <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex flex-wrap items-center justify-between gap-2 p-3 bg-gray-50 rounded-lg border">
               <Space>
-                <Button size="small" type={closingFilter === 'all' ? 'primary' : 'default'} onClick={() => setClosingFilter('all')}>All ({closingEntries.length})</Button>
-                <Button size="small" type={closingFilter === 'pending' ? 'primary' : 'default'} danger={closingFilter === 'pending'} onClick={() => setClosingFilter('pending')}>
-                  Pending ({pendingCount})
+                <Button size="small" type={closingFilter === 'all' ? 'primary' : 'default'} onClick={() => setClosingFilter('all')} 
+                  style={closingFilter === 'all' ? {background:'#1B385A', borderColor:'#1B385A'} : {}}>
+                  All <span className="ml-1 opacity-70">({closingEntries.length})</span>
                 </Button>
-                <Button size="small" type={closingFilter === 'paid' ? 'primary' : 'default'} onClick={() => setClosingFilter('paid')}>
-                  Paid ({paidCount})
+                <Button size="small" type={closingFilter === 'pending' ? 'primary' : 'default'} 
+                  danger={closingFilter === 'pending'} onClick={() => setClosingFilter('pending')}
+                  style={closingFilter === 'pending' ? {fontWeight:600} : {}}>
+                  Pending <span className="ml-1 opacity-70">({pendingCount})</span>
+                </Button>
+                <Button size="small" type={closingFilter === 'paid' ? 'primary' : 'default'} onClick={() => setClosingFilter('paid')}
+                  style={closingFilter === 'paid' ? {background:'#52c41a', borderColor:'#52c41a'} : {}}>
+                  Paid <span className="ml-1 opacity-70">({paidCount})</span>
                 </Button>
               </Space>
               {(closingEntries.length > 0) && (
@@ -677,18 +686,24 @@ const MemberDetailDrawer = ({ member, visible, onClose, programList }) => {
                   {(pendingCount > 0) && (
                     <PDFDownloadLink document={<ClosingRasidPdf entries={buildPdfData(closingEntries.filter(e => e.status !== 'paid'))} />}
                       fileName={`closing_pending_${member?.registrationNumber || member?.id}.pdf`}>
-                      {({ loading }) => <Button size="small" icon={<FilePdfOutlined />} loading={loading} style={{ background: '#ff4d4f', borderColor: '#ff4d4f', color: '#fff' }}>Pending PDF</Button>}
+                      {({ loading }) => <Button size="small" icon={<FilePdfOutlined />} loading={loading} 
+                        style={{ background: '#ff4d4f', borderColor: '#ff4d4f', color: '#fff', borderRadius:6, fontWeight:500 }}>
+                        Pending PDF</Button>}
                     </PDFDownloadLink>
                   )}
                   {(paidCount > 0) && (
                     <PDFDownloadLink document={<ClosingRasidPdf entries={buildPdfData(closingEntries.filter(e => e.status === 'paid'))} />}
                       fileName={`closing_paid_${member?.registrationNumber || member?.id}.pdf`}>
-                      {({ loading }) => <Button size="small" icon={<FilePdfOutlined />} loading={loading} style={{ background: '#52c41a', borderColor: '#52c41a', color: '#fff' }}>Paid PDF</Button>}
+                      {({ loading }) => <Button size="small" icon={<FilePdfOutlined />} loading={loading} 
+                        style={{ background: '#52c41a', borderColor: '#52c41a', color: '#fff', borderRadius:6, fontWeight:500 }}>
+                        Paid PDF</Button>}
                     </PDFDownloadLink>
                   )}
                   <PDFDownloadLink document={<ClosingRasidPdf entries={buildPdfData(closingEntries)} />}
                     fileName={`closing_all_${member?.registrationNumber || member?.id}.pdf`}>
-                    {({ loading }) => <Button size="small" icon={<FilePdfOutlined />} loading={loading} style={{ background: '#722ed1', borderColor: '#722ed1', color: '#fff' }}>All PDF</Button>}
+                    {({ loading }) => <Button size="small" icon={<FilePdfOutlined />} loading={loading} 
+                      style={{ background: '#722ed1', borderColor: '#722ed1', color: '#fff', borderRadius:6, fontWeight:500 }}>
+                      All PDF</Button>}
                   </PDFDownloadLink>
                 </Space>
               )}
@@ -720,8 +735,8 @@ const MemberDetailDrawer = ({ member, visible, onClose, programList }) => {
                         {/* Dates */}
                         <div className="text-xs text-gray-500 mb-2 flex flex-wrap gap-3">
                           <span><CalendarOutlined className="mr-1" />Created: {dayjs(entry.date).format('DD MMM YYYY, hh:mm A')}</span>
-                          {entry.closingDetails?.[0]?.closed_date && <span><ClockCircleOutlined className="mr-1" />Closed: {entry.closingDetails[0].closed_date}</span>}
-                          {entry.closingDetails?.[0]?.marriageDate && <span><CalendarOutlined className="mr-1" />Marriage: {entry.closingDetails[0].marriageDate}</span>}
+                          {entry.closingDetails?.[0]?.closed_date && <span><ClockCircleOutlined className="mr-1" />Closed: {dayjs(entry.closingDetails[0].closed_date).isValid() ? dayjs(entry.closingDetails[0].closed_date).format('DD MMM YYYY') : entry.closingDetails[0].closed_date}</span>}
+                          {entry.closingDetails?.[0]?.marriageDate && <span><CalendarOutlined className="mr-1" />Marriage: {dayjs(entry.closingDetails[0].marriageDate).isValid() ? dayjs(entry.closingDetails[0].marriageDate).format('DD MMM YYYY') : entry.closingDetails[0].marriageDate}</span>}
                         </div>
 
                         {/* Closing details table */}
@@ -730,24 +745,26 @@ const MemberDetailDrawer = ({ member, visible, onClose, programList }) => {
                             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                               <thead>
                                 <tr style={{ background: '#f5f5f5' }}>
-                                  <th style={thStyle}>#</th>
+                                  <th style={{...thStyle, width:28}}>#</th>
                                   <th style={thStyle}>Name</th>
                                   <th style={thStyle}>Father Name</th>
                                   <th style={thStyle}>Village</th>
                                   <th style={thStyle}>Reg No</th>
                                   <th style={thStyle}>Phone</th>
+                                  <th style={thStyle}>Closing Date</th>
                                   <th style={thStyle}>Card</th>
                                 </tr>
                               </thead>
                               <tbody>
                                 {entry.closingDetails.map((d, i) => (
                                   <tr key={i} style={{ borderBottom: '1px solid #f0f0f0' }}>
-                                    <td style={tdStyle} className="text-center">{i + 1}</td>
+                                    <td style={{...tdStyle, textAlign:'center', width:28}}>{i + 1}</td>
                                     <td style={tdStyle}><span className="font-medium">{d.closed_memberName}</span></td>
                                     <td style={tdStyle} className="text-gray-500">{d.closed_fatherName || '—'}</td>
                                     <td style={tdStyle} className="text-gray-500">{d.closed_village || '—'}</td>
                                     <td style={tdStyle}><Tag style={{ fontSize: 10, margin: 0 }}>{d.closed_registrationNumber || entry.closing_registrationNumber || '—'}</Tag></td>
                                     <td style={tdStyle}>{d.closingPhone || entry.closingPhone || '—'}</td>
+                                    <td style={tdStyle} className="text-gray-500">{d.closed_date ? (dayjs(d.closed_date).isValid() ? dayjs(d.closed_date).format('DD/MM/YY') : d.closed_date) : '—'}</td>
                                     <td style={tdStyle}>
                                       {d.closed_invitation_url ? (
                                         <Button size="small" type="link" icon={<EyeOutlined />} href={d.closed_invitation_url} target="_blank" style={{ fontSize: 11 }} />
@@ -777,6 +794,7 @@ const MemberDetailDrawer = ({ member, visible, onClose, programList }) => {
                 <Table
                   columns={[
                     { title: 'Date', key: 'date', width: 120, render: (_, r) => <span className="text-sm">{dayjs(r.date).format('DD MMM YYYY, hh:mm A')}</span> },
+                    { title: 'Closing Group', key: 'cg', width: 90, render: (_, r) => r.closingGroupId ? <Tag style={{fontSize:9}}>{r.closingGroupId.slice(-8)}</Tag> : '—' },
                     { title: 'Amount', key: 'amt', width: 100, render: (_, r) => <span className="font-semibold text-purple-600">₹{(r.amount || r.amountPaid || 0).toLocaleString()}</span> },
                     { title: 'Mode', key: 'mode', width: 80, render: (_, r) => <Tag color={{ cash:'green', online:'blue' }[r.paymentMode] || 'default'}>{r.paymentMode}</Tag> },
                     { title: 'Transaction ID', key: 'txnId', width: 120, render: (_, r) => <Text code style={{fontSize:10}}>{r.transactionId || '—'}</Text> },
