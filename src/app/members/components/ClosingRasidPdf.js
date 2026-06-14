@@ -110,9 +110,9 @@ const ClosingPage = ({ data }) => (
       </View>
 
       {/* Closing group info */}
-      {data.closingGroupId && (
+      {(data.closingGroupName || data.closingGroupId) && (
         <View style={styles.groupInfoRow}>
-          <Text><Text style={styles.groupInfoLabel}>ग्रुप ID : </Text><Text style={styles.groupInfoValue}>{data.closingGroupId}</Text></Text>
+          <Text><Text style={styles.groupInfoLabel}>ग्रुप : </Text><Text style={styles.groupInfoValue}>{data.closingGroupName || data.closingGroupId}</Text></Text>
           <View style={{ flex: 1 }} />
           <Text><Text style={styles.groupInfoLabel}>स्थिति : </Text><Text style={{ ...styles.groupInfoValue, color: data.status === 'paid' ? '#52c41a' : '#ff4d4f' }}>{data.status?.toUpperCase() || '—'}</Text></Text>
         </View>

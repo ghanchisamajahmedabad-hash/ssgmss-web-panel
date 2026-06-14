@@ -298,14 +298,16 @@ const ClosingMembersPage = () => {
     { title: 'Closed Date', key: 'closed_date', width: 130, render: (_, r) => r.closed_date ? dayjs(r.closed_date).format('DD/MM/YYYY') : 'N/A' },
     {
       title: 'Group', key: 'closingGroupId', width: 140,
-      render: (_, r) => r.closingGroupId ? (
-        <Tooltip title={r.closingGroupId}>
-          <Tag icon={<TeamOutlined />} color="purple" style={{ cursor: 'pointer', fontSize: 10 }}
-            onClick={() => { const g = closingGroups.find(g => g.id === r.closingGroupId); if (g) { setSelectedGroup(g); setGroupModalVisible(true) } }}>
-            {r.closingGroupId.slice(-6)}
+      render: (_, r) => {
+        const group = closingGroups.find(g => g.id === r.closingGroupId);
+        const groupName = group?.groupName;
+        return r.closingGroupId ? (
+          <Tag icon={<TeamOutlined />} color="purple" style={{ cursor: 'pointer', fontSize: groupName ? 10 : 9 }}
+            onClick={() => { if (group) { setSelectedGroup(group); setGroupModalVisible(true) } }}>
+            {groupName || r.closingGroupId.slice(-6)}
           </Tag>
-        </Tooltip>
-      ) : <Tag>—</Tag>
+        ) : <Tag>—</Tag>
+      }
     },
     {
       title: 'Invitation', key: 'invitation', width: 110,

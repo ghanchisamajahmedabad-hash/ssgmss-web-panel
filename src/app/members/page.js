@@ -11,10 +11,10 @@ import {
   PlusOutlined, SearchOutlined, EyeOutlined, 
   EditOutlined, DeleteOutlined, MoreOutlined,
   UserOutlined, PhoneOutlined, IdcardOutlined,
-  CheckCircleOutlined, ClockCircleOutlined,
+  CheckCircleOutlined, ClockCircleOutlined, StopOutlined,
   FileTextOutlined, FilterOutlined, DownloadOutlined,
   ReloadOutlined, UserSwitchOutlined, PrinterOutlined,
-  TableOutlined
+  TableOutlined, DollarOutlined, MoneyCollectOutlined, WalletOutlined
 } from '@ant-design/icons'
 import { useAuth } from '@/components/Base/AuthProvider'
 import dayjs from 'dayjs'
@@ -31,6 +31,7 @@ import { doc, updateDoc, query, where, orderBy, collection, getDocs } from 'fire
 import { PDFDownloadLink } from '@react-pdf/renderer'
 import CertificateCom from './components/MemberPdf/CertificateCom'
 import RasidDrawer from './components/RasidCom/RasidDrawer'
+import PaymentDetailsDrawer from './components/PaymentDetailsDrawer'
 
 const { Search } = Input
 const { Option } = Select
@@ -159,12 +160,16 @@ const isSuperAdmin = (user) => user?.role === 'superadmin';
 
   useEffect(() => { fetchMembers(1, true) }, [])
 
+  // Clear export cache whenever filters change so downloads always use fresh data
+  useEffect(() => { setAllMembersForExport(null) }, [filters])
+
   const handleFilterChange = (changedValues) => setFilters(prev => ({ ...prev, ...changedValues }))
 
   const applyFilters = () => {
     setFilterModalVisible(false)
     setPagination(prev => ({ ...prev, current: 1, lastDoc: null, lastDocs: {} }))
-    fetchMembers(1, true)
+    setAllMembersForExport(null)
+    setTimeout(() => fetchMembers(1, true), 0)
   }
 
   const resetFilters = () => {
@@ -208,6 +213,9 @@ const isSuperAdmin = (user) => user?.role === 'superadmin';
   }
 
   const handleViewMember    = (member) => { setSelectedMember(member); setDetailDrawerVisible(true) }
+  const [paymentDetailsMember, setPaymentDetailsMember] = useState(null)
+  const [paymentDetailsVisible, setPaymentDetailsVisible] = useState(false)
+  const handlePaymentDetails = (member) => { setPaymentDetailsMember(member); setPaymentDetailsVisible(true) }
 
   const handleCertificateMember = (member) => {
     const agentData   = agentList?.find(a => a.id === member.agentId) || {}
@@ -403,6 +411,29 @@ const handleDeleteMember = (member) => {
       },
     },
     {
+      title: 'Closing', key: 'closing', width: 130,
+      render: (_, r) => {
+        const total = r.closing_totalAmount || 0
+        const paid = r.closing_paidAmount || 0
+        const pending = r.closing_pendingAmount || 0
+        if (!total) return <span className="text-gray-300 text-xs">—</span>
+        return (
+          <div>
+            <div className="flex items-center gap-1 text-xs">
+              <MoneyCollectOutlined style={{ color: '#722ed1', fontSize: 10 }} />
+              <span style={{ color: '#722ed1', fontWeight: 600 }}>₹{total.toLocaleString()}</span>
+            </div>
+            <div className="text-[10px]">
+              <span style={{ color: '#52c41a' }}>₹{paid.toLocaleString()}</span>
+              <span className="text-gray-300 mx-0.5">/</span>
+              <span style={{ color: pending > 0 ? '#ff4d4f' : '#52c41a' }}>₹{pending.toLocaleString()}</span>
+            </div>
+            <div className="text-[9px] text-gray-400">{r.paidClosingCount || 0}/{r.totalClosingCount || 0} ev</div>
+          </div>
+        )
+      },
+    },
+    {
       title: 'Join Date', dataIndex: 'dateJoin', key: 'dateJoin', width: 110,
       sorter: searchMode === 'paginated',
       render: (text) => (
@@ -416,13 +447,16 @@ const handleDeleteMember = (member) => {
     },
     {
       title: 'Status', key: 'status', width: 100,
-      render: (_, r) => (
-        <Tag color={r.active_flag ? 'green' : 'red'}
-          icon={r.active_flag ? <CheckCircleOutlined /> : <ClockCircleOutlined />}
-          size="small" className="text-xs">
-          {r.active_flag ? 'Active' : 'Inactive'}
-        </Tag>
-      ),
+      render: (_, r) => {
+        if (r.member_closed) return <Tag color="purple" icon={<StopOutlined />} size="small" className="text-xs">Closed</Tag>
+        return (
+          <Tag color={r.active_flag ? 'green' : 'red'}
+            icon={r.active_flag ? <CheckCircleOutlined /> : <ClockCircleOutlined />}
+            size="small" className="text-xs">
+            {r.active_flag ? 'Active' : 'Inactive'}
+          </Tag>
+        )
+      },
     },
     {
       title: 'Actions', key: 'actions', width: 90, fixed: 'right',
@@ -436,14 +470,19 @@ const handleDeleteMember = (member) => {
     onClick: () => handleViewMember(record)
   },
 
-  can('download') && {
-    key: 'cert',
-    label: 'Certificate',
-    icon: <FileTextOutlined />,
-    onClick: () => handleCertificateMember(record)
-  },
-
-  can('edit') && {
+          {
+            key: 'payment',
+            label: 'Payment Details',
+            icon: <WalletOutlined />,
+            onClick: () => handlePaymentDetails(record)
+          },
+          can('download') && {
+            key: 'cert',
+            label: 'Certificate',
+            icon: <FileTextOutlined />,
+            onClick: () => handleCertificateMember(record)
+          },
+          can('edit') && {
     key: 'edit',
     label: 'Edit',
     icon: <EditOutlined />,
@@ -749,37 +788,37 @@ ${filterHtml}
             {/* Active filter tags */}
             <div className="flex gap-1 items-center flex-wrap">
               {filters.programId !== 'all' && (
-                <Tag color="blue" closable onClose={() => { setFilters(p => ({...p, programId:'all'})); fetchMembers(1,true) }}>
+                <Tag color="blue" closable onClose={() => { setFilters(p => ({...p, programId:'all'})); setTimeout(() => fetchMembers(1,true), 0) }}>
                   Yojna: {programList?.find(p => p.id === filters.programId)?.name || filters.programId}
                 </Tag>
               )}
               {filters.agentId !== 'all' && (
-                <Tag color="purple" closable onClose={() => { setFilters(p => ({...p, agentId:'all'})); fetchMembers(1,true) }}>
+                <Tag color="purple" closable onClose={() => { setFilters(p => ({...p, agentId:'all'})); setTimeout(() => fetchMembers(1,true), 0) }}>
                   Agent: {getAgentName(filters.agentId)}
                 </Tag>
               )}
               {filters.status !== 'all' && (
-                <Tag color={filters.status === 'closed' ? 'purple' : 'green'} closable onClose={() => { setFilters(p => ({...p, status:'all'})); fetchMembers(1,true) }}>
+                <Tag color={filters.status === 'closed' ? 'purple' : 'green'} closable onClose={() => { setFilters(p => ({...p, status:'all'})); setTimeout(() => fetchMembers(1,true), 0) }}>
                   Status: {filters.status === 'closed' ? 'Closed' : filters.status}
                 </Tag>
               )}
               {filters.paymentStatus !== 'all' && (
-                <Tag color="orange" closable onClose={() => { setFilters(p => ({...p, paymentStatus:'all'})); fetchMembers(1,true) }}>
+                <Tag color="orange" closable onClose={() => { setFilters(p => ({...p, paymentStatus:'all'})); setTimeout(() => fetchMembers(1,true), 0) }}>
                   Join Fees: {filters.paymentStatus}
                 </Tag>
               )}
               {filters.closingPaymentStatus !== 'all' && (
-                <Tag color="purple" closable onClose={() => { setFilters(p => ({...p, closingPaymentStatus:'all'})); fetchMembers(1,true) }}>
+                <Tag color="purple" closable onClose={() => { setFilters(p => ({...p, closingPaymentStatus:'all'})); setTimeout(() => fetchMembers(1,true), 0) }}>
                   Closing: {filters.closingPaymentStatus.replace('closed', '')}
                 </Tag>
               )}
               {filters.fromDate && (
-                <Tag color="purple" closable onClose={() => { setFilters(p => ({...p, fromDate:null})); fetchMembers(1,true) }}>
+                <Tag color="purple" closable onClose={() => { setFilters(p => ({...p, fromDate:null})); setTimeout(() => fetchMembers(1,true), 0) }}>
                   From: {formatDate(filters.fromDate)}
                 </Tag>
               )}
               {filters.toDate && (
-                <Tag color="cyan" closable onClose={() => { setFilters(p => ({...p, toDate:null})); fetchMembers(1,true) }}>
+                <Tag color="cyan" closable onClose={() => { setFilters(p => ({...p, toDate:null})); setTimeout(() => fetchMembers(1,true), 0) }}>
                   To: {formatDate(filters.toDate)}
                 </Tag>
               )}
@@ -954,6 +993,14 @@ ${filterHtml}
       )}
 
       {rasidDrawerOpen && <RasidDrawer open={rasidDrawerOpen} setOpen={setRasidDrawerOpen} member={selectedMember} />}
+
+      {paymentDetailsMember && (
+        <PaymentDetailsDrawer
+          member={paymentDetailsMember}
+          visible={paymentDetailsVisible}
+          onClose={() => { setPaymentDetailsVisible(false); setPaymentDetailsMember(null) }}
+        />
+      )}
     </div>
   )
 }

@@ -320,7 +320,8 @@ const ClosingMemberPaymentPage = () => {
           const dta = d.data();
           return {
             id: d.id,
-            closingGroupId: dta.closingGroupId,
+            closingGroupId:   dta.closingGroupId,
+            closingGroupName: dta.closingGroupName || '',
             totalAmount: Number(dta.totalAmount || 0),
             paidAmount: Number(dta.paidAmount || 0),
             pendingAmount: Number(dta.pendingAmount || (dta.totalAmount || 0) - (dta.paidAmount || 0)),

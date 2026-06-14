@@ -205,7 +205,7 @@ const EditMember = ({ open, setOpen, programs, agents, currentUser, memberId, on
   }
 
   // ── Single-program detail calculation ────────────────────────────────────────
-  const calculateProgramDetail = useCallback(() => {
+  const calculateProgramDetail = useCallback((groupOverride) => {
     if (!dobDate || !selectedProgram || !programs.length) {
       setProgramDetail(null); return
     }
@@ -234,7 +234,7 @@ const EditMember = ({ open, setOpen, programs, agents, currentUser, memberId, on
     }
 
     const groups = program?.memberGroups || []
-    const group  = selectedMemberGroup || groups[0] || {}
+    const group  = groupOverride || selectedMemberGroup || groups[0] || {}
     const detail = {
       programId:       selectedProgram,
       programName:     program.name,
@@ -277,7 +277,7 @@ const EditMember = ({ open, setOpen, programs, agents, currentUser, memberId, on
     const program = programs.find(p => p.id === selectedProgram)
     const group   = program?.memberGroups?.find(g => g.id === groupId) || null
     setSelectedMemberGroup(group)
-    if (dobDate) calculateProgramDetail()
+    if (dobDate) calculateProgramDetail(group)
   }
 
   const handleJoinDateChange = (date) => { setJoinDate(date) }

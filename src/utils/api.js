@@ -325,6 +325,10 @@ export const paymentApi={
       method: 'DELETE',
       body: JSON.stringify(payload),
     }),
+  resetClosing: () =>
+    apiRequest('/api/closing/reset', {
+      method: 'POST',
+    }),
 }
 // Export both APIs
 export default {

@@ -3,17 +3,17 @@ import React, { useState, useEffect } from 'react'
 import {
   Drawer, Row, Col, Avatar, Tag, Descriptions, Card, Table, Tabs,
   Image, Space, Typography, Button, Divider, Badge, Progress, Tooltip,
-  Statistic, Empty, Modal, Spin
+  Statistic, Empty, Modal
 } from 'antd'
 import {
   UserOutlined, PhoneOutlined, IdcardOutlined, HomeOutlined,
-  CalendarOutlined, WalletOutlined, FileTextOutlined, SafetyOutlined,
+  WalletOutlined, FileTextOutlined, SafetyOutlined,
   TeamOutlined, EnvironmentOutlined, MailOutlined,
   DownloadOutlined, EyeOutlined, CheckCircleOutlined, ClockCircleOutlined,
   CreditCardOutlined,
   InfoCircleOutlined, FilePdfOutlined,
   EditOutlined, PrinterOutlined, DollarOutlined,
-  PercentageOutlined, HistoryOutlined, FileDoneOutlined, ProfileOutlined,
+  PercentageOutlined, FileDoneOutlined, ProfileOutlined,
   BarcodeOutlined,
   BookOutlined, TrophyOutlined, ScheduleOutlined,
   SolutionOutlined, CrownOutlined,
@@ -26,6 +26,7 @@ import { PDFDownloadLink } from '@react-pdf/renderer'
 import PaymentHistoryPdf from './MemberPdf/PaymentHistoryPdf'
 import MemberDetailsPdf from './MemberPdf/MemberDetailsPdf'
 import ClosingRasidPdf from './ClosingRasidPdf'
+import ClosingEntriesList from './ClosingEntriesList'
 import { collection, query, where, getDocs, orderBy, doc, getDoc } from 'firebase/firestore'
 import dayjs from 'dayjs'
 import relativeTime from 'dayjs/plugin/relativeTime'
@@ -44,7 +45,7 @@ const MemberDetailDrawer = ({ member, visible, onClose, programList }) => {
   const [previewVisible,      setPreviewVisible]       = useState(false)
   const [previewImage,        setPreviewImage]          = useState('')
   const [activeTab,           setActiveTab]             = useState('overview')
-  const [closingFilter,       setClosingFilter]         = useState('all') // all | pending | paid
+
 
   useEffect(() => {
     if (member && visible) {
@@ -124,6 +125,24 @@ const MemberDetailDrawer = ({ member, visible, onClose, programList }) => {
       const q    = query(collection(db, 'closing_payment'), where('memberId', '==', member.id), orderBy('createdAt', 'desc'))
       const snap = await getDocs(q)
       const data = snap.docs.map(d => ({ id: d.id, ...d.data(), date: d.data().createdAt?.toDate?.() || new Date() }))
+
+      // Look up group names for entries that don't have closingGroupName stored
+      const missing = data.filter(e => !e.closingGroupName && e.closingGroupId)
+      if (missing.length > 0) {
+        const uniqueIds = [...new Set(missing.map(e => e.closingGroupId))]
+        const nameMap = {}
+        await Promise.all(uniqueIds.map(async (gid) => {
+          try {
+            const gs = await getDoc(doc(db, 'groupClosings', gid))
+            if (gs.exists()) nameMap[gid] = gs.data().groupName
+          } catch (_) {}
+        }))
+        data.forEach(e => {
+          if (!e.closingGroupName && e.closingGroupId && nameMap[e.closingGroupId])
+            e.closingGroupName = nameMap[e.closingGroupId]
+        })
+      }
+
       setClosingEntries(data)
     } catch (err) {
       console.error('Error fetching closing entries:', err)
@@ -142,12 +161,7 @@ const MemberDetailDrawer = ({ member, visible, onClose, programList }) => {
     { title: 'Payment Progress',value: member?.paymentPercentage || 0, prefix: '',  suffix: '%', color: member?.paymentPercentage === 100 ? '#52c41a' : member?.paymentPercentage > 0 ? '#faad14' : '#ff4d4f', icon: <PercentageOutlined />, description: 'Completion' },
   ]
 
-  const closingStats = (member?.closing_totalAmount || 0) > 0 ? [
-    { title: 'Total Closing',  value: member?.closing_totalAmount || 0,    prefix: '₹', color: '#722ed1', icon: <MoneyCollectOutlined />, description: 'Total closing amount' },
-    { title: 'Closing Paid',   value: member?.closing_paidAmount || 0,     prefix: '₹', color: '#52c41a', icon: <CheckCircleOutlined />, description: 'Closing amount paid' },
-    { title: 'Closing Pending',value: member?.closing_pendingAmount || 0,  prefix: '₹', color: (member?.closing_pendingAmount || 0) > 0 ? '#ff4d4f' : '#52c41a', icon: <ClockCircleOutlined />, description: 'Closing balance' },
-    { title: 'Closing Count',  value: member?.totalClosingCount || 0,      prefix: '',  suffix: '',   color: '#1890ff', icon: <CalculatorOutlined />, description: `Paid: ${member?.paidClosingCount || 0} / Pending: ${member?.pendingClosingCount || 0}` },
-  ] : []
+
 
   const documents = [
     { type: 'Member Photo',            url: member?.photoURL,            icon: <UserOutlined />,    color: '#1890ff', required: true  },
@@ -204,18 +218,7 @@ const MemberDetailDrawer = ({ member, visible, onClose, programList }) => {
               <span><Text type="secondary">Pending:</Text> <Text strong style={{ color: (member.pendingAmount || 0) > 0 ? '#ff4d4f' : '#52c41a' }}>₹{member.pendingAmount || 0}</Text></span>
             </div>
 
-            {(member?.closing_totalAmount || 0) > 0 && (
-              <>
-                <Divider className="my-2" />
-                <div className="text-sm font-medium text-purple-700 mb-1"><MoneyCollectOutlined className="mr-1" />Closing</div>
-                <div className="flex gap-6 text-sm">
-                  <span><Text type="secondary">Total:</Text> <Text strong>₹{member.closing_totalAmount}</Text></span>
-                  <span><Text type="secondary">Paid:</Text> <Text strong style={{ color: '#52c41a' }}>₹{member.closing_paidAmount || 0}</Text></span>
-                  <span><Text type="secondary">Pending:</Text> <Text strong style={{ color: (member.closing_pendingAmount || 0) > 0 ? '#ff4d4f' : '#52c41a' }}>₹{member.closing_pendingAmount || 0}</Text></span>
-                  <span><Text type="secondary">Count:</Text> <Text strong>{member.paidClosingCount || 0}/{member.totalClosingCount || 0} paid</Text></span>
-                </div>
-              </>
-            )}
+
           </div>
         </div>
       </Card>
@@ -310,9 +313,6 @@ const MemberDetailDrawer = ({ member, visible, onClose, programList }) => {
     },
   ]
 
-  const thStyle = { padding: '6px 8px', borderBottom: '1px solid #e8e8e8', textAlign: 'left', fontWeight: 600, fontSize: 11, color: '#1B385A', whiteSpace: 'nowrap' }
-  const tdStyle = { padding: '6px 8px', borderBottom: '1px solid #f0f0f0', fontSize: 12, verticalAlign: 'middle' }
-
   const buildPdfData = (entries) => entries.map(entry => ({
     id: entry.id,
     displayName: entry.closing_Name || member?.displayName || '',
@@ -326,20 +326,12 @@ const MemberDetailDrawer = ({ member, visible, onClose, programList }) => {
     totalAmount: entry.totalAmount || 0,
     date: entry.date,
     status: entry.status,
-    closingGroupId: entry.closingGroupId || '',
+    closingGroupId:   entry.closingGroupId   || '',
+    closingGroupName: entry.closingGroupName || '',
     entries: entry.closingDetails || [],
     closing_registrationNumber: entry.closing_registrationNumber || null,
     closingPhone: entry.closingPhone || null,
   }))
-
-  const filteredClosingEntries = closingEntries.filter(e => {
-    if (closingFilter === 'paid') return e.status === 'paid'
-    if (closingFilter === 'pending') return e.status !== 'paid'
-    return true
-  })
-
-  const pendingCount = closingEntries.filter(e => e.status !== 'paid').length
-  const paidCount = closingEntries.filter(e => e.status === 'paid').length
 
   return (
     <>
@@ -392,24 +384,10 @@ const MemberDetailDrawer = ({ member, visible, onClose, programList }) => {
           </Space>
         }
       >
-        {/* Quick stats — compact */}
+        {/* Join Fee stats — compact */}
         <div className="mb-4 grid grid-cols-2 sm:grid-cols-4 gap-2">
           {paymentStats.map((s, i) => (
             <div key={i} className="bg-white rounded-lg border p-3 flex items-center gap-3">
-              <div className="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0" style={{ backgroundColor: `${s.color}15` }}>
-                {React.cloneElement(s.icon, { style: { color: s.color, fontSize: '16px' } })}
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="text-2xs text-gray-500 truncate">{s.title}</div>
-                <div className="text-base font-bold" style={{ color: s.color }}>
-                  {s.prefix}{s.value?.toLocaleString()}{s.suffix}
-                </div>
-                <div className="text-2xs text-gray-400 truncate">{s.description}</div>
-              </div>
-            </div>
-          ))}
-          {closingStats.map((s, i) => (
-            <div key={`cls-${i}`} className="bg-white rounded-lg border p-3 flex items-center gap-3">
               <div className="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0" style={{ backgroundColor: `${s.color}15` }}>
                 {React.cloneElement(s.icon, { style: { color: s.color, fontSize: '16px' } })}
               </div>
@@ -535,28 +513,7 @@ const MemberDetailDrawer = ({ member, visible, onClose, programList }) => {
                 </div>
               )}
 
-              {(member?.closing_totalAmount || 0) > 0 && (
-                <div className="mt-4 pt-4 border-t">
-                  <span className="font-semibold text-sm mb-3 block"><MoneyCollectOutlined className="mr-1" />Financial Summary — Closing</span>
-                  <div className="grid grid-cols-3 gap-3">
-                    {[
-                      { label: 'Total Closing', value: member.closing_totalAmount || 0, color: '#722ed1' },
-                      { label: 'Paid',          value: member.closing_paidAmount || 0,  color: '#52c41a' },
-                      { label: 'Pending',       value: member.closing_pendingAmount || 0, color: (member.closing_pendingAmount||0) > 0 ? '#ff4d4f' : '#52c41a' },
-                    ].map((item, i) => (
-                      <div key={i} className="text-center bg-gray-50 rounded-lg p-3">
-                        <div className="text-lg font-bold" style={{ color: item.color }}>₹{item.value.toLocaleString()}</div>
-                        <div className="text-2xs text-gray-500">{item.label}</div>
-                        <Progress percent={member.closing_totalAmount ? Math.round((item.value / member.closing_totalAmount) * 100) : 0} showInfo={false} strokeColor={item.color} size="small" className="mt-1" />
-                      </div>
-                    ))}
-                  </div>
-                  <div className="text-xs text-gray-500 mt-2 text-center">
-                    Count: {member.paidClosingCount || 0} paid / {member.totalClosingCount || 0} total
-                    {member.pendingClosingCount > 0 && <span className="text-orange-500"> — {member.pendingClosingCount} pending</span>}
-                  </div>
-                </div>
-              )}
+
             </Card>
           </div>
         )}
@@ -646,168 +603,13 @@ const MemberDetailDrawer = ({ member, visible, onClose, programList }) => {
 
         {/* ── Closing Tab ──────────────────────────────────────────────────── */}
         {activeTab === 'closing' && (
-          <div className="mt-4 space-y-4">
-            {/* Summary cards */}
-            {(member?.closing_totalAmount || 0) > 0 && (
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                {[
-                  { title: 'Total Closing', value: member.closing_totalAmount || 0, color: '#722ed1', prefix: '₹' },
-                  { title: 'Paid', value: member.closing_paidAmount || 0, color: '#52c41a', prefix: '₹' },
-                  { title: 'Pending', value: member.closing_pendingAmount || 0, color: (member.closing_pendingAmount||0) > 0 ? '#ff4d4f' : '#52c41a', prefix: '₹' },
-                  { title: 'Count', value: `${member.paidClosingCount||0} paid / ${member.totalClosingCount||0} total`, color: '#1890ff', prefix: '' },
-                ].map((s, i) => (
-                  <div key={i} className="bg-white rounded-lg border p-3 text-center">
-                    <div className="text-2xs text-gray-500">{s.title}</div>
-                    <div className="text-lg font-bold" style={{ color: s.color }}>{s.prefix}{typeof s.value === 'number' ? s.value.toLocaleString() : s.value}</div>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {/* Filter + PDF download bar */}
-            <div className="flex flex-wrap items-center justify-between gap-2 p-3 bg-gray-50 rounded-lg border">
-              <Space>
-                <Button size="small" type={closingFilter === 'all' ? 'primary' : 'default'} onClick={() => setClosingFilter('all')} 
-                  style={closingFilter === 'all' ? {background:'#1B385A', borderColor:'#1B385A'} : {}}>
-                  All <span className="ml-1 opacity-70">({closingEntries.length})</span>
-                </Button>
-                <Button size="small" type={closingFilter === 'pending' ? 'primary' : 'default'} 
-                  danger={closingFilter === 'pending'} onClick={() => setClosingFilter('pending')}
-                  style={closingFilter === 'pending' ? {fontWeight:600} : {}}>
-                  Pending <span className="ml-1 opacity-70">({pendingCount})</span>
-                </Button>
-                <Button size="small" type={closingFilter === 'paid' ? 'primary' : 'default'} onClick={() => setClosingFilter('paid')}
-                  style={closingFilter === 'paid' ? {background:'#52c41a', borderColor:'#52c41a'} : {}}>
-                  Paid <span className="ml-1 opacity-70">({paidCount})</span>
-                </Button>
-              </Space>
-              {(closingEntries.length > 0) && (
-                <Space size={4}>
-                  {(pendingCount > 0) && (
-                    <PDFDownloadLink document={<ClosingRasidPdf entries={buildPdfData(closingEntries.filter(e => e.status !== 'paid'))} />}
-                      fileName={`closing_pending_${member?.registrationNumber || member?.id}.pdf`}>
-                      {({ loading }) => <Button size="small" icon={<FilePdfOutlined />} loading={loading} 
-                        style={{ background: '#ff4d4f', borderColor: '#ff4d4f', color: '#fff', borderRadius:6, fontWeight:500 }}>
-                        Pending PDF</Button>}
-                    </PDFDownloadLink>
-                  )}
-                  {(paidCount > 0) && (
-                    <PDFDownloadLink document={<ClosingRasidPdf entries={buildPdfData(closingEntries.filter(e => e.status === 'paid'))} />}
-                      fileName={`closing_paid_${member?.registrationNumber || member?.id}.pdf`}>
-                      {({ loading }) => <Button size="small" icon={<FilePdfOutlined />} loading={loading} 
-                        style={{ background: '#52c41a', borderColor: '#52c41a', color: '#fff', borderRadius:6, fontWeight:500 }}>
-                        Paid PDF</Button>}
-                    </PDFDownloadLink>
-                  )}
-                  <PDFDownloadLink document={<ClosingRasidPdf entries={buildPdfData(closingEntries)} />}
-                    fileName={`closing_all_${member?.registrationNumber || member?.id}.pdf`}>
-                    {({ loading }) => <Button size="small" icon={<FilePdfOutlined />} loading={loading} 
-                      style={{ background: '#722ed1', borderColor: '#722ed1', color: '#fff', borderRadius:6, fontWeight:500 }}>
-                      All PDF</Button>}
-                  </PDFDownloadLink>
-                </Space>
-              )}
-            </div>
-
-            {/* Closing entries list */}
-            <Spin spinning={loading.entries}>
-              {filteredClosingEntries.length > 0 ? (
-                <div className="space-y-3">
-                  {filteredClosingEntries.map(entry => {
-                    const isPaid = entry.status === 'paid'
-                    return (
-                      <Card key={entry.id} size="small" className="border-l-4" style={{ borderLeftColor: isPaid ? '#52c41a' : entry.status === 'partial' ? '#faad14' : '#ff4d4f' }}>
-                        {/* Header */}
-                        <div className="flex flex-wrap items-start justify-between gap-2 mb-2">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <Tag color={isPaid ? 'green' : entry.status === 'partial' ? 'orange' : 'red'} style={{ fontWeight: 600 }}>
-                              {isPaid ? 'PAID' : entry.status === 'partial' ? 'PARTIAL' : 'PENDING'}
-                            </Tag>
-                            <span className="font-bold text-base" style={{ color: isPaid ? '#52c41a' : '#ff4d4f' }}>₹{entry.totalAmount?.toLocaleString()}</span>
-                            <span className="text-xs text-gray-400">({entry.payAmount || 0} × {entry.closingCount || 0} events)</span>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <Tag color="purple">{entry.programName || '—'}</Tag>
-                            {entry.closingGroupId && <Text code style={{ fontSize: 10 }}>{entry.closingGroupId.slice(-8)}</Text>}
-                          </div>
-                        </div>
-
-                        {/* Dates */}
-                        <div className="text-xs text-gray-500 mb-2 flex flex-wrap gap-3">
-                          <span><CalendarOutlined className="mr-1" />Created: {dayjs(entry.date).format('DD MMM YYYY, hh:mm A')}</span>
-                          {entry.closingDetails?.[0]?.closed_date && <span><ClockCircleOutlined className="mr-1" />Closed: {dayjs(entry.closingDetails[0].closed_date).isValid() ? dayjs(entry.closingDetails[0].closed_date).format('DD MMM YYYY') : entry.closingDetails[0].closed_date}</span>}
-                          {entry.closingDetails?.[0]?.marriageDate && <span><CalendarOutlined className="mr-1" />Marriage: {dayjs(entry.closingDetails[0].marriageDate).isValid() ? dayjs(entry.closingDetails[0].marriageDate).format('DD MMM YYYY') : entry.closingDetails[0].marriageDate}</span>}
-                        </div>
-
-                        {/* Closing details table */}
-                        {entry.closingDetails?.length > 0 && (
-                          <div className="border rounded overflow-hidden">
-                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-                              <thead>
-                                <tr style={{ background: '#f5f5f5' }}>
-                                  <th style={{...thStyle, width:28}}>#</th>
-                                  <th style={thStyle}>Name</th>
-                                  <th style={thStyle}>Father Name</th>
-                                  <th style={thStyle}>Village</th>
-                                  <th style={thStyle}>Reg No</th>
-                                  <th style={thStyle}>Phone</th>
-                                  <th style={thStyle}>Closing Date</th>
-                                  <th style={thStyle}>Card</th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {entry.closingDetails.map((d, i) => (
-                                  <tr key={i} style={{ borderBottom: '1px solid #f0f0f0' }}>
-                                    <td style={{...tdStyle, textAlign:'center', width:28}}>{i + 1}</td>
-                                    <td style={tdStyle}><span className="font-medium">{d.closed_memberName}</span></td>
-                                    <td style={tdStyle} className="text-gray-500">{d.closed_fatherName || '—'}</td>
-                                    <td style={tdStyle} className="text-gray-500">{d.closed_village || '—'}</td>
-                                    <td style={tdStyle}><Tag style={{ fontSize: 10, margin: 0 }}>{d.closed_registrationNumber || entry.closing_registrationNumber || '—'}</Tag></td>
-                                    <td style={tdStyle}>{d.closingPhone || entry.closingPhone || '—'}</td>
-                                    <td style={tdStyle} className="text-gray-500">{d.closed_date ? (dayjs(d.closed_date).isValid() ? dayjs(d.closed_date).format('DD/MM/YY') : d.closed_date) : '—'}</td>
-                                    <td style={tdStyle}>
-                                      {d.closed_invitation_url ? (
-                                        <Button size="small" type="link" icon={<EyeOutlined />} href={d.closed_invitation_url} target="_blank" style={{ fontSize: 11 }} />
-                                      ) : '—'}
-                                    </td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          </div>
-                        )}
-                      </Card>
-                    )
-                  })}
-                </div>
-              ) : (
-                <div className="text-center py-10 text-gray-400">
-                  <MoneyCollectOutlined style={{ fontSize: 40, display: 'block', marginBottom: 8, opacity: 0.3 }} />
-                  {closingFilter === 'pending' ? 'No pending closing entries' : closingFilter === 'paid' ? 'No paid closing entries' : 'No closing entries found'}
-                </div>
-              )}
-            </Spin>
-
-            {/* Closing payment transactions recap */}
-            {closingTransactions.length > 0 && (
-              <Card size="small" title={<span className="text-sm"><HistoryOutlined className="mr-1" />Payment History</span>}>
-                <Table
-                  columns={[
-                    { title: 'Date', key: 'date', width: 120, render: (_, r) => <span className="text-sm">{dayjs(r.date).format('DD MMM YYYY, hh:mm A')}</span> },
-                    { title: 'Closing Group', key: 'cg', width: 90, render: (_, r) => r.closingGroupId ? <Tag style={{fontSize:9}}>{r.closingGroupId.slice(-8)}</Tag> : '—' },
-                    { title: 'Amount', key: 'amt', width: 100, render: (_, r) => <span className="font-semibold text-purple-600">₹{(r.amount || r.amountPaid || 0).toLocaleString()}</span> },
-                    { title: 'Mode', key: 'mode', width: 80, render: (_, r) => <Tag color={{ cash:'green', online:'blue' }[r.paymentMode] || 'default'}>{r.paymentMode}</Tag> },
-                    { title: 'Transaction ID', key: 'txnId', width: 120, render: (_, r) => <Text code style={{fontSize:10}}>{r.transactionId || '—'}</Text> },
-                    { title: 'Note', key: 'note', render: (_, r) => <span className="text-xs text-gray-500">{r.paymentNote || '—'}</span> },
-                  ]}
-                  dataSource={closingTransactions}
-                  rowKey="id"
-                  size="small"
-                  pagination={false}
-                />
-              </Card>
-            )}
-          </div>
+          <ClosingEntriesList
+            member={member}
+            closingEntries={closingEntries}
+            closingTransactions={closingTransactions}
+            loading={loading}
+            buildPdfData={buildPdfData}
+          />
         )}
 
         {/* ── Documents Tab ────────────────────────────────────────────────── */}

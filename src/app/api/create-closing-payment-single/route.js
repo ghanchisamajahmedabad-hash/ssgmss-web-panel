@@ -157,6 +157,13 @@ export async function POST(req) {
       // ── Idempotency: skip if this member is already in paymentMemberIds ──
       if ((group.paymentMemberIds || []).includes(memberId)) continue;
 
+      // ── Age/Group filter: skip if member has a specific age/member group
+      //    and it doesn't match the group's stored filters ────────────────
+      const ageGroupIds = group.ageGroupIds || [];
+      const memberGroupIds = group.memberGroupIds || [];
+      if (ageGroupIds.length && member.ageGroupId && !ageGroupIds.includes(member.ageGroupId)) continue;
+      if (memberGroupIds.length && member.memberGroupId && !memberGroupIds.includes(member.memberGroupId)) continue;
+
       const closedMemberIds = group.closedMemberIds || [];
       if (!closedMemberIds.length) continue;
 
@@ -165,7 +172,7 @@ export async function POST(req) {
       //   { programId, closingGroupId, closed_date, ... }
       // That closed_date is the event date used in the main POST's
       // memberClosingList filter.
-      const eventDates = [];
+      const events = [];
       for (const closedId of closedMemberIds) {
         const cm = closedMemberMap[closedId];
         if (!cm) continue;
@@ -179,10 +186,10 @@ export async function POST(req) {
         if (!entry) continue;
 
         const eventDate = parseDate(entry.closed_date);
-        if (eventDate) eventDates.push(eventDate);
+        if (eventDate) events.push({ date: eventDate, closedId, closedMember: cm });
       }
 
-      if (!eventDates.length) continue;
+      if (!events.length) continue;
 
       // ── Apply payment rules (same as main POST JOB 2) ─────────────────
       //
@@ -191,24 +198,34 @@ export async function POST(req) {
       //   ownClosedDate  = their own closed_date for this program (if closed)
       //
       // Rule: joinDate <= eventDate  AND  eventDate <= ownClosedDate (if set)
-      //
-      // Note: the "prevClosedDate && eventDate <= prevClosedDate" check from
-      // the main POST skips events already covered in a prior closing run.
-      // Since this member has never been paid (new member), there is no
-      // prevClosedDate — all eligible events in this group count.
 
       const ownClosedEntry = (member.closedStatus || []).find(
         (cs) => cs.programId === programId
       );
       const ownClosedDate = ownClosedEntry ? parseDate(ownClosedEntry.closed_date) : null;
 
-      const matchingEvents = eventDates.filter((eventDate) => {
-        if (joinDate > eventDate) return false;                       // joined after event → skip
-        if (ownClosedDate && eventDate > ownClosedDate) return false; // event after own close → skip
+      const matchingEvents = events.filter((ev) => {
+        if (joinDate > ev.date) return false;
+        if (ownClosedDate && ev.date > ownClosedDate) return false;
         return true;
       });
 
       if (!matchingEvents.length) continue;
+
+      // ── Build closingDetails (mirrors main POST closingDetails) ────────
+      const closingDetails = matchingEvents.map(ev => ({
+        closed_memberId:            ev.closedId,
+        closed_memberName:          ev.closedMember?.displayName || ev.closedMember?.name || null,
+        closed_fatherName:          ev.closedMember?.fatherName || null,
+        closed_village:             ev.closedMember?.village || null,
+        closingPhone:               ev.closedMember?.phone || null,
+        closing_registrationNumber: ev.closedMember?.registrationNumber || null,
+        closed_photoURL:            ev.closedMember?.photoURL || null,
+        closed_date:                ev.date ? ev.date.toISOString() : null,
+        marriageDate:               null,
+        closed_note:                '',
+        closed_invitation_url:      null,
+      }));
 
       // ── Calculate ─────────────────────────────────────────────────────
       const memberPayment = matchingEvents.length * payAmount;
@@ -242,6 +259,52 @@ export async function POST(req) {
         totalAmount:       INC(memberPayment),
         totalClosingCount: INC(memberCount),
       });
+
+      // ── Write: closing_payment doc (was MISSING — this is the entry!) ─
+      const firstEvent = matchingEvents[0];
+      mb.set(
+        db.collection("closing_payment").doc(`${memberId}_${closingGroupId}`),
+        {
+          // identifiers
+          memberId,
+          closingGroupId,
+          closingGroupName: groupDoc.data()?.groupName || '',
+          programId,
+
+          // member info snapshot (the NEW member getting the payment)
+          memberName:           member.displayName || member.name || null,
+          memberCode:           member.memberCode || member.code || null,
+          registrationNumber:   member.registrationNumber || null,
+          agentId:              member.agentId || null,
+          ageGroupId:           member.ageGroupId || null,
+          memberGroupId:        member.memberGroupId || null,
+          dateJoin:             member.dateJoin || null,
+
+          // closing member snapshot (from the first closed member in this group)
+          closing_Name:                 firstEvent?.closedMember?.displayName || firstEvent?.closedMember?.name || null,
+          closing_fatherName:           firstEvent?.closedMember?.fatherName || null,
+          closing_village:              firstEvent?.closedMember?.village || null,
+          closingPhone:                 firstEvent?.closedMember?.phone || null,
+          closing_registrationNumber:   firstEvent?.closedMember?.registrationNumber || null,
+          closed_photoURL:              firstEvent?.closedMember?.photoURL || null,
+
+          // payment info
+          payAmount,
+          closingCount:  memberCount,
+          totalAmount:   memberPayment,
+
+          // per-event details
+          closingDetails,
+
+          // status & audit
+          status:        "pending",
+          createdAt:     ts,
+          isReversed:    false,
+          reversedAt:    null,
+          reversedBy:    null,
+          reversalReason: null,
+        }
+      );
     }
 
     // Nothing matched — nothing to commit

@@ -198,7 +198,7 @@ const ClosingPaymentConfirmationDrawer = ({
                           <div style={{ flex: 1 }}>
                             <span style={{ fontWeight: 500 }}>{grpDetail.closingDetails?.[0]?.closed_memberName || g.closingGroupId?.slice(-8) || '—'}</span>
                             <div style={{ fontSize: 10, color: '#999' }}>
-                              {grpDetail.closingCount || 0} event(s) · ₹{grpDetail.payAmount || 0}/event
+                              {grpDetail.closingGroupName ? `${grpDetail.closingGroupName} · ` : ''}{grpDetail.closingCount || 0} event(s) · ₹{grpDetail.payAmount || 0}/event
                             </div>
                           </div>
                           <div style={{ width: 80, textAlign: 'right', color: '#ff4d4f' }}>₹{pendingAmt.toLocaleString()}</div>
