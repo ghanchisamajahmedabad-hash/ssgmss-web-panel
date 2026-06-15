@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import admin from "../db/firebaseAdmin";
 import { checkRole, verifyToken } from "../../../../middleware/authMiddleware";
 import { creditCommissionStandalone } from "../commission/route";
+import { sendToAgent } from "../db/fcm";
 
 const db = admin.firestore();
 const INC = admin.firestore.FieldValue.increment;
@@ -316,6 +317,15 @@ export async function POST(req) {
       })
     );
     await Promise.allSettled(commissionPromises);
+
+    // ── Notify agent ──────────────────────────────────────────
+    const closingMemberNames = commissionMembers.map(m => m.memberName).join(', ');
+    await sendToAgent(
+      agentId,
+      "Closing Payment Received",
+      `₹${grandTotalPaid} received for ${grandTotalCount} member(s): ${closingMemberNames || agentName}`,
+      { type: 'closingPayment', amount: String(grandTotalPaid), memberCount: String(grandTotalCount) }
+    );
 
     return NextResponse.json({
       success: true,

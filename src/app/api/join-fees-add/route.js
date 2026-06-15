@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import admin from "../db/firebaseAdmin";
 import { checkRole, verifyToken } from "../../../../middleware/authMiddleware";
 import { creditCommissionStandalone } from "../commission/route";
+import { sendToAgent } from "../db/fcm";
 
 const db = admin.firestore();
 
@@ -204,6 +205,15 @@ export async function POST(req) {
       })
     );
     await Promise.allSettled(commissionPromises);
+
+    // ── Notify agent ──────────────────────────────────────────
+    const memberNames = commissionMembers.map(m => m.memberName).join(', ');
+    await sendToAgent(
+      agentId,
+      "Join Fee Payment Received",
+      `₹${actualTotalPaid} received for ${commissionMembers.length} member(s): ${memberNames || agentName}`,
+      { type: 'joinFee', amount: String(actualTotalPaid), memberCount: String(commissionMembers.length) }
+    );
 
     return NextResponse.json({ success: true, message: "Payment processed successfully" });
 
