@@ -28,10 +28,55 @@ import {
 } from './components/firebase-helpers'
 import { auth, db } from '../../../lib/firbase-client'
 import { doc, updateDoc, query, where, orderBy, collection, getDocs } from 'firebase/firestore'
-import { PDFDownloadLink } from '@react-pdf/renderer'
+import { BlobProvider } from '@react-pdf/renderer'
 import CertificateCom from './components/MemberPdf/CertificateCom'
+import MemberListPdf from './components/MemberPdf/MemberListPdf'
 import RasidDrawer from './components/RasidCom/RasidDrawer'
 import PaymentDetailsDrawer from './components/PaymentDetailsDrawer'
+
+// ── Helper: auto-download PDF when blob is ready ──
+const PdfAutoDownloader = ({ pdfMeta, onDone }) => {
+  const [generating, setGenerating] = useState(false)
+  useEffect(() => {
+    if (pdfMeta && !generating) setGenerating(true)
+  }, [pdfMeta, generating])
+
+  if (!pdfMeta) return null
+  return (
+    <>
+      {generating && (
+        <div style={{ position:'fixed', bottom:24, right:24, zIndex:1000, background:'#D3292F', color:'#fff', padding:'10px 20px', borderRadius:8, fontWeight:'bold', fontSize:14, boxShadow:'0 4px 12px rgba(0,0,0,0.15)' }}>
+          Generating PDF...
+        </div>
+      )}
+      <BlobProvider document={<MemberListPdf members={pdfMeta.data} filters={pdfMeta.filters} programList={pdfMeta.programList} agentList={pdfMeta.agentList} />}>
+        {({ blob, url, loading, error }) => {
+          if (error) {
+            setTimeout(() => { message.error('PDF error: ' + (error.message || error)); onDone() }, 0)
+            return null
+          }
+          if (!loading && blob && generating) {
+            setTimeout(() => {
+              const a = document.createElement('a')
+              a.href = url
+              a.download = `member_list_${dayjs().format('YYYY-MM-DD')}.pdf`
+              document.body.appendChild(a)
+              a.click()
+              // Don't revoke immediately — browser needs the blob URL to start the download
+              setTimeout(() => {
+                document.body.removeChild(a)
+                URL.revokeObjectURL(url)
+              }, 2000)
+              message.success(`Downloaded ${pdfMeta.data.length} members`)
+              onDone()
+            }, 0)
+          }
+          return null
+        }}
+      </BlobProvider>
+    </>
+  )
+}
 
 const { Search } = Input
 const { Option } = Select
@@ -51,6 +96,7 @@ const Page = () => {
   const [allMembersExportLoading, setAllMembersExportLoading] = useState(false)
   const [selectedRowKeys, setSelectedRowKeys] = useState([])
   const [isCertDownloading, setIsCertDownloading] = useState(false)
+  const [pdfMeta, setPdfMeta] = useState(null) // { data, filters, programList }
   const currentUser = auth.currentUser
 
   const [searchMode,    setSearchMode]    = useState('paginated')
@@ -585,6 +631,53 @@ const handleDeleteMember = (member) => {
     }
   }
 
+  // Like fetchAllMembersForExport but with base filters (delete_flag, status)
+  // so it only fetches active/non-deleted members — faster & avoids network timeouts
+  const fetchFilteredMembersForExport = async () => {
+    setAllMembersExportLoading(true)
+    try {
+      let q = collection(db, 'members')
+      const constraints = [
+        where("delete_flag", "==", false),
+        where("status",      "==", "active")
+      ]
+      if (filters.programId !== 'all') constraints.push(where('programId', '==', filters.programId))
+      if (filters.status === 'active') constraints.push(where('active_flag', '==', true))
+      else if (filters.status === 'inactive') constraints.push(where('active_flag', '==', false))
+      else if (filters.status === 'closed') constraints.push(where('member_closed', '==', true))
+      if (filters.paymentStatus === 'paid') constraints.push(where('paymentPercentage', '==', 100))
+      else if (filters.paymentStatus === 'partial') constraints.push(where('paymentPercentage', '>', 0), where('paymentPercentage', '<', 100))
+      else if (filters.paymentStatus === 'pending') constraints.push(where('paymentPercentage', '==', 0))
+      if (filters.agentId !== 'all') constraints.push(where('agentId', '==', filters.agentId))
+      if (filters.fromDate) constraints.push(where('createdAt', '>=', dayjs(filters.fromDate).startOf('day').toDate()))
+      if (filters.toDate) constraints.push(where('createdAt', '<=', dayjs(filters.toDate).endOf('day').toDate()))
+      constraints.push(orderBy('createdAt', 'desc'))
+      q = query(q, ...constraints)
+      let snap = await getDocs(q)
+      let data = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+
+      // Client-side closing payment filter
+      if (filters.closingPaymentStatus === 'closedPaid') {
+        data = data.filter(m => (m.closing_paymentPercentage || 0) === 100 || ((m.closing_totalAmount || 0) > 0 && (m.closing_pendingAmount || 0) === 0))
+      } else if (filters.closingPaymentStatus === 'closedPending') {
+        data = data.filter(m => (m.closing_totalAmount || 0) > 0 && (m.closing_paidAmount || 0) === 0)
+      } else if (filters.closingPaymentStatus === 'closedPartial') {
+        data = data.filter(m => {
+          const pct = m.closing_paymentPercentage || 0
+          return pct > 0 && pct < 100
+        })
+      }
+
+      setAllMembersForExport(data)
+      return data
+    } catch (err) {
+      console.error('Error fetching filtered members:', err)
+      throw err
+    } finally {
+      setAllMembersExportLoading(false)
+    }
+  }
+
   const exportAllToCSV = async () => {
     const data = allMembersForExport || await fetchAllMembersForExport()
     if (data && data.length > 0) {
@@ -835,6 +928,24 @@ ${filterHtml}
                     { key: 'csv_current', icon: <TableOutlined />, label: 'CSV (Current View)', onClick: () => exportToCSV() },
                     { key: 'csv_all', icon: <TableOutlined />, label: 'CSV (All Members)', onClick: exportAllToCSV, disabled: allMembersExportLoading },
                     { type: 'divider' },
+                    { key: 'pdf', icon: <FileTextOutlined />, label: 'PDF (All Members)', onClick: async () => {
+                      setAllMembersExportLoading(true)
+                      try {
+                        // Use cached data if available, otherwise fetch
+                        const data = allMembersForExport || await fetchAllMembersForExport()
+                        if (!data || data.length === 0) {
+                          message.warning('No members found')
+                          return
+                        }
+                        setPdfMeta({ data, filters, programList, agentList })
+                      } catch (err) {
+                        console.error('PDF error:', err)
+                        message.error('Failed: ' + (err.message || 'unknown'))
+                      } finally {
+                        setAllMembersExportLoading(false)
+                      }
+                    } },
+                    { type: 'divider' },
                     { key: 'print', icon: <PrinterOutlined />, label: 'Print List (A4)', onClick: printMembers },
                     { type: 'divider' },
                     { key: 'cert_selected', icon: <FileTextOutlined />, label: `Certificate (${selectedRowKeys.length} selected)`, onClick: handleBatchCertSelected, disabled: selectedRowKeys.length === 0 || isCertDownloading },
@@ -1001,6 +1112,8 @@ ${filterHtml}
           onClose={() => { setPaymentDetailsVisible(false); setPaymentDetailsMember(null) }}
         />
       )}
+
+      <PdfAutoDownloader pdfMeta={pdfMeta} onDone={() => setPdfMeta(null)} />
     </div>
   )
 }
