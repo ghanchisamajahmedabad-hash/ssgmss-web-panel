@@ -31,7 +31,7 @@ const PermissionSection = ({ permissions, onChange, userRole }) => {
   const menuTreeData = [
     {
       title: 'Dashboard',
-      key: '/dashboard',
+      key: '/',
       icon: <DashboardOutlined />
     },
     {
@@ -60,7 +60,8 @@ const PermissionSection = ({ permissions, onChange, userRole }) => {
       icon: <CreditCardOutlined />,
       children: [
         { title: 'Join Fees', key: '/payments/join-fees' },
-        { title: 'Closing Payment', key: '/payments/closing-payment' }
+        { title: 'Closing Payment', key: '/payments/closing-payment' },
+        { title: 'Payment History', key: '/payments/history' }
       ]
     },
     {
@@ -191,6 +192,33 @@ const PermissionSection = ({ permissions, onChange, userRole }) => {
               onChange={(checked) => handleActionChange('request', checked)}
             />
           </div>
+        </div>
+
+        <Divider />
+
+        <Title level={5} className="mb-3">Dashboard Widgets</Title>
+        <Text type="secondary" className="block mb-3">
+          Control which dashboard widgets this user can see
+        </Text>
+
+        <div className="space-y-3">
+          {[
+            { key: 'dashboard_summary', label: 'Member & Agent Counts', desc: 'Total members, active members, agents' },
+            { key: 'dashboard_join_fees', label: 'Join Fees Stats', desc: 'Total, paid & pending join fees' },
+            { key: 'dashboard_closing', label: 'Closing Stats', desc: 'Total, paid & pending closing amounts' },
+            { key: 'dashboard_programs', label: 'Program Performance', desc: 'Per-program progress cards' },
+          ].map(dw => (
+            <div key={dw.key} className="flex items-center justify-between">
+              <div>
+                <Text strong>{dw.label}</Text>
+                <div className="text-xs text-gray-500">{dw.desc}</div>
+              </div>
+              <Switch 
+                checked={permissions.actions[dw.key] || false}
+                onChange={(checked) => handleActionChange(dw.key, checked)}
+              />
+            </div>
+          ))}
         </div>
       </Card>
 

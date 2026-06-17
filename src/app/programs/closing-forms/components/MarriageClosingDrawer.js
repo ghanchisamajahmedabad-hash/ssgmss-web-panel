@@ -1,5 +1,5 @@
 "use client"
-import React, { useState, useCallback, useRef, useEffect } from 'react'
+import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react'
 import {
   Drawer, Button, Checkbox, Avatar, Empty, DatePicker,
   Upload, message, Modal, Space, Row, Col, Input,
@@ -97,29 +97,37 @@ const SectionHeader = ({ icon, title, subtitle, action }) => (
 )
 
 // ─── member select card ───────────────────────────────────────────────────────
-const MemberSelectCard = ({ member, checked, onChange, programId }) => {
-  const alreadyClosed = (member.closedStatus || []).some(
-    cs => cs.programId === programId && cs.closingGroupId
-  )
+const MemberSelectCard = ({ member, checked, onChange, programId, existingGroupId }) => {
+  // FIX: in add-mode, "already closed" means closed in a DIFFERENT group.
+  // Members closed in the current group can still be selected if needed for other reasons,
+  // but we flag those already in the SAME group as the existing one.
+  const alreadyClosedInThisGroup = existingGroupId
+    ? (member.closedStatus || []).some(
+        cs => cs.programId === programId && cs.closingGroupId === existingGroupId
+      )
+    : (member.closedStatus || []).some(
+        cs => cs.programId === programId && cs.closingGroupId
+      )
+
   return (
     <div
-      onClick={() => !alreadyClosed && onChange(!checked)}
+      onClick={() => !alreadyClosedInThisGroup && onChange(!checked)}
       style={{
         display: 'flex', alignItems: 'center', gap: 10,
         padding: '8px 12px', borderRadius: 8,
-        cursor: alreadyClosed ? 'not-allowed' : 'pointer',
-        border: `1.5px solid ${alreadyClosed ? C.warning : checked ? C.primary : C.border}`,
-        background: alreadyClosed ? C.warning + '08' : checked ? C.primary + '08' : C.surface,
+        cursor: alreadyClosedInThisGroup ? 'not-allowed' : 'pointer',
+        border: `1.5px solid ${alreadyClosedInThisGroup ? C.warning : checked ? C.primary : C.border}`,
+        background: alreadyClosedInThisGroup ? C.warning + '08' : checked ? C.primary + '08' : C.surface,
         transition: 'all .15s', marginBottom: 6,
       }}
     >
       <Checkbox
-        checked={checked} disabled={alreadyClosed}
-        onChange={e => { e.stopPropagation(); !alreadyClosed && onChange(e.target.checked) }}
+        checked={checked} disabled={alreadyClosedInThisGroup}
+        onChange={e => { e.stopPropagation(); !alreadyClosedInThisGroup && onChange(e.target.checked) }}
         onClick={e => e.stopPropagation()}
       />
       <Avatar src={member.photoURL} icon={<UserOutlined />} size={34}
-        style={{ border: `2px solid ${alreadyClosed ? C.warning : checked ? C.primary : C.border}`, flexShrink: 0 }} />
+        style={{ border: `2px solid ${alreadyClosedInThisGroup ? C.warning : checked ? C.primary : C.border}`, flexShrink: 0 }} />
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontWeight: 600, fontSize: 13, color: C.fg, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
           {member.displayName || member.name}
@@ -129,10 +137,10 @@ const MemberSelectCard = ({ member, checked, onChange, programId }) => {
           {member.phone   && <Pill color={C.accent}>{member.phone}</Pill>}
           {member.village && <Pill color={C.muted}>{member.village}</Pill>}
           {member.programName && <Pill color={C.primary}>{member.programName}</Pill>}
-          {alreadyClosed && <Pill color={C.warning}>Already Closed</Pill>}
+          {alreadyClosedInThisGroup && <Pill color={C.warning}>Already Closed</Pill>}
         </div>
       </div>
-      {checked && !alreadyClosed && <CheckCircleOutlined style={{ color: C.primary, fontSize: 16, flexShrink: 0 }} />}
+      {checked && !alreadyClosedInThisGroup && <CheckCircleOutlined style={{ color: C.primary, fontSize: 16, flexShrink: 0 }} />}
     </div>
   )
 }
@@ -208,7 +216,7 @@ const MemberDetailRow = ({ member, details, progress, onUpdate, onRemove, onUplo
 // ═══════════════════════════════════════════════════════════════════════════════
 // MAIN COMPONENT
 // ═══════════════════════════════════════════════════════════════════════════════
-const MarriageClosingDrawer = ({ visible, onClose, members: allMembers = [], programList = [], currentUser, onSuccess }) => {
+const MarriageClosingDrawer = ({ visible, onClose, members: allMembers = [], programList = [], currentUser, closingGroups = [], onSuccess }) => {
   const [step,           setStep]           = useState(0)
   const [selectedProg,   setSelectedProg]   = useState(null)
   const [ageGroups,      setAgeGroups]      = useState([])
@@ -226,15 +234,21 @@ const MarriageClosingDrawer = ({ visible, onClose, members: allMembers = [], pro
   const [hasMore,      setHasMore]      = useState(false)
   const [lastDoc,      setLastDoc]      = useState(null)
   const [loadingMore,  setLoadingMore]  = useState(false)
+  const [mode,           setMode]           = useState('new')
+  const [groupName,      setGroupName]      = useState('')
+  const [existingGroupId, setExistingGroupId] = useState(null)
 
-  // ── KEY FIX: use a ref to always read the latest details in handleSubmit ──
-  // React state is stale inside confirm().onOk closure — ref gives latest value
+  // Ref to always read the latest details in handleSubmit (avoids stale closure)
   const detailsRef = useRef(details)
   useEffect(() => { detailsRef.current = details }, [details])
 
   const PAGE    = 20
   const listRef = useRef(null)
   const program = programList.find(p => p.id === selectedProg)
+  const programActiveGroups = useMemo(() =>
+    closingGroups.filter(g => g.programId === selectedProg && g.status === 'active')
+      .sort((a, b) => (b.closedAt?.toMillis?.() || 0) - (a.closedAt?.toMillis?.() || 0))
+  , [closingGroups, selectedProg])
 
   // ── load first page ────────────────────────────────────────────────────────
   const loadPage = useCallback(async (programId) => {
@@ -306,6 +320,7 @@ const MarriageClosingDrawer = ({ visible, onClose, members: allMembers = [], pro
     setStep(0); setSelectedProg(null); setAgeGroups([]); setMemberGroups([])
     setSelectedIds([]); setSelectedMap({}); setDetails({}); setUploadProgress({})
     setDisplayed([]); setSearch(''); setSearchMode(false); setHasMore(false); setLastDoc(null)
+    setMode('new'); setGroupName(''); setExistingGroupId(null)
   }
 
   const handleClose = () => {
@@ -321,10 +336,25 @@ const MarriageClosingDrawer = ({ visible, onClose, members: allMembers = [], pro
 
   const defaultDetail   = () => ({ marriageDate: dayjs(), note: '', invitationUrl: '' })
   const updateDetail    = (id, field, val) => setDetails(p => ({ ...p, [id]: { ...p[id], [field]: val } }))
-  const isAlreadyClosed = (member) => (member.closedStatus || []).some(cs => cs.programId === selectedProg && cs.closingGroupId)
+
+  // FIX: in add-mode, only block members already closed in THIS specific group.
+  // In new-mode, block members closed in ANY group for this program.
+  const isAlreadyClosed = (member) => {
+    if (mode === 'add' && existingGroupId) {
+      return (member.closedStatus || []).some(
+        cs => cs.programId === selectedProg && cs.closingGroupId === existingGroupId
+      )
+    }
+    return (member.closedStatus || []).some(
+      cs => cs.programId === selectedProg && cs.closingGroupId
+    )
+  }
 
   const handleToggle = async (member, checked) => {
-    if (isAlreadyClosed(member)) { message.warning(`${member.displayName || member.name} is already closed`); return }
+    if (isAlreadyClosed(member)) {
+      message.warning(`${member.displayName || member.name} is already closed in this group`)
+      return
+    }
     if (checked) {
       setSelectedIds(p => [...p, member.id])
       setSelectedMap(p => ({ ...p, [member.id]: member }))
@@ -373,15 +403,12 @@ const MarriageClosingDrawer = ({ visible, onClose, members: allMembers = [], pro
       async () => {
         try {
           const url = await getDownloadURL(task.snapshot.ref)
-          console.log('✅ Upload done, URL:', url)
-
-          // Update both state AND ref so submit always has the latest URL
           setDetails(prev => {
             const updated = {
               ...prev,
               [memberId]: { ...(prev[memberId] || {}), invitationUrl: url },
             }
-            detailsRef.current = updated   // ← sync ref immediately
+            detailsRef.current = updated
             return updated
           })
           setUploadProgress(p => ({ ...p, [memberId]: 'done' }))
@@ -403,9 +430,38 @@ const MarriageClosingDrawer = ({ visible, onClose, members: allMembers = [], pro
     setUploadProgress(p => ({ ...p, [id]: 0 }))
   }
 
-  // ── submit — reads from detailsRef (always fresh, no stale closure) ─────────
+  // ── build the memberClosingList payload ────────────────────────────────────
+  // FIX: this now correctly includes ALL selected members with full details,
+  // including invitation URLs that were just uploaded.
+  const buildMemberClosingList = (freshDetails) => {
+    return selectedIds.map(memberId => {
+      const d   = freshDetails[memberId] || {}
+      const mem = selectedMap[memberId]  || {}
+      return {
+        id:                          `${memberId}_${Date.now()}`,
+        closed_memberId:             memberId,
+        member_closed_program:       selectedProg,
+        closed_date:                 d.marriageDate
+                                       ? d.marriageDate.toISOString()
+                                       : new Date().toISOString(),
+        closed_note:                 d.note              || '',
+        closed_invitation_url:       d.invitationUrl     || '',
+        closing_Name:                mem.displayName     || '',
+        closing_fatherName:          mem.fatherName      || '',
+        closing_village:             mem.village         || '',
+        closingPhone:                mem.phone           || '',
+        closing_registrationNumber:  mem.registrationNumber || '',
+        closed_photoURL:             mem.photoURL        || '',
+        // Also include marriageDate for date-filtering on server
+        marriageDate:                d.marriageDate
+                                       ? d.marriageDate.toISOString()
+                                       : new Date().toISOString(),
+      }
+    })
+  }
+
+  // ── submit ─────────────────────────────────────────────────────────────────
   const handleSubmit = async () => {
-    // Read latest details from ref — avoids stale closure inside confirm()
     const latestDetails = detailsRef.current
 
     const noDate = selectedIds.filter(id => !latestDetails[id]?.marriageDate)
@@ -414,7 +470,6 @@ const MarriageClosingDrawer = ({ visible, onClose, members: allMembers = [], pro
       return
     }
 
-    // Warn if any upload still in progress
     const stillUploading = selectedIds.some(id => {
       const p = uploadProgress[id]
       return typeof p === 'number' && p > 0 && p < 100
@@ -427,54 +482,47 @@ const MarriageClosingDrawer = ({ visible, onClose, members: allMembers = [], pro
     confirm({
       title: 'Confirm Marriage Closing',
       icon: <HeartFilled style={{ color: C.primary }} />,
-      content: <p>Close marriage for <strong>{selectedIds.length}</strong> member(s)?</p>,
+      content: (
+        <p>
+          Close marriage for <strong>{selectedIds.length}</strong> member(s)
+          {mode === 'add' ? ` and add to existing group` : ''}?
+        </p>
+      ),
       okText: 'Confirm', okType: 'primary', cancelText: 'Cancel',
       onOk: async () => {
         setProcessing(true)
         try {
-          // Read from ref inside onOk — state would be stale here
+          // Always read from ref inside onOk — state is stale here
           const freshDetails = detailsRef.current
+          const memberClosingList = buildMemberClosingList(freshDetails)
 
-          const groupId = `${selectedProg}_${Date.now()}`
-
-          const memberClosingList = selectedIds.map(memberId => {
-            const d   = freshDetails[memberId] || {}
-            const mem = selectedMap[memberId]  || {}
-
-            console.log(`[submit] memberId=${memberId}  invitationUrl=${d.invitationUrl}`)
-
-            return {
-              id:                          `${groupId}_${memberId}`,
-              closed_memberId:             memberId,
-              groupId,
-              member_closed_program:       selectedProg,
-              closed_date:                 d.marriageDate
-                                             ? d.marriageDate.toISOString()
-                                             : new Date().toISOString(),
-              closed_note:                 d.note              || '',
-              closed_invitation_url:       d.invitationUrl     || '',   // ← now always correct
-              closing_Name:                mem.displayName     || '',
-              closing_fatherName:          mem.fatherName      || '',
-              closing_village:             mem.village         || '',
-              closingPhone:                mem.phone           || '',
-              closing_registrationNumber:  mem.registrationNumber || '',
-              closed_photoURL:             mem.photoURL        || '',
-            }
-          })
-
+          console.log('[submit] mode:', mode)
           console.log('[submit] memberClosingList:', memberClosingList)
 
-          const result = await paymentApi.closedPaymentEntry({
+          // FIX: for add-mode, pass closingGroupId so server knows to merge;
+          // for new-mode, generate a new groupId.
+          const newGroupId = `${selectedProg}_${Date.now()}`
+
+          const payload = {
             count:            selectedIds.length,
             memberIds:        selectedIds,
             closedBy:         currentUser?.uid,
-            groupId,
             closedByName:     currentUser?.displayName || 'Unknown',
             programId:        selectedProg,
             ageGroups,
             memberGroups,
             memberClosingList,
-          })
+            groupName:        groupName || undefined,
+            // For new mode, send groupId; for add-mode, send closingGroupId
+            ...(mode === 'add'
+              ? { closingGroupId: existingGroupId }
+              : { groupId: newGroupId }
+            ),
+          }
+
+          console.log('[submit] payload:', payload)
+
+          const result = await paymentApi.closedPaymentEntry(payload)
 
           if (!result?.success) throw new Error(result?.message || 'API returned failure')
 
@@ -482,7 +530,7 @@ const MarriageClosingDrawer = ({ visible, onClose, members: allMembers = [], pro
           const skipped   = result.summary?.skipped           ?? []
 
           if (skipped.length) {
-            message.warning(`Closed ${processed} member(s). ${skipped.length} skipped.`)
+            message.warning(`Closed ${processed} member(s). ${skipped.length} skipped (already closed).`)
           } else {
             message.success(`Marriage closed for ${processed} member(s)`)
           }
@@ -516,7 +564,9 @@ const MarriageClosingDrawer = ({ visible, onClose, members: allMembers = [], pro
             </div>
             <div>
               <div style={{ fontWeight: 800, fontSize: 16, color: C.fg }}>Marriage Closing</div>
-              <div style={{ fontSize: 11, color: C.muted }}>Register member marriage details</div>
+              <div style={{ fontSize: 11, color: C.muted }}>
+                {mode === 'add' ? 'Adding to existing group' : 'Register member marriage details'}
+              </div>
             </div>
             {selectedIds.length > 0 && (
               <Badge count={selectedIds.length} style={{ backgroundColor: C.primary }}>
@@ -559,15 +609,88 @@ const MarriageClosingDrawer = ({ visible, onClose, members: allMembers = [], pro
           </div>
         )}
 
-        {/* ── step 0: program ── */}
+        {/* ── step 0: mode + program + group ── */}
         {step === 0 && (
           <div>
+            {/* Mode Toggle */}
+            <SectionHeader icon={<FlagOutlined />} title="Closing Mode" subtitle="Create a new group or add members to an existing one" />
+            <div style={{ display: 'flex', gap: 12, marginBottom: 20 }}>
+              <div onClick={() => { setMode('new'); setExistingGroupId(null) }} style={{
+                flex: 1, background: C.surface, border: `2px solid ${mode === 'new' ? C.primary : C.border}`,
+                borderRadius: 12, padding: '14px 18px', cursor: 'pointer', textAlign: 'center',
+                boxShadow: mode === 'new' ? `0 3px 12px ${C.primary}20` : '0 1px 3px rgba(0,0,0,.04)',
+                fontWeight: 700, fontSize: 14, color: C.fg, transition: 'all .2s',
+              }}>
+                <div style={{ fontSize: 24, marginBottom: 4 }}>➕</div>
+                New Group
+              </div>
+              <div onClick={() => setMode('add')} style={{
+                flex: 1, background: C.surface, border: `2px solid ${mode === 'add' ? C.primary : C.border}`,
+                borderRadius: 12, padding: '14px 18px', cursor: 'pointer', textAlign: 'center',
+                boxShadow: mode === 'add' ? `0 3px 12px ${C.primary}20` : '0 1px 3px rgba(0,0,0,.04)',
+                fontWeight: 700, fontSize: 14, color: C.fg, transition: 'all .2s',
+              }}>
+                <div style={{ fontSize: 24, marginBottom: 4 }}>📂</div>
+                Add to Existing
+              </div>
+            </div>
+
+            {/* Group Name (new mode) */}
+            {mode === 'new' && (
+              <div style={{ marginBottom: 20 }}>
+                <div style={{ fontWeight: 600, fontSize: 13, color: C.muted, marginBottom: 6 }}>Group Name (optional)</div>
+                <Input placeholder="e.g. Summer 2026 Batch" value={groupName} onChange={e => setGroupName(e.target.value)}
+                  style={{ borderRadius: 8, height: 40 }} />
+              </div>
+            )}
+
+            {/* Existing Group Selector (add mode) */}
+            {mode === 'add' && (
+              <div style={{ marginBottom: 20 }}>
+                <div style={{ fontWeight: 600, fontSize: 13, color: C.muted, marginBottom: 6 }}>Select Existing Group</div>
+                {!selectedProg ? (
+                  <Alert type="info" message="Please select a program below first, then choose the group." showIcon />
+                ) : programActiveGroups.length === 0 ? (
+                  <Alert type="warning" message="No active groups found for this program. Switch to New Group mode." showIcon />
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {programActiveGroups.map(g => {
+                      const active = existingGroupId === g.id
+                      const groupCount = g.closedMemberIds?.length || 0
+                      return (
+                        <div key={g.id} onClick={() => setExistingGroupId(g.id)} style={{
+                          background: C.surface, border: `2px solid ${active ? C.primary : C.border}`,
+                          borderRadius: 12, padding: '12px 16px', cursor: 'pointer',
+                          boxShadow: active ? `0 3px 12px ${C.primary}20` : '0 1px 3px rgba(0,0,0,.04)',
+                          display: 'flex', alignItems: 'center', gap: 12, transition: 'all .2s',
+                        }}>
+                          <div style={{ width: 18, height: 18, borderRadius: '50%', flexShrink: 0, border: `2px solid ${active ? C.primary : C.border}`, background: active ? C.primary : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                            {active && <div style={{ width: 7, height: 7, borderRadius: '50%', background: '#fff' }} />}
+                          </div>
+                          <div style={{ flex: 1 }}>
+                            <div style={{ fontWeight: 700, fontSize: 14, color: C.fg }}>{g.groupName || `Group ${g.id?.slice?.(0, 8) || ''}`}</div>
+                            <div style={{ fontSize: 12, color: C.muted }}>{groupCount} member{groupCount !== 1 ? 's' : ''} · {g.totalClosingCount || 0} closing{((g.totalClosingCount || 0) !== 1) ? 's' : ''} · ₹{g.totalAmount?.toLocaleString?.() || 0}</div>
+                          </div>
+                          {active && <CheckCircleOutlined style={{ color: C.primary, fontSize: 18 }} />}
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Program selector */}
             <SectionHeader icon={<FlagOutlined />} title="Select Program" subtitle="Choose the marriage program" />
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               {programList.map(prog => {
                 const active = selectedProg === prog.id
                 return (
-                  <div key={prog.id} onClick={() => setSelectedProg(prog.id)} style={{
+                  <div key={prog.id} onClick={() => {
+                    setSelectedProg(prog.id)
+                    // Reset existing group selection when program changes
+                    setExistingGroupId(null)
+                  }} style={{
                     background: C.surface, border: `2px solid ${active ? C.primary : C.border}`,
                     borderRadius: 12, padding: '14px 18px', cursor: 'pointer',
                     boxShadow: active ? `0 3px 12px ${C.primary}20` : '0 1px 3px rgba(0,0,0,.04)',
@@ -579,11 +702,14 @@ const MarriageClosingDrawer = ({ visible, onClose, members: allMembers = [], pro
                     <div>
                       <div style={{ fontWeight: 700, fontSize: 14, color: C.fg }}>{prog.name}</div>
                     </div>
+                    {active && <CheckCircleOutlined style={{ color: C.primary, fontSize: 18, marginLeft: 'auto' }} />}
                   </div>
                 )
               })}
             </div>
-            {selectedProg && (
+
+            {/* Next button — requires program selected and (in add-mode) a group selected */}
+            {selectedProg && (mode === 'new' || (mode === 'add' && existingGroupId)) && (
               <div style={{ marginTop: 20, display: 'flex', justifyContent: 'flex-end' }}>
                 <Button type="primary" size="large" icon={<ArrowRightOutlined />} onClick={() => setStep(1)}
                   style={{ background: grad, border: 'none', fontWeight: 700, height: 42, paddingInline: 24 }}>
@@ -635,8 +761,26 @@ const MarriageClosingDrawer = ({ visible, onClose, members: allMembers = [], pro
         {step === 2 && (
           <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 280px)' }}>
             <SectionHeader icon={<TeamOutlined />} title="Select Members"
-              subtitle={searchMode ? 'Search results' : 'Scroll to load more'}
+              subtitle={
+                mode === 'add'
+                  ? `Adding to existing group · ${searchMode ? 'Search results' : 'Scroll to load more'}`
+                  : searchMode ? 'Search results' : 'Scroll to load more'
+              }
               action={<Button size="small" onClick={() => setStep(1)} icon={<ArrowLeftOutlined />}>Back</Button>} />
+
+            {/* Add-mode info banner */}
+            {mode === 'add' && (
+              <Alert
+                type="info" showIcon style={{ marginBottom: 12 }}
+                message={
+                  <span>
+                    <strong>Add-to-existing mode:</strong> Newly selected members will be closed and their payments calculated against all closings in this group.
+                    Members already closed in this group are shown as <Tag color="warning" style={{ fontSize: 10 }}>Already Closed</Tag>.
+                  </span>
+                }
+              />
+            )}
+
             <div style={{ display: 'flex', gap: 10, marginBottom: 12, alignItems: 'center' }}>
               <Input prefix={<SearchOutlined style={{ color: C.muted }} />}
                 placeholder="Search name, reg. no, phone, village…"
@@ -666,10 +810,14 @@ const MarriageClosingDrawer = ({ visible, onClose, members: allMembers = [], pro
               ) : (
                 <>
                   {displayed.map(member => (
-                    <MemberSelectCard key={member.id} member={member}
+                    <MemberSelectCard
+                      key={member.id}
+                      member={member}
                       checked={selectedIds.includes(member.id)}
                       onChange={checked => handleToggle(member, checked)}
-                      programId={selectedProg} />
+                      programId={selectedProg}
+                      existingGroupId={mode === 'add' ? existingGroupId : null}
+                    />
                   ))}
                   {loadingMore && <div style={{ textAlign: 'center', padding: '12px 0' }}><Spin size="small" /><span style={{ fontSize: 12, color: C.muted, marginLeft: 8 }}>Loading more…</span></div>}
                   {!hasMore && !searchMode && displayed.length > 0 && (
@@ -723,7 +871,10 @@ const MarriageClosingDrawer = ({ visible, onClose, members: allMembers = [], pro
               <Button type="primary" size="large" icon={<CheckCircleOutlined />}
                 onClick={handleSubmit} loading={processing}
                 style={{ background: grad, border: 'none', height: 46, paddingInline: 40, fontWeight: 700 }}>
-                Complete Closing for {selectedIds.length} Members
+                {mode === 'add'
+                  ? `Add ${selectedIds.length} Member(s) to Group`
+                  : `Complete Closing for ${selectedIds.length} Members`
+                }
               </Button>
               {!selectedIds.every(id => details[id]?.invitationUrl) && (
                 <Alert message="Some members don't have invitation cards — you can still proceed" type="warning" showIcon style={{ width: '100%' }} />

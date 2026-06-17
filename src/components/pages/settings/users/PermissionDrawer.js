@@ -11,7 +11,8 @@ import {
   DatabaseOutlined, UserSwitchOutlined, InboxOutlined, TagOutlined,
   DeleteOutlined, ExclamationCircleOutlined, ClearOutlined, SaveOutlined,
   CloseOutlined, UserOutlined, CrownOutlined, EyeOutlined, EditOutlined,
-  PlusOutlined, DownloadOutlined,
+  PlusOutlined, DownloadOutlined, BarChartOutlined, DollarOutlined,
+  RiseOutlined, FundOutlined,
 } from '@ant-design/icons'
 import { userApi } from '@/utils/api'
 
@@ -44,6 +45,7 @@ const MODULE_CONFIG = {
     children: [
       { key: '/payments/join-fees',       label: 'Join Fees' },
       { key: '/payments/closing-payment', label: 'Closing Payment' },
+      { key: '/payments/history',         label: 'Payment History' },
     ],
   },
   '/master':   { label: 'Master',     icon: <DatabaseOutlined />,   module: 'master',
@@ -84,6 +86,13 @@ const ADVANCED_ACTIONS = [
   { key: 'add_yojna',  label: 'Add Yojnas',       icon: <AppstoreOutlined /> },
 
   { key: 'add_member', label: 'Add Members',      icon: <TeamOutlined /> },
+]
+
+const DASHBOARD_ACTIONS = [
+  { key: 'dashboard_summary',   label: 'Member & Agent Counts', icon: <BarChartOutlined /> },
+  { key: 'dashboard_join_fees', label: 'Join Fees Stats',      icon: <DollarOutlined /> },
+  { key: 'dashboard_closing',   label: 'Closing Stats',        icon: <RiseOutlined /> },
+  { key: 'dashboard_programs',  label: 'Program Performance',  icon: <FundOutlined /> },
 ]
 
 // ── Module card ──────────────────────────────────────────────────────────────
@@ -206,7 +215,7 @@ const PermissionDrawer = ({ visible, onClose, selectedUser, onSuccess }) => {
   const [checkedPages, setCheckedPages] = useState(['/'])
   const [permissions, setPermissions]   = useState({
     pages: ['/'],
-    actions: { create: false, edit: false, delete: false, view: false, download: false },
+    actions: { create: false, edit: false, delete: false, view: false, download: false, dashboard_summary: false, dashboard_join_fees: false, dashboard_closing: false, dashboard_programs: false },
     moduleAccess: {},
     pagePermissions: {},
   })
@@ -215,7 +224,7 @@ const PermissionDrawer = ({ visible, onClose, selectedUser, onSuccess }) => {
     if (visible && selectedUser) {
       const p = selectedUser.permissions || {
         pages: ['/'],
-        actions: { create: false, edit: false, delete: false, view: true, download: false },
+        actions: { create: false, edit: false, delete: false, view: true, download: false, dashboard_summary: false, dashboard_join_fees: false, dashboard_closing: false, dashboard_programs: false },
         moduleAccess: { dashboard: true },
         pagePermissions: {},
       }
@@ -287,7 +296,7 @@ const PermissionDrawer = ({ visible, onClose, selectedUser, onSuccess }) => {
       async onOk() {
         const reset = {
           pages: ['/'],
-          actions: { create: false, edit: false, delete: false, view: true, download: false, approve: false, request: false, add_agent: false, add_member: false },
+          actions: { create: false, edit: false, delete: false, view: true, download: false, approve: false, request: false, add_agent: false, add_member: false, dashboard_summary: false, dashboard_join_fees: false, dashboard_closing: false, dashboard_programs: false },
           moduleAccess: { dashboard: true }, pagePermissions: {},
         }
         setPermissions(reset)
@@ -349,6 +358,33 @@ const PermissionDrawer = ({ visible, onClose, selectedUser, onSuccess }) => {
             </Text>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
               {ADVANCED_ACTIONS.map(ac => {
+                const on = permissions.actions?.[ac.key] || false
+                return (
+                  <div key={ac.key} onClick={() => handleAction(ac.key, !on)} style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                    padding: '10px 14px', borderRadius: 10, cursor: 'pointer',
+                    border: `1.5px solid ${on ? T.primary + '40' : T.border}`,
+                    background: on ? T.primaryLight : '#fff', transition: 'all 0.2s',
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                      <span style={{ color: on ? T.primary : '#94a3b8', fontSize: 16 }}>{ac.icon}</span>
+                      <Text style={{ fontSize: 13, fontWeight: 500, color: on ? '#1e293b' : '#64748b' }}>
+                        {ac.label}
+                      </Text>
+                    </div>
+                    <Switch checked={on} size="small" style={on ? { background: T.primary } : {}}
+                      onClick={e => e.stopPropagation()} onChange={val => handleAction(ac.key, val)} />
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+          <div>
+            <Text style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: 0.6, display: 'block', marginBottom: 8 }}>
+              Dashboard Widgets
+            </Text>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {DASHBOARD_ACTIONS.map(ac => {
                 const on = permissions.actions?.[ac.key] || false
                 return (
                   <div key={ac.key} onClick={() => handleAction(ac.key, !on)} style={{

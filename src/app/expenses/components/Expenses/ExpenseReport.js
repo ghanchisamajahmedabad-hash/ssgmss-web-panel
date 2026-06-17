@@ -221,7 +221,176 @@ const ExpenseReport = ({ expenses, categories }) => {
   };
 
   const printReport = () => {
-    window.print();
+    const printWindow = window.open('', '_blank')
+    const categoryName = (id) => categories.find(c => c.id === id)?.name || id
+    const grandTotal = reportData.reduce((s, e) => s + parseFloat(e.amount || 0), 0)
+    const rows = reportData.map((exp, i) => `
+      <tr>
+        <td class="c">${i + 1}</td>
+        <td class="c date">${dayjs(exp.date).format('DD/MM/YYYY')}</td>
+        <td class="l"><b>${exp.title}</b>${exp.description ? `<div class="sub">${exp.description}</div>` : ''}</td>
+        <td class="c cat">${categoryName(exp.category)}</td>
+        <td class="amt">₹${parseFloat(exp.amount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
+        <td class="c mono vouch">${exp.voucherNo || '-'}</td>
+      </tr>`).join('')
+
+    printWindow.document.write(`<!DOCTYPE html><html lang="hi"><head>
+<meta charset="utf-8">
+<title>Expense Report — SSGMS</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Devanagari:wght@400;500;600;700&family=Noto+Serif+Devanagari:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+  @page { size: A4 landscape; margin: 6mm 5mm 18mm 5mm; @bottom-center { content: "Page " counter(page); font-size: 10px; color: #6b7280; font-family: 'Noto Sans Devanagari', sans-serif; } }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:'Noto Sans Devanagari',sans-serif;background:#fff;color:#1f2937;-webkit-print-color-adjust:exact;print-color-adjust:exact;padding:0;font-size:13px}
+
+  .top-border{height:5px;background:linear-gradient(90deg,#1B385A,#D3292F,#1B385A);margin-bottom:12px;border-radius:2px}
+
+  .bless{display:flex;justify-content:space-between;padding:0 10px;margin-bottom:10px;border-bottom:1px dashed #d1d5db;padding-bottom:8px}
+  .bless span{font-size:12px;color:#D3292F;font-weight:700;font-family:'Noto Serif Devanagari',serif;letter-spacing:.6px}
+
+  .hdr{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-bottom:8px;padding:0 4px}
+  .logo-box{width:78px;flex-shrink:0;display:flex;flex-direction:column;align-items:center;justify-content:center}
+  .logo-fb{width:65px;height:58px;border-radius:6px;background:linear-gradient(135deg,#E8EFF7,#d0dcec);border:2px solid #b5c5d8;display:flex;align-items:center;justify-content:center;font-size:10px;color:#1B385A;font-weight:700;text-align:center;line-height:1.3;font-family:'Noto Serif Devanagari',serif}
+  .logo-fb2{background:linear-gradient(135deg,#f5ece0,#ede0cc)!important;border-color:#c9a87a!important;color:#7a4a1e!important}
+  .logo{width:65px;height:58px;border-radius:6px;object-fit:cover}
+  .center-block{flex:1;text-align:center;padding:0 10px}
+  .org-title{font-size:22px;font-weight:700;color:#1B385A;font-family:'Noto Serif Devanagari',serif;letter-spacing:.5px;line-height:1.35;text-shadow:0 1px 1px rgba(0,0,0,.05)}
+  .org-sub{font-size:16px;font-weight:700;color:#1B385A;margin-bottom:3px}
+  .org-addr{font-size:12px;color:#374151;line-height:1.6;margin-bottom:2px}
+  .org-contact{font-size:12px;color:#374151;line-height:1.6}
+  .org-contact .blue{color:#1B385A;font-weight:700}
+
+  .divider{height:2px;background:linear-gradient(90deg,transparent,#1B385A,transparent);margin:8px 0}
+
+  .title-area{text-align:center;margin:12px 0}
+  .title-area .title{display:inline-block;background:linear-gradient(135deg,#1B385A,#2a5a8a);color:#fff;padding:8px 44px;font-size:17px;font-weight:700;font-family:'Noto Serif Devanagari',serif;letter-spacing:.8px;box-shadow:0 3px 10px rgba(27,56,90,.3);position:relative}
+  .title-area .title::before{content:'';position:absolute;top:-4px;left:-4px;right:-4px;bottom:-4px;border:2px solid #D3292F;border-radius:10px;pointer-events:none}
+  .title-area .title-inner{position:relative;z-index:1}
+
+  .report-meta{display:flex;justify-content:space-between;align-items:center;padding:8px 14px;background:linear-gradient(135deg,#f8fafc,#f1f5f9);border:1px solid #e2e8f0;border-radius:5px;margin-bottom:10px}
+  .report-meta .meta-item{display:flex;align-items:center;gap:8px;font-size:12px;color:#475569}
+  .report-meta .meta-item .label{font-weight:600;color:#1B385A;font-size:12px}
+  .report-meta .meta-item .badge{background:#D3292F;color:#fff;padding:2px 10px;border-radius:3px;font-size:11px;font-weight:600}
+
+  .summary-cards{display:flex;gap:8px;margin-bottom:10px}
+  .summary-cards .scard{flex:1;padding:9px 10px;border-radius:5px;text-align:center}
+  .scard-total{background:linear-gradient(135deg,#1B385A,#2a5a8a);color:#fff}
+  .scard-count{background:linear-gradient(135deg,#D3292F,#e04a4f);color:#fff}
+  .scard-avg{background:linear-gradient(135deg,#047857,#059669);color:#fff}
+  .scard-high{background:linear-gradient(135deg,#b45309,#d97706);color:#fff}
+  .scard .sval{font-size:17px;font-weight:700;line-height:1.3}
+  .scard .slbl{font-size:10px;opacity:.9;letter-spacing:.4px}
+
+  table{width:100%;border-collapse:collapse;font-size:12px;border:2px solid #cbd5e1;border-radius:4px;overflow:hidden}
+  thead th{background:linear-gradient(180deg,#1B385A,#15304e);color:#fff;padding:7px 6px;border:0.5px solid #2a4a6a;text-align:center;font-size:12px;font-weight:700;letter-spacing:.4px;font-family:'Noto Serif Devanagari',serif;white-space:nowrap}
+  tbody td{padding:6px 6px;border:0.5px solid #e2e8f0;vertical-align:middle}
+  tbody tr:nth-child(even){background:#f8fafc}
+  td.c{text-align:center}
+  td.l{text-align:left;padding-left:8px;word-break:break-word}
+  td.amt{text-align:right;font-weight:700;font-size:13px;padding-right:8px;font-family:'Noto Sans Devanagari',sans-serif}
+  td.mono{font-family:'Courier New',monospace;font-size:12px;letter-spacing:.3px}
+  td.date{font-weight:600;color:#475569}
+  td.cat{font-weight:600;color:#1B385A}
+  td.vouch{color:#6b7280}
+  .sub{font-size:10px;color:#6b7280;margin-top:2px}
+
+  .totals-section{border:2px solid #cbd5e1;border-radius:5px;margin-top:10px;overflow:hidden}
+  .totals-header{background:linear-gradient(90deg,#1B385A,#2a5a8a);color:#fff;padding:6px 14px;font-size:12px;font-weight:700;letter-spacing:.5px}
+  .totals-body{display:flex;padding:0}
+  .totals-body .tb-item{flex:1;padding:8px 10px;text-align:center;border-right:0.5px solid #e2e8f0}
+  .totals-body .tb-item:last-child{border-right:none}
+  .tb-item .tbl{font-size:9px;color:#6b7280;text-transform:uppercase;letter-spacing:.4px}
+  .tb-item .tbv{font-size:14px;font-weight:700;color:#1B385A;margin-top:2px}
+  .tb-item.highlight .tbv{color:#D3292F}
+
+  .signature-area{display:flex;justify-content:space-between;margin-top:18px;padding:0 14px}
+  .signature-area .sig-item{text-align:center;min-width:180px}
+  .sig-line{width:180px;height:0;border-top:1.5px dashed #9ca3af;margin:30px 0 5px}
+  .sig-label{font-size:11px;color:#6b7280;letter-spacing:.4px;font-weight:500}
+
+  .footer-bar{text-align:center;margin-top:12px;padding:8px 0;border-top:1px solid #e5e7eb;font-size:10px;color:#9ca3af}
+
+  @media print{body{background:#fff}}
+</style></head><body>
+
+<div class="top-border"></div>
+
+<div class="bless">
+  <span>॥ श्री गणेशाय नमः ॥</span>
+  <span>॥ श्री शनिदेवाय नमः ॥</span>
+  <span>॥ श्री सांवलाजी महाराज नमः ॥</span>
+</div>
+
+<div class="hdr">
+  <div class="logo-box"><img src="/Images/logoT.png" class="logo" onerror="this.style.display='none';this.nextSibling.style.display='flex'" alt=""><div class="logo-fb">SSGMS<br>TRUST</div></div>
+  <div class="center-block">
+    <div class="org-title">श्री क्षत्रिय घांची मोदी समाज सेवा संस्थान ट्रस्ट</div>
+    <div class="org-sub">अहमदाबाद, गुजरात</div>
+    <div class="org-addr"><b>हेड ऑफिस :</b> 68, वृंदावन शॉपिंग सेंटर, गुजरात हाउसिंग बोर्ड बी. एस. स्कूल के पास, चांदखेडा, साबरमती, अहमदाबाद - 382424 &nbsp; (O) 9898535345</div>
+    <div class="org-contact"><b>संपर्क सूत्र :</b> <span class="blue">अध्यक्ष श्री वोरारामजी टी. बोराणा</span> &nbsp;|&nbsp; <span class="blue">9374934004</span> &nbsp;|&nbsp; <b>ऑफिस :</b> <span class="blue">9898535345</span></div>
+  </div>
+   <div class="logo-box"><img src="/Images/sanidevImg.jpeg" class="logo" onerror="this.style.display='none';this.nextSibling.style.display='flex'" alt=""><div class="logo-fb logo-fb2">शनि<br>देव</div></div>
+</div>
+
+<div class="divider"></div>
+
+<div class="title-area">
+  <div class="title"><span class="title-inner">खर्च रिपोर्ट</span></div>
+</div>
+
+<div class="report-meta">
+  <div class="meta-item"><span class="label">अवधि :</span> ${dateRange[0]?.format('DD MMM YYYY')} - ${dateRange[1]?.format('DD MMM YYYY')}</div>
+  <div class="meta-item"><span class="label">श्रेणी :</span> ${selectedCategory !== 'all' ? categoryName(selectedCategory) : 'सभी श्रेणियाँ'}</div>
+  <div class="meta-item"><span class="label">कुल प्रविष्टियाँ :</span> <span class="badge">${reportData.length}</span></div>
+</div>
+
+<div class="summary-cards">
+  <div class="scard scard-total"><div class="sval">₹${summary.totalAmount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</div><div class="slbl">कुल खर्च</div></div>
+  <div class="scard scard-count"><div class="sval">${reportData.length}</div><div class="slbl">कुल प्रविष्टियाँ</div></div>
+  <div class="scard scard-avg"><div class="sval">₹${summary.averageExpense.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</div><div class="slbl">औसत खर्च</div></div>
+  <div class="scard scard-high"><div class="sval">₹${summary.highestExpense.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</div><div class="slbl">सर्वाधिक खर्च</div></div>
+</div>
+
+<table>
+  <thead><tr>
+    <th style="width:22px">#</th>
+    <th style="width:68px">दिनांक</th>
+    <th>शीर्षक / विवरण</th>
+    <th style="width:76px">श्रेणी</th>
+    <th style="width:72px">राशि (₹)</th>
+    <th style="width:64px">वाउचर</th>
+  </tr></thead>
+  <tbody>${rows}</tbody>
+</table>
+
+<div class="totals-section">
+  <div class="totals-header">सारांश (Summary)</div>
+  <div class="totals-body">
+    <div class="tb-item highlight"><div class="tbl">कुल खर्च</div><div class="tbv">₹${summary.totalAmount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</div></div>
+    <div class="tb-item"><div class="tbl">औसत खर्च</div><div class="tbv">₹${summary.averageExpense.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</div></div>
+    <div class="tb-item"><div class="tbl">सर्वाधिक</div><div class="tbv">₹${summary.highestExpense.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</div></div>
+    <div class="tb-item"><div class="tbl">न्यूनतम</div><div class="tbv">₹${summary.lowestExpense.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</div></div>
+    <div class="tb-item"><div class="tbl">दैनिक औसत</div><div class="tbv">₹${summary.dailyAverage.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</div></div>
+  </div>
+</div>
+
+<div class="signature-area">
+  <div class="sig-item"><div class="sig-line"></div><div class="sig-label">लेखाकार (Accountant)</div></div>
+  <div class="sig-item"><div class="sig-line"></div><div class="sig-label">कोषाध्यक्ष (Treasurer)</div></div>
+  <div class="sig-item"><div class="sig-line"></div><div class="sig-label">अध्यक्ष (Chairman)</div></div>
+</div>
+
+<div class="footer-bar">
+  Generated by SSGMS Web Panel • ${new Date().toLocaleString('en-IN')} • This is a computer-generated report
+</div>
+
+<script>
+  (function(){var p=document.querySelectorAll('.logo');p.forEach(function(i){if(i.naturalWidth===0){i.style.display='none';var fb=i.nextElementSibling;if(fb)fb.style.display='flex'}});
+  setTimeout(function(){window.print()},400)})();
+</script>
+</body></html>`)
+    printWindow.document.close()
   };
 
   const shareReport = () => {
@@ -319,10 +488,18 @@ const ExpenseReport = ({ expenses, categories }) => {
               onClick={exportToCSV}
               className="text-green-600 border-green-200 hover:border-green-400"
             >
-              Export
+              Export CSV
             </Button>
           </Tooltip>
-        
+          <Tooltip title="Download Print Report">
+            <Button 
+              icon={<PrinterOutlined />} 
+              onClick={printReport}
+              type="primary"
+            >
+              Download Report
+            </Button>
+          </Tooltip>
         </Space>
       </div>
 

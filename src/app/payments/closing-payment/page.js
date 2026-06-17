@@ -45,9 +45,10 @@ import { useClosingPaymentHistory } from '@/utils/hooks/useClosingPaymentHistory
 import ClosingGroupDetailDrawer from './components/GroupDetailDrawer';
 import ClosingAgentDetailDrawer from './components/AgentDetailDrawer';
 
-const { Title, Text } = Typography;
-const colors = {
-  primary: '#db2777',
+  const { Title, Text } = Typography;
+  const colors = {
+    primary: '#db2777',
+    historyBtnBg: '#1B385A',
   secondary: '#ea580c',
   accent: '#059669',
   warning: '#f59e0b',
@@ -379,19 +380,36 @@ const ClosingPayment = () => {
   return (
     <div style={{ padding: 20, background: colors.background, minHeight: '100vh' }}>
       {/* Header */}
-      <div style={{ marginBottom: 20 }}>
-        <Title
-          level={3}
+      <div style={{ marginBottom: 20, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+        <div>
+          <Title
+            level={3}
+            style={{
+              margin: 0,
+              background: `linear-gradient(135deg, ${colors.primary}, ${colors.secondary})`,
+              WebkitBackgroundClip: 'text',
+              WebkitTextFillColor: 'transparent',
+            }}
+          >
+            Closing Form Management
+          </Title>
+          <Text type="secondary">Track and manage agent closing payments across programs</Text>
+        </div>
+        <Button
+          icon={<HistoryOutlined />}
+          onClick={() => router.push('/payments/history')}
           style={{
-            margin: 0,
-            background: `linear-gradient(135deg, ${colors.primary}, ${colors.secondary})`,
-            WebkitBackgroundClip: 'text',
-            WebkitTextFillColor: 'transparent',
+            background: colors.historyBtnBg,
+            border: 'none',
+            color: '#fff',
+            borderRadius: 8,
+            fontWeight: 600,
+            fontSize: 12,
+            height: 36,
           }}
         >
-          Closing Form Management
-        </Title>
-        <Text type="secondary">Track and manage agent Closing  payments across programs</Text>
+          Payment History
+        </Button>
       </div>
 
       {/* Summary Cards */}

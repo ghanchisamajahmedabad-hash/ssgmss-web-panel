@@ -77,7 +77,7 @@ const UserDrawer = ({ visible, onClose, editingUser, onSuccess, currentUser }) =
   const [showPermissions, setShowPermissions] = useState(false)
   const [userStatus, setUserStatus] = useState(STATUS.ACTIVE)
   const [permissions, setPermissions] = useState({
-    pages: ['/dashboard'],
+    pages: ['/'],
     actions: {
       create: false,
       edit: false,
@@ -110,7 +110,7 @@ const UserDrawer = ({ visible, onClose, editingUser, onSuccess, currentUser }) =
         setSelectedRole(editingUser.role)
         setUserStatus(editingUser.status || STATUS.ACTIVE)
         setPermissions(editingUser.permissions || {
-          pages: ['/dashboard'],
+          pages: ['/'],
           actions: { create: false, edit: false, delete: false, view: true, download: false },
           moduleAccess: { dashboard: true }
         })
@@ -132,7 +132,7 @@ const UserDrawer = ({ visible, onClose, editingUser, onSuccess, currentUser }) =
         setSelectedRole(ROLES.ADMIN)
         setUserStatus(STATUS.ACTIVE)
         setPermissions({
-          pages: ['/dashboard'],
+          pages: ['/'],
           actions: {
             create: false,
             edit: false,
@@ -174,7 +174,11 @@ const UserDrawer = ({ visible, onClose, editingUser, onSuccess, currentUser }) =
         photoURL,
         role: selectedRole,
         status: userStatus, // Include status
-        permissions: showPermissions ? permissions : undefined,
+        permissions: showPermissions ? permissions : (editingUser ? undefined : {
+          pages: ['/'],
+          actions: { create: false, edit: false, delete: false, view: true, download: false },
+          moduleAccess: { dashboard: true }
+        }),
         sendWelcomeEmail: sendEmail,
       }
 

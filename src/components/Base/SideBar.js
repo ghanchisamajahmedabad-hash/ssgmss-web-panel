@@ -16,6 +16,9 @@ import {
   TagOutlined,
   InboxOutlined,
   DeleteOutlined,
+  TrophyOutlined,
+  WhatsAppOutlined,
+  FundOutlined,
 } from '@ant-design/icons';
 import { usePathname, useRouter } from 'next/navigation';
 import { useAuth } from './AuthProvider';
@@ -28,15 +31,12 @@ const { Sider } = Layout;
 // ─── Permission helpers ────────────────────────────────────────────────────────
 
 const isSuperAdmin = (user) => user?.role === 'superadmin';
-
 const hasPageAccess = (user, pageKey) => {
   if (!user) return false;
   if (isSuperAdmin(user)) return true;
-console.log(user.permissions,'user.permissions')
   const pages = user.permissions?.pages || [];
   if (pages.includes(pageKey)) return true;
-
-  // Exact match only — '/programs' does NOT grant access to '/programs/yojnas'
+  if (pageKey === '/' && pages.includes('/dashboard')) return true;
   return false;
 };
 
@@ -80,6 +80,10 @@ const buildMenuItems = (user, pendingCount, collapsed) => {
       icon: <UserSwitchOutlined />,
       label: label('Agents'),
       module: 'agents',
+      children: [
+        { key: '/agents', label: 'All Agents', module: 'agents' },
+        { key: '/agents/performance', label: 'Performance', icon: <TrophyOutlined />, module: 'agents' },
+      ],
     },
     {
       key: '/members',
@@ -110,6 +114,8 @@ const buildMenuItems = (user, pendingCount, collapsed) => {
       children: [
         { key: '/payments/join-fees', label: 'Join Fees', module: 'payments' },
         { key: '/payments/closing-payment', label: 'Closing Payment', module: 'payments' },
+        { key: '/payments/history', label: 'Payment History', module: 'payments' },
+        { key: '/payments/whatsapp', label: 'WhatsApp', icon: <WhatsAppOutlined />, module: 'payments' },
       ],
     },
     {
@@ -140,7 +146,13 @@ const buildMenuItems = (user, pendingCount, collapsed) => {
       children: [
         { key: '/settings/about', label: 'About', module: 'settings' },
         { key: '/settings/contact', label: 'Contact', module: 'settings' },
-        {
+    {
+      key: '/activity',
+      icon: <FundOutlined />,
+      label: label('Activity'),
+      module: 'activity',
+    },
+    {
           key: '/settings/security',
           label: 'Security',
           module: 'settings',
@@ -150,6 +162,12 @@ const buildMenuItems = (user, pendingCount, collapsed) => {
           ],
         },
       ],
+    },
+    {
+      key: '/activity',
+      icon: <FundOutlined />,
+      label: label('Activity'),
+      module: 'activity',
     },
     {
       key: '/trash',
@@ -193,6 +211,7 @@ const SideBar = ({ collapsed, setCollapsed }) => {
   const [openKeys, setOpenKeys] = useState([]);
   const { user } = useAuth();
   const [pendingCount, setPendingCount] = useState(0);
+console.log("user ", user)
 
   // Compute open keys based on current path
   const defaultOpenKeys = useMemo(() => {

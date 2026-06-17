@@ -4,11 +4,13 @@ import {
   CheckCircleOutlined,
   LoadingOutlined
 } from '@ant-design/icons'
-import { collection, doc, serverTimestamp, updateDoc, addDoc } from 'firebase/firestore'
+import { doc, serverTimestamp, updateDoc } from 'firebase/firestore'
 import { db } from '../../../../lib/firbase-client'
+import { auth } from '../../../../lib/firbase-client'
 import dayjs from 'dayjs'
 import isBetween from 'dayjs/plugin/isBetween'
-import { createClosingPayment, createSearchIndex, generateRegistrationNumber, memberAccoiuntCreate } from '@/app/members/components/components/firebaseUtils'
+import { createClosingPayment, createSearchIndex, generateRegistrationNumber, memberAccoiuntCreate, recordJoinFeeTransaction } from '@/app/members/components/components/firebaseUtils'
+import { notifyAgent } from '@/app/utils/notifyAgent'
 
 dayjs.extend(isBetween)
 
@@ -71,9 +73,9 @@ const ApproveModal = ({ open, setOpen, selectedMember, setSelectedMember, fetchA
       payAmount:       period?.payAmount      || 0,
       periodStartDate: period?.startDate,
       periodEndDate:   period?.endDate,
-      memberGroupId:   program?.memberGroups?.[0]?.id        || '',
-      memberGroupName: program?.memberGroups?.[0]?.groupName || '',
-      memberGroupCode: program?.memberGroups?.[0]?.code      || '',
+      memberGroupId:   program?.memberGroups?.[0]?.id        || selectedMember?.memberGroupId || '',
+      memberGroupName: program?.memberGroups?.[0]?.groupName || selectedMember?.memberGroupName || '',
+      memberGroupCode: program?.memberGroups?.[0]?.code      || selectedMember?.memberGroupCode || '',
       hasPeriod:       !!period,
     }
 
@@ -103,48 +105,6 @@ const ApproveModal = ({ open, setOpen, selectedMember, setSelectedMember, fetchA
     setPaidAmount(value)
     if (value > joinFees) {
       message.warning(`Paid amount cannot exceed total join fees of ₹${joinFees}`)
-    }
-  }
-
-  // ── Record join fee transaction ─────────────────────────────────────────────
-  const recordJoinFeeTransaction = async (memberData, paymentData) => {
-    try {
-      const ref = await addDoc(collection(db, 'memberJoinFees'), {
-        memberId:           memberData.memberId,
-        memberName:         memberData.displayName,
-        registrationNumber: memberData.registrationNumber,
-        memberPhone:        memberData.phone,
-
-        transactionType:    'join_fee_approval',
-        amount:             parseFloat(paymentData.paidAmount || 0),
-        previousBalance:    0,
-        newBalance:         parseFloat(paymentData.pendingAmount || 0),
-
-        paymentMode:        paymentData.paymentMode,
-        transactionId:      paymentData.transactionId || '',
-        transactionDate:    paymentData.transactionDate
-                              ? dayjs(paymentData.transactionDate).format('DD-MM-YYYY')
-                              : dayjs().format('DD-MM-YYYY'),
-
-        // Single program fields
-        programId:          paymentData.programId   || '',
-        programName:        paymentData.programName || '',
-
-        status:             'completed',
-        verified:           true,
-        notes:              'Join fee payment during approval',
-
-        approvedBy:         user?.uid,
-        approvedByName:     user?.displayName || user?.email,
-        approvedAt:         serverTimestamp(),
-        createdBy:          user?.uid,
-        createdAt:          serverTimestamp(),
-        updated_at:         serverTimestamp(),
-      })
-      return ref.id
-    } catch (error) {
-      console.error('Error recording transaction:', error)
-      throw error
     }
   }
 
@@ -201,7 +161,7 @@ const ApproveModal = ({ open, setOpen, selectedMember, setSelectedMember, fetchA
         approvedBy:     user?.uid,
         approvedByName: user?.displayName || user?.email,
         approvedAt:     serverTimestamp(),
-        createdAt:      serverTimestamp(),
+        createdAt:      selectedMember.createdAt || serverTimestamp(),
         updated_at:     serverTimestamp(),
 
         // ── Embedded program details (resolved at approval time) ────────────
@@ -241,24 +201,51 @@ const ApproveModal = ({ open, setOpen, selectedMember, setSelectedMember, fetchA
             memberId:           selectedMember.id,
             displayName:        selectedMember.displayName,
             registrationNumber: finalRegNumber,
+            fatherName:         selectedMember.fatherName,
+            aadhaarNo:          selectedMember.aadhaarNo,
             phone:              selectedMember.phone,
+            agentId:            selectedMember.agentId || '',
+            createdBy:          user?.uid,
           },
           {
-            paidAmount:    finalPaid,
-            pendingAmount: finalPending,
+            paidAmount:         finalPaid,
+            totalPendingAmount: finalPending,
+            previousBalance:    0,
             paymentMode,
             transactionId:   form.getFieldValue('joinFeesTxtId'),
             transactionDate: form.getFieldValue('transactionDate'),
             programId:       programDetail.programId,
             programName:     programDetail.programName,
+            notes:           'Join fee payment during approval',
           }
         )
       }
 
-      // ── Create / update auth account ───────────────────────────────────────
-      await memberAccoiuntCreate({ ...selectedMember, ...memberUpdate, id: selectedMember.id })
+      // ── Create / update auth account + credit commission (server-side) ──────
+      const commissionPayload = (joinFeesDone && finalPaid > 0 && selectedMember.agentId)
+        ? {
+            agentId: selectedMember.agentId,
+            amount: finalPaid,
+            memberName: selectedMember.displayName,
+            memberFatherName: selectedMember.fatherName || '',
+            memberRegNo: finalRegNumber || '',
+            programId: programDetail.programId,
+            programName: programDetail.programName,
+            description: `Join Fee Commission (25%) - Member Approval`
+          }
+        : null
+      await memberAccoiuntCreate({ ...selectedMember, ...memberUpdate, id: selectedMember.id }, commissionPayload)
       await createClosingPayment({ ...selectedMember, id: selectedMember.id })
       message.success(`Member approved! Registration: ${finalRegNumber}`)
+      // Notify agent
+      if (selectedMember.agentId) {
+        notifyAgent(
+          selectedMember.agentId,
+          "New Member Approved",
+          `${selectedMember.displayName} has been approved. Registration: ${finalRegNumber}`,
+          { click_action: "/members" }
+        )
+      }
       setOpen(false)
       setSelectedMember(null)
       resetForm()

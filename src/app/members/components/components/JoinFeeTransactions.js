@@ -43,6 +43,9 @@ const JoinFeeTransactions = ({ memberId, memberName, registrationNumber }) => {
 
   const addTransaction = async (values) => {
     try {
+      const keyword = [memberName, registrationNumber]
+        .filter(Boolean).join(' ').toLowerCase();
+
       await addDoc(collection(db, 'memberJoinFees'), {
         memberId,
         memberName,
@@ -55,13 +58,9 @@ const JoinFeeTransactions = ({ memberId, memberName, registrationNumber }) => {
         notes: values.notes,
         status: 'completed',
         verified: true,
-        createdBy: 'admin', // Replace with actual user
+        createdBy: 'admin',
         createdAt: serverTimestamp(),
-        
-        // Search index
-        search_memberName: memberName.toLowerCase(),
-        search_registrationNumber: registrationNumber,
-        search_transactionId: values.transactionId?.toLowerCase() || ''
+        search_keyword: keyword,
       })
 
       message.success('Transaction recorded successfully')

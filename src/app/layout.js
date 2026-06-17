@@ -4,6 +4,7 @@ import { App, ConfigProvider } from 'antd';
 import { themeAntd } from "@/constent/antdTheme";
 import { AuthProvider } from "@/components/Base/AuthProvider";
 import MainLayout from "@/components/Base/MainLayout";
+import FcmTokenManagerClient from "@/components/Base/FcmTokenManagerClient";
 
 
 const geistSans = Geist({
@@ -27,8 +28,9 @@ export default function RootLayout({ children }) {
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
-        <AuthProvider>
-        <ConfigProvider 
+         <AuthProvider>
+            <FcmTokenManagerClient />
+         <ConfigProvider 
           theme={themeAntd}
         >
            <App>
@@ -37,7 +39,6 @@ export default function RootLayout({ children }) {
             </MainLayout>
            </App>
         </ConfigProvider>
-         
         </AuthProvider>
       </body>
     </html>

@@ -3,7 +3,7 @@ import React, { useState, useEffect } from 'react';
 import {
   Table, Button, Modal, Form, Input, Select, Card, Row, Col, Upload,
   Checkbox, Tag, Space, Switch, Typography, Avatar, Tooltip, Badge,
-  Drawer, Descriptions, notification, App, Popover
+  Drawer, Descriptions, notification, App, Popover, Tabs
 } from 'antd';
 import {
   PlusOutlined, EditOutlined, DeleteOutlined, EyeOutlined,
@@ -11,7 +11,8 @@ import {
   IdcardOutlined, SaveOutlined, UploadOutlined, SignatureOutlined,
   FileOutlined, ReloadOutlined, CheckCircleOutlined, CloseCircleOutlined,
   SearchOutlined, FilterOutlined, FileTextOutlined, PictureOutlined,
-  ExclamationCircleOutlined, StopOutlined
+  ExclamationCircleOutlined, StopOutlined, WalletOutlined,
+  DollarOutlined, HistoryOutlined, MinusCircleOutlined, PlusCircleOutlined
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { agentApi } from '@/utils/api';
@@ -47,6 +48,13 @@ const AgentsManagementPage = () => {
   const [editingAgent,     setEditingAgent]     = useState(null);
   const [viewModalVisible, setViewModalVisible] = useState(false);
   const [selectedAgent,    setSelectedAgent]    = useState(null);
+  const [commissionHistory, setCommissionHistory] = useState([]);
+  const [commHistoryLoading, setCommHistoryLoading] = useState(false);
+  const [walletModalVisible, setWalletModalVisible] = useState(false);
+  const [walletAction, setWalletAction] = useState(''); // 'pay' | 'adjust'
+  const [walletAmount, setWalletAmount] = useState('');
+  const [walletDesc, setWalletDesc] = useState('');
+  const [walletProcessing, setWalletProcessing] = useState(false);
   const [form] = Form.useForm();
   const [pagination, setPagination] = useState({ current: 1, pageSize: 10, total: 0, showSizeChanger: true, pageSizeOptions: ['10','20','50','100'] });
   const [filters,    setFilters]    = useState({ status: 'all', search: '' });
@@ -209,7 +217,150 @@ const isSuperAdmin = (user) => user?.role === 'superadmin';
     } catch (e) { notification.error({ message: 'Error', description: e.message }); }
   };
 
-  const viewAgentDetails = (agent) => { setSelectedAgent(agent); setViewModalVisible(true); };
+  const viewAgentDetails = async (agent) => {
+    setSelectedAgent(agent);
+    setViewModalVisible(true);
+    setCommissionHistory([]);
+    setCommHistoryLoading(true);
+    try {
+      const token = await auth.currentUser?.getIdToken();
+      const res = await fetch(`/api/commission?agentId=${agent.id}&limit=20`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const result = await res.json();
+      if (result.success) setCommissionHistory(result.data || []);
+    } catch (e) {
+      console.error('Failed to load commission history:', e);
+    } finally {
+      setCommHistoryLoading(false);
+    }
+  };
+
+  const printCommissionReport = () => {
+    if (!selectedAgent || commissionHistory.length === 0) return
+    const win = window.open('', '_blank')
+    const rows = commissionHistory.map((tx, i) => `
+      <tr>
+        <td class="c">${i + 1}</td>
+        <td class="nowrap">${tx.createdAt ? formatDate(tx.createdAt) : '-'}</td>
+        <td class="c">${tx.type === 'credit' ? 'CREDIT' : 'DEBIT'}</td>
+        <td class="l">
+          <b>${tx.memberName || tx.description || tx.source}</b>
+          ${tx.memberFatherName ? `<div class="sm">${tx.memberFatherName}</div>` : ''}
+          ${tx.memberRegNo ? `<div class="sm mono">${tx.memberRegNo}</div>` : ''}
+        </td>
+        <td class="c">${tx.commissionRate ? (tx.commissionRate * 100) + '%' : '-'}</td>
+        <td class="c">${tx.source === 'joinFees' ? 'Join Fee' : tx.source === 'closingPayment' ? 'Closing' : tx.source === 'withdrawal' ? 'Withdrawal' : tx.source}</td>
+        <td class="amt ${tx.type === 'credit' ? 'green' : 'red'}">${tx.type === 'credit' ? '+' : '-'}₹${tx.amount.toLocaleString('en-IN')}</td>
+        <td class="amt">₹${(tx.balanceAfter || 0).toLocaleString('en-IN')}</td>
+      </tr>`).join('')
+
+    const totalCredits = commissionHistory.filter(t => t.type === 'credit').reduce((s, t) => s + t.amount, 0)
+    const totalDebits = commissionHistory.filter(t => t.type === 'debit').reduce((s, t) => s + t.amount, 0)
+
+    win.document.write(`<!DOCTYPE html><html lang="hi"><head>
+<meta charset="utf-8"><title>Commission Report — ${selectedAgent.name}</title>
+<style>
+  @page { size: A4 landscape; margin: 8mm 6mm 18mm 6mm; @bottom-center { content: "Page " counter(page); font-size: 10px; color: #6b7280; } }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:'Segoe UI',Arial,sans-serif;background:#fff;color:#1f2937;padding:12px;font-size:14px}
+  .header{text-align:center;margin-bottom:14px;border-bottom:2.5px solid #1B385A;padding-bottom:12px}
+  .header h1{font-size:24px;color:#1B385A;margin-bottom:6px;letter-spacing:.5px}
+  .header .sub{font-size:12px;color:#6b7280}
+  .agent-info{display:flex;justify-content:space-between;background:#f8fafc;padding:10px 14px;border-radius:5px;margin-bottom:12px;border:1px solid #d1d5db;font-size:13px}
+  .agent-info div{flex:1}
+  .agent-info .label{color:#6b7280;font-size:10px;margin-bottom:2px}
+  .agent-info .val{font-weight:700;color:#1B385A;font-size:14px}
+  .summary-cards{display:flex;gap:10px;margin-bottom:12px}
+  .scard{flex:1;padding:10px 8px;border-radius:5px;text-align:center;color:#fff}
+  .scard-bal{background:linear-gradient(135deg,#1B385A,#2a5a8a)}
+  .scard-credit{background:linear-gradient(135deg,#047857,#059669)}
+  .scard-debit{background:linear-gradient(135deg,#b91c1c,#dc2626)}
+  .scard .val{font-size:18px;font-weight:700}
+  .scard .lbl{font-size:10px;opacity:.9;letter-spacing:.3px}
+  table{width:100%;border-collapse:collapse;font-size:12px;border:2px solid #cbd5e1}
+  thead th{background:#1B385A;color:#fff;padding:7px 6px;border:0.5px solid #2a4a6a;text-align:center;font-size:11px;font-weight:700;white-space:nowrap;letter-spacing:.3px}
+  tbody td{padding:6px 5px;border:0.5px solid #e2e8f0;vertical-align:middle}
+  tbody tr:nth-child(even){background:#f8fafc}
+  td.c{text-align:center}
+  td.l{text-align:left;padding-left:8px;word-break:break-word}
+  td.amt{text-align:right;font-weight:700;padding-right:8px;font-size:13px}
+  td.green{color:#059669}
+  td.red{color:#dc2626}
+  td.nowrap{white-space:nowrap}
+  .sm{font-size:10px;color:#6b7280;margin-top:1px}
+  .mono{font-family:'Courier New',monospace;letter-spacing:.3px}
+  .footer{text-align:center;margin-top:12px;padding-top:8px;border-top:1.5px solid #d1d5db;font-size:10px;color:#9ca3af}
+</style></head><body>
+<div class="header">
+  <h1>Agent Commission Report</h1>
+  <div class="sub">श्री क्षत्रिय घांची मोदी समाज सेवा संस्थान ट्रस्ट</div>
+</div>
+<div class="agent-info">
+  <div><div class="label">Agent Name</div><div class="val">${selectedAgent.name}</div></div>
+  <div><div class="label">Phone</div><div class="val">${selectedAgent.phone1 || ''}</div></div>
+  <div><div class="label">Email</div><div class="val">${selectedAgent.email || ''}</div></div>
+  <div><div class="label">Report Date</div><div class="val">${new Date().toLocaleDateString('en-IN', { year:'numeric', month:'long', day:'numeric' })}</div></div>
+</div>
+<div class="summary-cards">
+  <div class="scard scard-bal"><div class="val">₹${(selectedAgent.walletBalance || 0).toLocaleString('en-IN')}</div><div class="lbl">Wallet Balance</div></div>
+  <div class="scard scard-credit"><div class="val">₹${totalCredits.toLocaleString('en-IN')}</div><div class="lbl">Total Commission Earned</div></div>
+  <div class="scard scard-debit"><div class="val">₹${totalDebits.toLocaleString('en-IN')}</div><div class="lbl">Total Withdrawn</div></div>
+</div>
+<table>
+  <thead><tr>
+    <th style="width:22px">#</th>
+    <th style="width:100px">Date & Time</th>
+    <th style="width:55px">Type</th>
+    <th>Member / Father / Reg No</th>
+    <th style="width:55px">Rate</th>
+    <th style="width:75px">Source</th>
+    <th style="width:78px">Amount</th>
+    <th style="width:72px">Balance</th>
+  </tr></thead>
+  <tbody>${rows}</tbody>
+</table>
+<div class="footer">Generated by SSGMS Web Panel • ${new Date().toLocaleString('en-IN')} • This is a computer-generated report</div>
+<script>setTimeout(function(){window.print()},400)</script>
+</body></html>`)
+    win.document.close()
+  }
+
+  const handleWalletAction = async () => {
+    if (!walletAmount || parseFloat(walletAmount) <= 0) {
+      message.error('Please enter a valid amount');
+      return;
+    }
+    try {
+      setWalletProcessing(true);
+      const token = await auth.currentUser?.getIdToken();
+      const res = await fetch('/api/commission', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({
+          action: 'pay-agent',
+          agentId: selectedAgent.id,
+          amount: parseFloat(walletAmount),
+          description: walletDesc || `Payment to Agent - ₹${walletAmount}`,
+        })
+      });
+      const result = await res.json();
+      if (result.success) {
+        message.success(result.message);
+        setWalletModalVisible(false);
+        setWalletAmount('');
+        setWalletDesc('');
+        fetchAgents(pagination.current);
+        viewAgentDetails(selectedAgent);
+      } else {
+        message.error(result.message || 'Failed');
+      }
+    } catch (e) {
+      message.error(e.message);
+    } finally {
+      setWalletProcessing(false);
+    }
+  };
 
   const resetForm = () => {
     form.resetFields(); setEditingAgent(null); setModalVisible(false);
@@ -288,6 +439,18 @@ const isSuperAdmin = (user) => user?.role === 'superadmin';
         <div className="flex items-center gap-2">
           {status === 'active' ? <CheckCircleOutlined className="text-green-600" /> : <CloseCircleOutlined className="text-red-600" />}
           <Tag color={status === 'active' ? 'success' : 'error'}>{status === 'active' ? 'Active' : 'Inactive'}</Tag>
+        </div>
+      ),
+    },
+    {
+      title: 'WALLET', key: 'wallet', width: 160,
+      render: (_, r) => (
+        <div className="flex items-center gap-2">
+          <WalletOutlined className="text-blue-600" />
+          <div>
+            <div className="font-bold text-sm">₹{(r.walletBalance || 0).toLocaleString('en-IN')}</div>
+            <div className="text-xs text-gray-500">Earned: ₹{(r.totalCommissionEarned || 0).toLocaleString('en-IN')}</div>
+          </div>
         </div>
       ),
     },
@@ -584,66 +747,242 @@ const isSuperAdmin = (user) => user?.role === 'superadmin';
         {/* View Drawer */}
         <Drawer
           title={<div className="flex items-center gap-3"><div className="bg-blue-100 p-2 rounded-lg"><EyeOutlined className="text-blue-600 text-xl" /></div><div><div className="font-semibold text-lg">Agent Details</div><div className="text-xs text-gray-500">Complete agent information</div></div></div>}
-          open={viewModalVisible} onClose={() => setViewModalVisible(false)} width={700} footer={null}
+          open={viewModalVisible} onClose={() => setViewModalVisible(false)} size={800} footer={null}
         >
           {selectedAgent && (
-            <div className="space-y-6">
-              <Card className="bg-gradient-to-r from-blue-50 to-gray-50 border-blue-200">
-                <div className="flex items-center gap-4">
-                  {selectedAgent.photoUrl ? <Avatar size={90} src={selectedAgent.photoUrl} className="border-4 border-white shadow" /> : <Avatar size={90} icon={<UserOutlined />} className="border-4 border-white shadow bg-blue-100 text-blue-600" />}
-                  <div className="flex-1">
-                    <Title level={4} className="mb-1">{selectedAgent.name}</Title>
-                    <Text type="secondary">Father: {selectedAgent.fatherName}</Text>
-                    <div className="mt-3 flex gap-2">
-                      <Badge status={selectedAgent.status === 'active' ? 'success' : 'error'} text={selectedAgent.status === 'active' ? 'Active' : 'Inactive'} />
-                      <Tag color="blue">Caste: {selectedAgent.caste || 'N/A'}</Tag>
+            <Tabs
+              defaultActiveKey="details"
+              className="agent-detail-tabs"
+              items={[
+                {
+                  key: 'details',
+                  label: <span><UserOutlined className="mr-1.5" />Details</span>,
+                  children: (
+                    <div className="space-y-4">
+                      <Card className="bg-gradient-to-r from-blue-50 to-gray-50 border-blue-200">
+                        <div className="flex items-center gap-4">
+                          {selectedAgent.photoUrl ? <Avatar size={90} src={selectedAgent.photoUrl} className="border-4 border-white shadow" /> : <Avatar size={90} icon={<UserOutlined />} className="border-4 border-white shadow bg-blue-100 text-blue-600" />}
+                          <div className="flex-1">
+                            <Title level={4} className="mb-1">{selectedAgent.name}</Title>
+                            <Text type="secondary">Father: {selectedAgent.fatherName}</Text>
+                            <div className="mt-3 flex gap-2">
+                              <Badge status={selectedAgent.status === 'active' ? 'success' : 'error'} text={selectedAgent.status === 'active' ? 'Active' : 'Inactive'} />
+                              <Tag color="blue">Caste: {selectedAgent.caste || 'N/A'}</Tag>
+                            </div>
+                          </div>
+                        </div>
+                      </Card>
+
+                      <Descriptions title="Contact" bordered column={1} size="small">
+                        <Descriptions.Item label="Primary Phone"><PhoneOutlined className="mr-2 text-blue-500" />{selectedAgent.phone1}</Descriptions.Item>
+                        <Descriptions.Item label="Secondary Phone"><PhoneOutlined className="mr-2 text-gray-400" />{selectedAgent.phone2 || 'N/A'}</Descriptions.Item>
+                        <Descriptions.Item label="Email"><MailOutlined className="mr-2 text-red-500" />{selectedAgent.email}</Descriptions.Item>
+                      </Descriptions>
+
+                      <Descriptions title="Address" bordered column={1} size="small">
+                        <Descriptions.Item label="State">{selectedAgent.state || 'N/A'}</Descriptions.Item>
+                        <Descriptions.Item label="District">{selectedAgent.district || 'N/A'}</Descriptions.Item>
+                        <Descriptions.Item label="City">{selectedAgent.city || 'N/A'}</Descriptions.Item>
+                        <Descriptions.Item label="Village">{selectedAgent.village || 'N/A'}</Descriptions.Item>
+                        <Descriptions.Item label="Pincode">{selectedAgent.pincode || 'N/A'}</Descriptions.Item>
+                      </Descriptions>
+
+                      <Descriptions title="Identification" bordered column={1} size="small">
+                        <Descriptions.Item label="Aadhaar"><IdcardOutlined className="mr-2 text-purple-500" />{selectedAgent.aadharNo || 'N/A'}</Descriptions.Item>
+                        <Descriptions.Item label="Created On">{formatDate(selectedAgent.created_at)}</Descriptions.Item>
+                        {selectedAgent.updated_at && <Descriptions.Item label="Last Updated">{formatDate(selectedAgent.updated_at)}</Descriptions.Item>}
+                      </Descriptions>
+
+                      {selectedAgent.signatureUrl && (
+                        <Card title="Signature" className="border-gray-200">
+                          <img src={selectedAgent.signatureUrl} alt="Signature" className="w-64 h-32 object-contain border rounded bg-gray-50 mx-auto" />
+                        </Card>
+                      )}
+
+                      {(selectedAgent.document1Url || selectedAgent.document2Url || selectedAgent.document3Url) && (
+                        <Card title="Documents" className="border-gray-200">
+                          <div className="grid grid-cols-3 gap-3">
+                            {[selectedAgent.document1Url, selectedAgent.document2Url, selectedAgent.document3Url].filter(Boolean).map((url, i) => (
+                              <a key={i} href={url} target="_blank" rel="noopener noreferrer"
+                                className="text-center p-3 border rounded hover:border-blue-500 hover:bg-blue-50 transition-colors">
+                                <FileOutlined className="text-2xl mb-2 block text-blue-600" />
+                                <div className="text-sm font-medium">Document {i + 1}</div>
+                              </a>
+                            ))}
+                          </div>
+                        </Card>
+                      )}
                     </div>
-                  </div>
-                </div>
-              </Card>
+                  )
+                },
+                {
+                  key: 'commission',
+                  label: <span><WalletOutlined className="mr-1.5" />Commission</span>,
+                  children: (
+                    <div className="space-y-4">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <div className="bg-blue-100 p-2 rounded-lg"><WalletOutlined className="text-blue-600 text-lg" /></div>
+                          <div><div className="font-semibold text-base">Commission Wallet</div><div className="text-xs text-gray-500">Agent earnings & payout history</div></div>
+                        </div>
+                        <Space>
+                          <Button size="small" icon={<FileTextOutlined />}
+                            onClick={printCommissionReport} disabled={commissionHistory.length === 0}>
+                            Download PDF
+                          </Button>
+                          <Button type="primary" size="small" icon={<DollarOutlined />}
+                            onClick={() => { setWalletAction('pay'); setWalletModalVisible(true); }}>
+                            Pay Agent
+                          </Button>
+                        </Space>
+                      </div>
 
-              <Descriptions title="Contact" bordered column={1} size="small">
-                <Descriptions.Item label="Primary Phone"><PhoneOutlined className="mr-2 text-blue-500" />{selectedAgent.phone1}</Descriptions.Item>
-                <Descriptions.Item label="Secondary Phone"><PhoneOutlined className="mr-2 text-gray-400" />{selectedAgent.phone2 || 'N/A'}</Descriptions.Item>
-                <Descriptions.Item label="Email"><MailOutlined className="mr-2 text-red-500" />{selectedAgent.email}</Descriptions.Item>
-              </Descriptions>
+                      <div className="grid grid-cols-3 gap-4">
+                        <div className="relative p-4 bg-gradient-to-br from-blue-50 to-blue-100/50 rounded-xl border border-blue-200">
+                          <div className="text-3xl font-bold text-blue-700">₹{(selectedAgent.walletBalance || 0).toLocaleString('en-IN')}</div>
+                          <div className="text-xs text-blue-600/70 font-medium mt-1">Wallet Balance</div>
+                          <WalletOutlined className="absolute right-3 bottom-3 text-blue-200 text-2xl" />
+                        </div>
+                        <div className="relative p-4 bg-gradient-to-br from-green-50 to-green-100/50 rounded-xl border border-green-200">
+                          <div className="text-3xl font-bold text-green-700">₹{(selectedAgent.totalCommissionEarned || 0).toLocaleString('en-IN')}</div>
+                          <div className="text-xs text-green-600/70 font-medium mt-1">Total Commission Earned</div>
+                          <DollarOutlined className="absolute right-3 bottom-3 text-green-200 text-2xl" />
+                        </div>
+                        <div className="relative p-4 bg-gradient-to-br from-red-50 to-red-100/50 rounded-xl border border-red-200">
+                          <div className="text-3xl font-bold text-red-700">₹{(selectedAgent.totalCommissionWithdrawn || 0).toLocaleString('en-IN')}</div>
+                          <div className="text-xs text-red-600/70 font-medium mt-1">Total Withdrawn</div>
+                          <MinusCircleOutlined className="absolute right-3 bottom-3 text-red-200 text-2xl" />
+                        </div>
+                      </div>
 
-              <Descriptions title="Address" bordered column={1} size="small">
-                <Descriptions.Item label="State">{selectedAgent.state || 'N/A'}</Descriptions.Item>
-                <Descriptions.Item label="District">{selectedAgent.district || 'N/A'}</Descriptions.Item>
-                <Descriptions.Item label="City">{selectedAgent.city || 'N/A'}</Descriptions.Item>
-                <Descriptions.Item label="Village">{selectedAgent.village || 'N/A'}</Descriptions.Item>
-                <Descriptions.Item label="Pincode">{selectedAgent.pincode || 'N/A'}</Descriptions.Item>
-              </Descriptions>
-
-              <Descriptions title="Identification" bordered column={1} size="small">
-                <Descriptions.Item label="Aadhaar"><IdcardOutlined className="mr-2 text-purple-500" />{selectedAgent.aadharNo || 'N/A'}</Descriptions.Item>
-                <Descriptions.Item label="Created On">{formatDate(selectedAgent.created_at)}</Descriptions.Item>
-                {selectedAgent.updated_at && <Descriptions.Item label="Last Updated">{formatDate(selectedAgent.updated_at)}</Descriptions.Item>}
-              </Descriptions>
-
-              {selectedAgent.signatureUrl && (
-                <Card title="Signature" className="border-gray-200">
-                  <img src={selectedAgent.signatureUrl} alt="Signature" className="w-64 h-32 object-contain border rounded bg-gray-50 mx-auto" />
-                </Card>
-              )}
-
-              {(selectedAgent.document1Url || selectedAgent.document2Url || selectedAgent.document3Url) && (
-                <Card title="Documents" className="border-gray-200">
-                  <div className="grid grid-cols-3 gap-3">
-                    {[selectedAgent.document1Url, selectedAgent.document2Url, selectedAgent.document3Url].filter(Boolean).map((url, i) => (
-                      <a key={i} href={url} target="_blank" rel="noopener noreferrer"
-                        className="text-center p-3 border rounded hover:border-blue-500 hover:bg-blue-50 transition-colors">
-                        <FileOutlined className="text-2xl mb-2 block text-blue-600" />
-                        <div className="text-sm font-medium">Document {i + 1}</div>
-                      </a>
-                    ))}
-                  </div>
-                </Card>
-              )}
-            </div>
+                      <div>
+                        <div className="flex items-center gap-2 mb-3">
+                          <HistoryOutlined className="text-blue-600" />
+                          <span className="font-semibold text-sm text-gray-700">Transaction History</span>
+                          {!commHistoryLoading && commissionHistory.length > 0 && (
+                            <span className="text-xs text-gray-400 ml-auto">{commissionHistory.length} entries</span>
+                          )}
+                        </div>
+                        {commHistoryLoading ? (
+                          <div className="flex items-center justify-center py-8 text-gray-400">
+                            <ReloadOutlined className="animate-spin mr-2" /> Loading transactions...
+                          </div>
+                        ) : commissionHistory.length === 0 ? (
+                          <div className="text-center py-10 text-gray-400 border-2 border-dashed border-gray-200 rounded-xl">
+                            <HistoryOutlined className="text-3xl mb-2 block text-gray-300" />
+                            <span className="text-sm">No commission transactions yet</span>
+                          </div>
+                        ) : (
+                          <div className="border border-gray-200 rounded-xl overflow-hidden shadow-sm">
+                            <div className="max-h-80 overflow-y-auto">
+                              <table className="w-full text-xs">
+                                <thead>
+                                  <tr className="bg-gray-50 border-b border-gray-200">
+                                    <th className="px-3 py-2.5 text-left font-semibold text-gray-600 text-[11px] uppercase tracking-wider">Date</th>
+                                    <th className="px-3 py-2.5 text-left font-semibold text-gray-600 text-[11px] uppercase tracking-wider">Type</th>
+                                    <th className="px-3 py-2.5 text-left font-semibold text-gray-600 text-[11px] uppercase tracking-wider">Member Details</th>
+                                    <th className="px-3 py-2.5 text-center font-semibold text-gray-600 text-[11px] uppercase tracking-wider">Rate</th>
+                                    <th className="px-3 py-2.5 text-center font-semibold text-gray-600 text-[11px] uppercase tracking-wider">Source</th>
+                                    <th className="px-3 py-2.5 text-right font-semibold text-gray-600 text-[11px] uppercase tracking-wider">Amount</th>
+                                    <th className="px-3 py-2.5 text-right font-semibold text-gray-600 text-[11px] uppercase tracking-wider">Balance</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {commissionHistory.map((tx, i) => (
+                                    <tr key={tx.id}
+                                      className={`border-t border-gray-100 transition-colors hover:bg-blue-50/50 ${i % 2 === 0 ? 'bg-white' : 'bg-gray-50/30'}`}>
+                                      <td className="px-3 py-3 whitespace-nowrap align-top">
+                                        <div className="font-medium text-gray-700 text-xs">{tx.createdAt ? formatDate(tx.createdAt) : '-'}</div>
+                                        <div className="text-gray-400 text-[11px] mt-0.5">{tx.createdAt?._seconds ? dayjs.unix(tx.createdAt._seconds).format('hh:mm A') : ''}</div>
+                                      </td>
+                                      <td className="px-3 py-3 align-top">
+                                        {tx.type === 'credit'
+                                          ? <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-green-100 text-green-700 text-[11px] font-medium"><PlusCircleOutlined />Credit</span>
+                                          : <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-red-100 text-red-700 text-[11px] font-medium"><MinusCircleOutlined />Debit</span>
+                                        }
+                                      </td>
+                                      <td className="px-3 py-3 align-top max-w-[200px]">
+                                        <div className="font-semibold text-gray-800 text-xs leading-snug">{tx.memberName || tx.description || tx.source}</div>
+                                        {tx.memberFatherName && <div className="text-gray-500 text-[11px] mt-0.5">{tx.memberFatherName}</div>}
+                                        {tx.memberRegNo && <div className="text-gray-400 text-[11px] font-mono mt-0.5">#{tx.memberRegNo}</div>}
+                                        {tx.programName && <div className="text-gray-400 text-[11px] mt-0.5 truncate">{tx.programName}</div>}
+                                      </td>
+                                      <td className="px-3 py-3 text-center align-top">
+                                        {tx.commissionRate
+                                          ? <span className="inline-flex px-2 py-0.5 rounded bg-blue-100 text-blue-700 text-[11px] font-semibold">{(tx.commissionRate * 100)}%</span>
+                                          : <span className="text-gray-300">-</span>
+                                        }
+                                      </td>
+                                      <td className="px-3 py-3 text-center align-top">
+                                        <span className={`inline-flex px-2 py-0.5 rounded text-[11px] font-medium
+                                          ${tx.source === 'joinFees' ? 'bg-purple-100 text-purple-700' :
+                                            tx.source === 'closingPayment' ? 'bg-orange-100 text-orange-700' :
+                                            tx.source === 'withdrawal' ? 'bg-red-100 text-red-700' : 'bg-gray-100 text-gray-700'}`}>
+                                          {tx.source === 'joinFees' ? 'Join Fee' :
+                                           tx.source === 'closingPayment' ? 'Closing' :
+                                           tx.source === 'withdrawal' ? 'Withdrawal' : tx.source}
+                                        </span>
+                                      </td>
+                                      <td className={`px-3 py-3 text-right align-top font-bold text-sm whitespace-nowrap ${tx.type === 'credit' ? 'text-green-600' : 'text-red-600'}`}>
+                                        <span className={tx.type === 'credit' ? 'text-green-600' : 'text-red-600'}>
+                                          {tx.type === 'credit' ? '+' : '-'}₹{tx.amount.toLocaleString('en-IN')}
+                                        </span>
+                                      </td>
+                                      <td className="px-3 py-3 text-right align-top font-bold text-sm whitespace-nowrap text-gray-800">
+                                        ₹{(tx.balanceAfter || 0).toLocaleString('en-IN')}
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )
+                }
+              ]}
+            />
           )}
         </Drawer>
+
+        {/* Wallet Pay Agent Modal */}
+        <Modal
+          title={<><DollarOutlined className="mr-2 text-green-600" />Pay Agent — {selectedAgent?.name}</>}
+          open={walletModalVisible}
+          onCancel={() => { setWalletModalVisible(false); setWalletAmount(''); setWalletDesc(''); }}
+          onOk={handleWalletAction}
+          confirmLoading={walletProcessing}
+          okText="Confirm Payment"
+        >
+          <div className="space-y-4 py-2">
+            <div className="bg-blue-50 p-3 rounded-lg text-center">
+              <div className="text-sm text-gray-600">Current Wallet Balance</div>
+              <div className="text-2xl font-bold text-blue-700">₹{(selectedAgent?.walletBalance || 0).toLocaleString('en-IN')}</div>
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1">Amount to Pay (₹)</label>
+              <Input
+                type="number"
+                placeholder="Enter amount"
+                value={walletAmount}
+                onChange={e => setWalletAmount(e.target.value)}
+                size="large"
+                prefix={<DollarOutlined />}
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1">Description (Optional)</label>
+              <Input
+                placeholder="e.g. Commission payout for March 2026"
+                value={walletDesc}
+                onChange={e => setWalletDesc(e.target.value)}
+                size="large"
+              />
+            </div>
+          </div>
+        </Modal>
       </div>
 
       <style jsx global>{`

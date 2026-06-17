@@ -44,6 +44,7 @@ import { processAgentStats } from '@/utils/agentUtils';
 const { Title, Text } = Typography;
 const colors = {
   primary: '#db2777',
+  historyBtnBg: '#1B385A',
   secondary: '#ea580c',
   accent: '#059669',
   warning: '#f59e0b',
@@ -81,6 +82,8 @@ const JoinFeesPage = () => {
   // Process agents with stats
   const agentsWithStats = processAgentStats(agentList, programList);
   const activeAgents = agentsWithStats.filter((a) => a.active_flag && !a.delete_flag);
+  console.log(agentList,'agentList')
+  console.log(activeAgents,'activeAgents')
 
   // Summary calculations
   const totalPending = activeAgents.reduce((s, a) => s + (a.totalJoinFeesPending || 0), 0);
@@ -122,12 +125,13 @@ const JoinFeesPage = () => {
         color="warning"
         style={{ borderRadius: 20, fontWeight: 600 }}
       >
-        ₹{pending.toLocaleString()} Due
+        ₹{pending?.toLocaleString()} Due
       </Tag>
     );
   };
 
   const expandedRowRender = (record) => {
+    console.log(record,'record')
     const programColumns = [
       {
         title: 'Program',
@@ -175,18 +179,6 @@ const JoinFeesPage = () => {
           <Text style={{ color: v > 0 ? colors.error : colors.success, fontWeight: 600 }}>
             ₹{v?.toLocaleString() || 0}
           </Text>
-        ),
-      },
-      {
-        title: 'Progress',
-        key: 'progress',
-        width: 140,
-        render: (_, prog) => (
-          <Progress
-            percent={Math.round(prog.paymentProgress)}
-            size="small"
-            strokeColor={prog.paymentProgress >= 100 ? colors.success : colors.primary}
-          />
         ),
       },
       {
@@ -283,7 +275,7 @@ const JoinFeesPage = () => {
       align: 'center',
       render: (_, record) => (
         <Badge
-          count={record.totalMembers}
+          count={record.memberCount}
           style={{ backgroundColor: colors.info }}
           showZero
         />
@@ -295,7 +287,7 @@ const JoinFeesPage = () => {
       width: 120,
       align: 'right',
       render: (_, r) => (
-        <Text strong>₹{r.totalJoinFees.toLocaleString()}</Text>
+        <Text strong>₹{r.totalJoinFees?.toLocaleString() || 0}</Text>
       ),
     },
     {
@@ -305,7 +297,7 @@ const JoinFeesPage = () => {
       align: 'right',
       render: (_, r) => (
         <Text style={{ color: colors.success, fontWeight: 600 }}>
-          ₹{r.totalJoinFeesPaid.toLocaleString()}
+          ₹{r.totalJoinFeesPaid?.toLocaleString() || 0}
         </Text>
       ),
     },
@@ -316,7 +308,7 @@ const JoinFeesPage = () => {
       align: 'right',
       render: (_, r) => (
         <Text style={{ color: r.totalJoinFeesPending > 0 ? colors.error : colors.success, fontWeight: 600 }}>
-          ₹{r.totalJoinFeesPending.toLocaleString()}
+          ₹{r.totalJoinFeesPending?.toLocaleString()}
         </Text>
       ),
     },
@@ -382,19 +374,36 @@ const JoinFeesPage = () => {
   return (
     <div style={{ padding: 20, background: colors.background, minHeight: '100vh' }}>
       {/* Header */}
-      <div style={{ marginBottom: 20 }}>
-        <Title
-          level={3}
+      <div style={{ marginBottom: 20, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+        <div>
+          <Title
+            level={3}
+            style={{
+              margin: 0,
+              background: `linear-gradient(135deg, ${colors.primary}, ${colors.secondary})`,
+              WebkitBackgroundClip: 'text',
+              WebkitTextFillColor: 'transparent',
+            }}
+          >
+            Join Fees Management
+          </Title>
+          <Text type="secondary">Track and manage agent join fee payments across programs</Text>
+        </div>
+        <Button
+          icon={<HistoryOutlined />}
+          onClick={() => router.push('/payments/history')}
           style={{
-            margin: 0,
-            background: `linear-gradient(135deg, ${colors.primary}, ${colors.secondary})`,
-            WebkitBackgroundClip: 'text',
-            WebkitTextFillColor: 'transparent',
+            background: colors.historyBtnBg,
+            border: 'none',
+            color: '#fff',
+            borderRadius: 8,
+            fontWeight: 600,
+            fontSize: 12,
+            height: 36,
           }}
         >
-          Join Fees Management
-        </Title>
-        <Text type="secondary">Track and manage agent join fee payments across programs</Text>
+          Payment History
+        </Button>
       </div>
 
       {/* Summary Cards */}

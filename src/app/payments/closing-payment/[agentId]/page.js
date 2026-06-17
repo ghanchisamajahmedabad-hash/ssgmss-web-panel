@@ -13,7 +13,7 @@ import {
   UserOutlined, SearchOutlined, TeamOutlined, BankOutlined,
   WalletOutlined, ClockCircleOutlined, HistoryOutlined,
   DollarCircleOutlined, CheckCircleOutlined, ThunderboltOutlined,
-  FileTextOutlined, ArrowRightOutlined, InfoCircleOutlined,
+  ArrowRightOutlined, InfoCircleOutlined,
   SortAscendingOutlined, CalendarOutlined, SwapOutlined,
   RiseOutlined, FallOutlined, OrderedListOutlined,
   FilePdfOutlined, FilterOutlined, CloseCircleOutlined,
@@ -149,6 +149,7 @@ const ClosingMemberPaymentPage = () => {
   const [uploadedFile,               setUploadedFile]               = useState(null);
   const [uploading,                  setUploading]                  = useState(false);
   const [processingPayments,         setProcessingPayments]         = useState([]);
+  const [closingGroupsMap,           setClosingGroupsMap]           = useState({});
   const [openRasidDrawer,            setOpenRasidDrawer]            = useState(false);
 
   // ── Derived ──────────────────────────────────────────────────────────────
@@ -294,7 +295,7 @@ const ClosingMemberPaymentPage = () => {
     message.success(`₹${amount.toLocaleString()} distributed across ${Object.values(dist).filter(v => v > 0).length} member(s)`);
   };
 
-  const handleProcessPayments = () => {
+  const handleProcessPayments = async () => {
     const valid = selectedMembers.filter(id => {
       const amt = parseFloat(memberPayments[id]) || 0;
       const m = membersMap[id];
@@ -302,26 +303,83 @@ const ClosingMemberPaymentPage = () => {
     });
     if (!valid.length) { message.warning('No valid payment amounts entered.'); return; }
     if (paymentMethod === 'online' && !transactionId) { message.warning('Enter Transaction ID'); return; }
-    setProcessingPayments(valid.map(id => {
+
+    // ── Fetch closing_payment docs for each selected member to build per-group data ──
+    const cgMap = {};
+    const cgPromises = valid.map(async (id) => {
       const m = membersMap[id];
-      return { memberId: id, memberName: m.displayName, registrationNumber: m.registrationNumber, programIds: m.programIds, amount: parseFloat(memberPayments[id]) };
-    }));
+      if (!m) return;
+      try {
+        const q = query(
+          collection(db, 'closing_payment'),
+          where('memberId', '==', id),
+          where('status', 'in', ['pending', 'partial'])
+        );
+        const snap = await getDocs(q);
+        cgMap[id] = snap.docs.map(d => {
+          const dta = d.data();
+          return {
+            id: d.id,
+            closingGroupId:   dta.closingGroupId,
+            closingGroupName: dta.closingGroupName || '',
+            totalAmount: Number(dta.totalAmount || 0),
+            paidAmount: Number(dta.paidAmount || 0),
+            pendingAmount: Number(dta.pendingAmount || (dta.totalAmount || 0) - (dta.paidAmount || 0)),
+            closingCount: Number(dta.closingCount || 0),
+            payAmount: Number(dta.payAmount || 0),
+            closingDetails: dta.closingDetails || [],
+            programId: dta.programId,
+          };
+        });
+      } catch (e) {
+        console.warn(`Failed to fetch closing groups for member ${id}:`, e);
+        cgMap[id] = [];
+      }
+    });
+    await Promise.all(cgPromises);
+    setClosingGroupsMap(cgMap);
+
+    // ── Build per-group payment entries ───────────────────────────────────────
+    // For each member, distribute their payment amount across their pending groups (oldest-first)
+    const allEntries = [];
+    for (const id of valid) {
+      const m = membersMap[id];
+      const memberAmt = parseFloat(memberPayments[id]) || 0;
+      const groups = cgMap[id] || [];
+      let remaining = memberAmt;
+      for (const g of groups) {
+        if (remaining <= 0) break;
+        const allocAmt = Math.min(remaining, g.pendingAmount);
+        if (allocAmt > 0) {
+          allEntries.push({
+            memberId: id,
+            memberName: m.displayName,
+            closingGroupId: g.closingGroupId,
+            amount: allocAmt,
+          });
+          remaining -= allocAmt;
+        }
+      }
+    }
+
+    setProcessingPayments(allEntries);
     setIsPaymentDrawerVisible(true);
   };
 
   const confirmPayment = async () => {
     try {
-      setUploading(true);
-      let fileUrl;
-      if (uploadedFile) {
-        fileUrl = await uploadFile(uploadedFile, `memberpayments/JoinFees/${agentId}/${Date.now()}_${uploadedFile.name}`);
-      }
       if (!auth.currentUser) { message.error('No authenticated user'); return; }
+      setUploading(true);
+      let fileUrl = null;
+      if (uploadedFile) {
+        const result = await uploadFile(uploadedFile, `memberpayments/JoinFees/${agentId}/${Date.now()}_${uploadedFile.name}`);
+        fileUrl = result?.url || null;
+      }
       const res = await paymentApi.closedPaymentUpdate({
-        memberPayments: processingPayments,
+        closingPayments: processingPayments,
         paymentDate: paymentDate.toISOString(),
         paymentMethod, paymentNote, transactionId,
-        fileUrl: uploadedFile ? fileUrl.url : null,
+        fileUrl,
         totalAmount: processingPayments.reduce((s, p) => s + p.amount, 0),
         agentId,
         programId: selectedProgram !== 'all' ? selectedProgram : null,
@@ -833,6 +891,7 @@ const ClosingMemberPaymentPage = () => {
         processingPayments={processingPayments}
         selectedMembersData={selectedMembersData}
         memberPayments={memberPayments}
+        closingGroupsMap={closingGroupsMap}
         currentAgent={currentAgent}
         paymentMethod={paymentMethod}
         transactionId={transactionId}

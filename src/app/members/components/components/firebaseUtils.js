@@ -7,6 +7,7 @@ import { ref, uploadBytes, getDownloadURL } from 'firebase/storage'
 import dayjs from 'dayjs'
 import { auth, db, storage } from '../../../../../lib/firbase-client'
 import { message } from 'antd'
+import { notifyAgent } from '@/app/utils/notifyAgent'
 
 // File upload utility
 export const uploadFile = async (file, folder, fileName) => {
@@ -158,40 +159,46 @@ export function createSearchIndex(data) {
 // Record join fee transaction
 export const recordJoinFeeTransaction = async (memberData, paymentData) => {
   try {
+    const displayName = memberData.displayName || '';
+    const regNo = memberData.registrationNumber || '';
+    const fatherName = memberData.fatherName || '';
+    const phone = memberData.phone || '';
+    const aadhaarNo = memberData.aadhaarNo || '';
+    const keyword = [displayName, regNo, fatherName, phone, aadhaarNo]
+      .filter(Boolean).join(' ').toLowerCase();
+
     const transactionRef = await addDoc(collection(db, 'memberJoinFees'), {
       memberId: memberData.memberId,
-      memberName: memberData.displayName,
-      registrationNumber: memberData.registrationNumber,
-      memberPhone: memberData.phone,
-      
+      memberName: displayName,
+      memberFatherName: fatherName,
+      registrationNumber: regNo,
+      memberPhone: phone,
+      memberAadhaar: aadhaarNo,
+
       transactionType: paymentData.transactionType || 'join_fee',
       amount: parseFloat(paymentData.paidAmount || 0),
       previousBalance: paymentData.previousBalance || 0,
       newBalance: parseFloat(paymentData.totalPendingAmount || 0),
-      
+
       paymentMode: paymentData.paymentMode,
       transactionId: paymentData.transactionId || '',
       transactionDate: paymentData.transactionDate 
         ? dayjs(paymentData.transactionDate).format('DD-MM-YYYY')
         : dayjs().format('DD-MM-YYYY'),
-      
-      // ✅ Single program (not array)
+
       programId: paymentData.programId || '',
       programName: paymentData.programName || '',
-      
+
       status: 'completed',
       verified: true,
       notes: paymentData.notes || 'Initial join fee payment',
-      
+
+      agentId: memberData.agentId || '',
       createdBy: memberData.createdBy,
       createdAt: serverTimestamp(),
       updated_at: serverTimestamp(),
-      
-      search_memberName: memberData.displayName?.toLowerCase() || '',
-      search_registrationNumber: memberData.registrationNumber || '',
-      search_transactionId: paymentData.transactionId?.toLowerCase() || '',
-      search_paymentMode: paymentData.paymentMode?.toLowerCase() || '',
-      search_date: dayjs().format('YYYY-MM-DD')
+
+      search_keyword: keyword,
     });
     
     return transactionRef.id;
@@ -201,52 +208,57 @@ export const recordJoinFeeTransaction = async (memberData, paymentData) => {
   }
 }
 
-export const memberAccoiuntCreate = async (memberData) => {
+export const memberAccoiuntCreate = async (memberData, commissionData = null) => {
   const currentUser = auth.currentUser
+  if (!currentUser) throw new Error('No authenticated user')
   try {
-    fetch('/api/members', {
+    const token = await currentUser.getIdToken()
+    const res = await fetch('/api/members', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Accept': 'application/json',
-        'authorization': `Bearer ${await currentUser.getIdToken()}`
+        'authorization': `Bearer ${token}`
       },
       body: JSON.stringify({
         isOnlyAccountCreate: false,
         memberData: memberData,
         memberId: memberData.id,
         agentId: memberData.agentId,
-        operation: "add"
+        operation: "add",
+        commissionData
       })
-    }).then(res => res.json()).then(data => {
-      console.log(data)
-    }).catch(error => {
-      console.log(error)
     })
+    const data = await res.json()
+    if (!data.success) throw new Error(data.message || 'API error')
+    return data
   } catch (error) {
-    console.log(error)
+    console.error('memberAccoiuntCreate error:', error)
+    throw error
   }
 }
 export const createClosingPayment = async (memberData) => {
   const currentUser = auth.currentUser
+  if (!currentUser) throw new Error('No authenticated user')
   try {
-    fetch('/api/create-closing-payment-single', {
+    const token = await currentUser.getIdToken()
+    const res = await fetch('/api/create-closing-payment-single', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Accept': 'application/json',
-        'authorization': `Bearer ${await currentUser.getIdToken()}`
+        'authorization': `Bearer ${token}`
       },
       body: JSON.stringify({
          memberId: memberData.id,
       })
-    }).then(res => res.json()).then(data => {
-      console.log(data)
-    }).catch(error => {
-      console.log(error)
     })
+    const data = await res.json()
+    if (!data.success) throw new Error(data.message || 'API error')
+    return data
   } catch (error) {
-    console.log(error)
+    console.error('createClosingPayment error:', error)
+    throw error
   }
 }
 // ✅ MAIN HANDLER - Program details stored in member document directly
@@ -407,9 +419,9 @@ export const handleSubmit = async (values, context, message) => {
       ageGroupName: selectedProgramDetail.ageGroupName || '',
       periodStartDate: selectedProgramDetail.periodStartDate || '',
       periodEndDate: selectedProgramDetail.periodEndDate || '',
-      memberGroupId: selectedProgram?.memberGroups?.[0]?.id || '',
-      memberGroupName: selectedProgram?.memberGroups?.[0]?.groupName || '',
-      memberGroupCode: selectedProgram?.memberGroups?.[0]?.code || '',
+      memberGroupId: selectedProgramDetail.memberGroupId || '',
+      memberGroupName: selectedProgramDetail.memberGroupName || '',
+      memberGroupCode: selectedProgramDetail.memberGroupCode || '',
       programJoinDate: joinDate.format('DD-MM-YYYY'),
       programStatus: 'active',
 
@@ -458,7 +470,10 @@ export const handleSubmit = async (values, context, message) => {
         memberId: memberId,
         displayName: values.name,
         registrationNumber,
+        fatherName: values.fatherName,
+        aadhaarNo: values.aadhaarNo,
         phone: values.phone,
+        agentId: addedByRole === 'agent' ? selectedAgent : null,
         createdBy: currentUser?.uid
       }, {
         paidAmount: actualPaidAmount,
@@ -472,12 +487,35 @@ export const handleSubmit = async (values, context, message) => {
         newBalance: pendingAmount,
         notes: 'Initial join fee payment'
       })
+
     }
     
-    // ✅ Create account
-    await memberAccoiuntCreate({ ...memberData, id: memberId })
+    // ✅ Create account + credit commission (server-side)
+    const commissionPayload = (addedByRole === 'agent' && selectedAgent && actualPaidAmount > 0)
+      ? {
+          agentId: selectedAgent,
+          amount: actualPaidAmount,
+          memberName: values.name,
+          memberFatherName: values.fatherName || '',
+          memberRegNo: registrationNumber || '',
+          programId: selectedProgramId,
+          programName: selectedProgramDetail.programName,
+          description: 'Join Fee Commission (25%) - New Member'
+        }
+      : null
+    await memberAccoiuntCreate({ ...memberData, id: memberId }, commissionPayload)
     await createClosingPayment({ ...memberData, id: memberId })
     message.success('Member added successfully!')
+    // Notify agent
+    const agentIdToNotify = addedByRole === 'agent' ? selectedAgent : memberData.agentId
+    if (agentIdToNotify) {
+      notifyAgent(
+        agentIdToNotify,
+        "New Member Assigned",
+        `${memberData.displayName} has been added under you. Registration: ${registrationNumber}`,
+        { click_action: "/members" }
+      )
+    }
     setOpen(false)
     return true
     
@@ -520,7 +558,10 @@ export const addAdditionalPayment = async (memberId, paymentData, currentUser) =
       memberId: memberId,
       displayName: memberData.displayName,
       registrationNumber: memberData.registrationNumber,
+      fatherName: memberData.fatherName,
+      aadhaarNo: memberData.aadhaarNo,
       phone: memberData.phone,
+      agentId: memberData.agentId || '',
       createdBy: currentUser?.uid
     }, {
       transactionType: 'additional_payment',
@@ -544,6 +585,23 @@ export const addAdditionalPayment = async (memberId, paymentData, currentUser) =
       hasPendingPayments: newPendingAmount > 0,
       updated_at: serverTimestamp()
     })
+    
+    // Sync aggregated counters
+    try {
+      const token = await auth.currentUser?.getIdToken();
+      await fetch('/api/members/adjust-stats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({
+          agentId: memberData.agentId || (currentUser?.uid && currentUser?.role === 'agent' ? currentUser.uid : null),
+          programId: memberData.programId || '',
+          paidDelta: additionalAmount,
+          type: 'joinFees',
+        }),
+      });
+    } catch (e) {
+      console.warn('Failed to sync counters:', e);
+    }
     
     return {
       success: true,

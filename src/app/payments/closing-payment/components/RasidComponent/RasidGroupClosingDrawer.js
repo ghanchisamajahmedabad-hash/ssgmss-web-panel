@@ -6,7 +6,7 @@ import {
 } from 'antd';
 import {
   SearchOutlined, UserOutlined, CalendarOutlined, TeamOutlined,
-  FilePdfOutlined, ReloadOutlined, InfoCircleOutlined,
+  FilePdfOutlined, FileTextOutlined, ReloadOutlined, InfoCircleOutlined,
   CheckCircleOutlined, RightOutlined, LeftOutlined,
   ArrowRightOutlined, ExclamationCircleOutlined
 } from '@ant-design/icons';
@@ -45,6 +45,14 @@ function toWords(n) {
   return s.trim() + ' रुपये मात्र';
 }
 
+// ─── Raw HTML print window ────────────────────────────────────────────────────
+function openHtmlWindow(html) {
+  const win = window.open('', '_blank');
+  if (!win) { message.error('Popup blocked! Please allow popups.'); return; }
+  win.document.write(html);
+  win.document.close();
+}
+
 // ─── PDF print window ─────────────────────────────────────────────────────────
 function openPrintWindow(rasidList) {
   const win = window.open('', '_blank');
@@ -58,6 +66,7 @@ function openPrintWindow(rasidList) {
         <td class="c">${i+1}</td>
         <td class="c">${e ? e.code : ''}</td>
         <td class="l">${e ? e.name : ''}</td>
+        <td class="c">${e ? e.village : ''}</td>
         <td class="c">${e ? e.date : ''}</td>
         <td class="c">${e ? e.mobile : ''}</td>
       </tr>`).join('');
@@ -156,7 +165,7 @@ function openPrintWindow(rasidList) {
           &nbsp;&nbsp;
           <span class="lbl">ग्रुप</span>
           <span class="sep"> : </span>
-          <span class="val">${d.group}</span>
+          <span class="val">${d.ageGroup || '—'}</span>
         </div>
         <div class="info-item right">
           <span class="lbl">सहयोग राशि</span>
@@ -173,6 +182,7 @@ function openPrintWindow(rasidList) {
               <th style="width:30px">#</th>
               <th style="width:100px">कोड</th>
               <th>नाम</th>
+              <th style="width:80px">गाँव</th>
               <th style="width:100px">दिनांक</th>
               <th style="width:82px">मोबाइल न.</th>
             </tr>
@@ -384,7 +394,7 @@ win.document.write(`<!DOCTYPE html><html lang="hi"><head>
 }
 
 // ─── Main Component ────────────────────────────────────────────────────────────
-const RasidGroupClosingDrawer = ({ open, setOpen, agentId }) => {
+const RasidGroupClosingDrawer = ({ open, setOpen, agentId, preselectedGroupId }) => {
 
   // ── State ──────────────────────────────────────────────────────────────────
   const [step, setStep]                   = useState(1);
@@ -405,18 +415,32 @@ const RasidGroupClosingDrawer = ({ open, setOpen, agentId }) => {
   const [rasidDate, setRasidDate] = useState(dayjs());
   const [rasidNote, setRasidNote] = useState('');
   const [previewList, setPreviewList] = useState([]);
+  const [initialSelectDone, setInitialSelectDone] = useState(false);
 
   // ── Reset + fetch on open ──────────────────────────────────────────────────
   useEffect(() => {
     if (open) {
-      setStep(1); setSelectedGroupId(null);
+      setStep(1); setSelectedGroupId(preselectedGroupId || null);
       setSelClosingMembers(new Set()); setSelAgentMembers(new Set());
-      setExpandedGroups([]); setPreviewList([]);
+      setExpandedGroups(preselectedGroupId ? [preselectedGroupId] : []);
+      setPreviewList([]);
       setSearchGroup(''); setSearchClosing(''); setSearchAgent('');
+      setInitialSelectDone(false);
       fetchGroupClosings();
       if (agentId) fetchAgentMembers();
     }
-  }, [open, agentId]);
+  }, [open, agentId, preselectedGroupId]);
+
+  // Auto-select all closing members when group is preselected
+  useEffect(() => {
+    if (preselectedGroupId && selectedGroupId && !initialSelectDone && groupClosings.length > 0) {
+      const group = groupClosings.find(g => g.id === preselectedGroupId);
+      if (group && group.members) {
+        setSelClosingMembers(new Set(group.members.map(m => m.id)));
+        setInitialSelectDone(true);
+      }
+    }
+  }, [preselectedGroupId, selectedGroupId, groupClosings, initialSelectDone]);
 
   const fetchGroupClosings = async () => {
     setGroupLoading(true);
@@ -529,6 +553,107 @@ const RasidGroupClosingDrawer = ({ open, setOpen, agentId }) => {
   const selectAllAgent = (checked) =>
     setSelAgentMembers(checked ? new Set(eligibleAgentMembers.map(m=>m.id)) : new Set());
 
+  // ── Build summary table HTML ──────────────────────────────────────────────
+  const buildSummaryHTML = useCallback(() => {
+    if (!previewList.length || !selectedGroup) return '';
+    const dateStr = rasidDate.format('DD/MM/YYYY');
+    const selectedMemberIds = [...selAgentMembers];
+
+    const rows = previewList.map((r, i) => {
+      const am = agentMembers.find(m => m.id === selectedMemberIds[i]) || {};
+      return `
+        <tr>
+          <td class="c">${r.serialNo}</td>
+          <td class="l">${r.name}</td>
+          <td class="c">${am.registrationNumber || '—'}</td>
+          <td class="c">${r.phone || '—'}</td>
+          <td class="c">${r.entries?.length || 0}</td>
+          <td class="c">₹${(r.sahyogRashi || 0).toLocaleString()}</td>
+          <td class="c">₹${(r.totalAmount || 0).toLocaleString()}</td>
+          <td class="c">₹${(am.closing_pendingAmount || 0).toLocaleString()}</td>
+        </tr>
+      `;
+    }).join('');
+
+    const totalMembers = previewList.length;
+    const totalAmount = previewList.reduce((s, r) => s + (r.totalAmount || 0), 0);
+    const totalPending = agentMembers.filter(m => selAgentMembers.has(m.id)).reduce((s, m) => s + (m.closing_pendingAmount || 0), 0);
+    const totalCount = previewList.reduce((s, r) => s + (r.entries?.length || 0), 0);
+
+    return `<!DOCTYPE html><html lang="hi"><head>
+      <meta charset="utf-8">
+      <title>Payment Summary</title>
+      <link rel="preconnect" href="https://fonts.googleapis.com">
+      <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Devanagari:wght@400;500;600;700&display=swap" rel="stylesheet">
+      <style>
+        *{margin:0;padding:0;box-sizing:border-box}
+        body{font-family:'Noto Sans Devanagari',sans-serif;background:#b0b0b0;color:#111;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+        .print-bar{position:sticky;top:0;z-index:100;padding:12px 24px;background:#1B385A;display:flex;gap:12px;align-items:center}
+        .btn-print{background:#D3292F;color:#fff;border:none;padding:10px 28px;border-radius:6px;cursor:pointer;font-weight:700;font-size:14px;font-family:inherit}
+        .btn-close{background:rgba(255,255,255,.15);color:#fff;border:1px solid rgba(255,255,255,.3);padding:10px 20px;border-radius:6px;cursor:pointer;font-size:14px;font-family:inherit}
+        .page{width:210mm;min-height:297mm;background:#fff;margin:18px auto;padding:5mm 8mm;box-shadow:0 6px 28px rgba(0,0,0,.25);position:relative}
+        .page::before{content:'';position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:60%;height:60%;background:url('/Images/logoT.png') center/contain no-repeat;opacity:.04;pointer-events:none;z-index:0}
+        .page>*{position:relative;z-index:1}
+        .header{text-align:center;margin-bottom:10px}
+        .header h2{font-size:18px;color:#1B385A;margin-bottom:4px}
+        .header p{font-size:12px;color:#D3292F}
+        .info-row{display:flex;gap:16px;margin-bottom:8px;flex-wrap:wrap;font-size:12px;color:#333}
+        .info-row b{color:#1B385A}
+        table{width:100%;border-collapse:collapse;border:1.5px solid #999}
+        th{padding:6px 4px;font-size:11px;font-weight:700;color:#1B385A;text-align:center;border:1px solid #999;background:#f0f0f0}
+        td{padding:5px 4px;font-size:11px;color:#111;border:0.8px solid #c0c8d4}
+        td.c{text-align:center}
+        td.l{text-align:left;padding-left:6px}
+        tr:nth-child(even){background:#fafafa}
+        .total-row td{font-weight:700;background:#fff3f0;font-size:12px}
+        .footer{text-align:center;margin-top:12px;padding-top:6px;border-top:1.5px solid #D3292F;font-size:10px;color:#666}
+        @media print{body{background:#fff}.print-bar{display:none!important}.page{margin:0;box-shadow:none}}
+      </style>
+    </head><body>
+      <div class="print-bar">
+        <button class="btn-print" onclick="window.print()">🖨 Print / Save PDF</button>
+        <button class="btn-close" onclick="window.close()">✕ Close</button>
+        <span class="print-info">📄 ${totalMembers} members | Total Pending: ₹${totalPending.toLocaleString()}</span>
+      </div>
+      <div class="page">
+        <div class="header">
+          <h2>श्री क्षत्रिय घांची मोदी समाज सेवा संस्थान ट्रस्ट</h2>
+          <p>क्लोजिंग पेमेंट सारांश — ${selectedGroup.groupName || 'Group'} · ${dateStr}</p>
+        </div>
+        <div class="info-row">
+          <span><b>ग्रुप :</b> ${selectedGroup.groupName || '—'}</span>
+          <span><b>योजना :</b> ${selectedGroup.yojanaName || '—'}</span>
+          <span><b>कुल सदस्य :</b> ${totalMembers}</span>
+          <span><b>दिनांक :</b> ${dateStr}</span>
+        </div>
+        <table>
+          <thead><tr>
+            <th style="width:40px">क्र. सं.</th>
+            <th>नाम</th>
+            <th style="width:90px">रजि. नं.</th>
+            <th style="width:90px">फोन</th>
+            <th style="width:70px">क्लोजिंग काउंट</th>
+            <th style="width:80px">किस्त</th>
+            <th style="width:90px">कुल राशि</th>
+            <th style="width:90px">बकाया</th>
+          </tr></thead>
+          <tbody>${rows}
+            <tr class="total-row">
+              <td colspan="4" class="l">कुल योग (${totalMembers} सदस्य)</td>
+              <td class="c">${totalCount}</td>
+              <td class="c">—</td>
+              <td class="c">₹${totalAmount.toLocaleString()}</td>
+              <td class="c">₹${totalPending.toLocaleString()}</td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="footer">
+          Generated on ${dayjs().format('DD MMM YYYY hh:mm A')} — SSGMS Trust
+        </div>
+      </div>
+    </body></html>`;
+  }, [agentMembers, selAgentMembers, selectedGroup, rasidDate, previewList]);
+
   // ── Build rasid list ───────────────────────────────────────────────────────
   const buildRasid = useCallback(() => {
     if (!selectedGroup || !selClosingMembers.size || !selAgentMembers.size) return [];
@@ -544,6 +669,8 @@ const RasidGroupClosingDrawer = ({ open, setOpen, agentId }) => {
       .map(m => ({
         code:   m.registrationNumber || '',
         name:   [m.displayName, m.fatherName ? '/ '+m.fatherName : ''].filter(Boolean).join(' '),
+        village: m.village || '',
+        ageGroup: m.ageGroupName || m.memberGroupName || m.ageGroup || '',
         date:   closingDs,
         mobile: m.phone || m.phoneNo || '',
       }));
@@ -561,8 +688,10 @@ const RasidGroupClosingDrawer = ({ open, setOpen, agentId }) => {
           name:         [am.displayName, am.fatherName ? '/ '+am.fatherName : ''].filter(Boolean).join(' '),
           phone:        am.phone || '',
           address:      [am.village, am.city, am.state].filter(Boolean).join(', '),
+          village:      am.village || '',
           yojana:       selectedGroup.yojanaName || 'Shadi Sahyog Yojna',
           group:        selectedGroup.groupName || '',
+          ageGroup:     am.ageGroupName || am.memberGroupName || am.ageGroup || '',
           sahyogRashi:  payAmt,
           entries,
           totalAmount:  total,
@@ -981,6 +1110,14 @@ const RasidGroupClosingDrawer = ({ open, setOpen, agentId }) => {
 
           <div style={{padding:'10px 16px',background:C.surf,borderTop:`2px solid ${C.border}`,display:'flex',justifyContent:'flex-end',gap:10}}>
             <Button icon={<LeftOutlined/>} onClick={()=>setStep(2)}>Back</Button>
+            <Button icon={<FileTextOutlined/>} onClick={() => {
+              const html = buildSummaryHTML();
+              if (html) openHtmlWindow(html);
+              else message.warning('No data for summary');
+            }}
+              style={{borderColor:C.green,color:C.green,borderRadius:8,fontWeight:600,height:38,paddingInline:20}}>
+              📄 Summary PDF
+            </Button>
             <Button type="primary" icon={<FilePdfOutlined/>} onClick={()=>openPrintWindow(previewList)}
               style={{background:`linear-gradient(135deg,${C.red},${C.blue})`,border:'none',borderRadius:8,fontWeight:700,height:38,paddingInline:24}}>
               🖨 Print / Save PDF

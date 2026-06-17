@@ -452,17 +452,12 @@ const styles = StyleSheet.create({
       }
 });
 
-const CertificateCom = ({ data ,  memberProgram}) => {
-  console.log(data,"data")
-  // Format the date
   const formatDate = (dateString) => {
     if (!dateString) return '09-01-2026';
     return dateString;
   };
 
-  return (
-    <Document>
-      <Page size={{ width: '210mm', height: '148mm' }} style={styles.page}>
+  const CertificatePage=({data, memberProgram})=>(   <Page size={{ width: '210mm', height: '148mm' }} style={styles.page}>
 
            <Image
             src={FrameImg}
@@ -715,7 +710,24 @@ const CertificateCom = ({ data ,  memberProgram}) => {
             </View>
           </View>
         </View>
-      </Page>
+      </Page>)
+
+const CertificateCom = ({ data ,  memberProgram}) => {
+  console.log(data,"data")
+  // Format the date
+    const membersArray = Array.isArray(data) ? data : [data];
+
+
+  return (
+    <Document>
+  {membersArray.map((member, index) => (
+        <CertificatePage 
+          key={member?.id || member?.registrationNumber || index}
+          data={member}
+          memberProgram={memberProgram}
+          index={index}
+        />
+      ))}
     </Document>
   )
 }
