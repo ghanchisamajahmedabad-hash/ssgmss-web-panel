@@ -64,8 +64,8 @@ const ClosingGroupModal = ({ group, visible, onClose, programList }) => {
               style={{ padding: '8px 0' }}
               extra={
                 <Space>
-                  {m.invitationUrl && (
-                    <Button size="small" type="link" onClick={() => window.open(m.invitationUrl)}>View Card</Button>
+                  {(m.closed_invitation_url || m.invitationUrl) && (
+                    <Button size="small" type="link" onClick={() => window.open(m.closed_invitation_url || m.invitationUrl)}>View Card</Button>
                   )}
                   <Tag color="blue">₹{m.amount}</Tag>
                 </Space>

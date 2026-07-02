@@ -161,6 +161,7 @@ const buildMenuItems = (user, pendingCount, collapsed) => {
             { key: '/settings/security/sessions', label: 'Sessions', module: 'settings' },
           ],
         },
+        { key: '/settings/commission', label: 'Commission', module: 'settings' },
       ],
     },
     {

@@ -5,7 +5,6 @@ import { signInWithEmailAndPassword, sendPasswordResetEmail } from 'firebase/aut
 import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { auth, db } from '../../../../lib/firbase-client';
 import { message } from 'antd';
-import { useRouter } from 'next/navigation';
 
 const LoginPage = () => {
   const [view, setView] = useState('login');
@@ -19,7 +18,6 @@ const LoginPage = () => {
   const [isOtpVerified, setIsOtpVerified] = useState(false);
   const [messageApi, contextHolder] = message.useMessage();
  
-  const router = useRouter();
   // Timer for OTP expiration (1 minute)
   useEffect(() => {
     let interval;
@@ -272,10 +270,9 @@ const LoginPage = () => {
       await saveSession(user.uid, sessionToken);
 
       showMessage('success', 'Login successful! Redirecting...');
-      
-setTimeout(() => {
-  router.push("/");
-}, 1500);
+      // Do NOT navigate here — AuthProvider's onAuthStateChanged will fire,
+      // load user data, and then the redirect guard will push to "/" automatically.
+      // Using a manual router.push races against that async load and causes loops.
 
     } catch (error) {
       console.error('Login error:', error);

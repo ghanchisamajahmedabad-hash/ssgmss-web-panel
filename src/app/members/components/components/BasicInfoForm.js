@@ -78,13 +78,18 @@ const BasicInfoForm = ({ handleDobChange, age, castes, form, onAadhaarCheck,exis
                 <li><strong>Father's Name:</strong> {existingMember.fatherName || 'Not available'}</li>
                 <li><strong>Registration Number:</strong> {existingMember.registrationNumber}</li>
                 <li><strong>Phone:</strong> {existingMember.phone}</li>
-                <li><strong>Join Date:</strong> {existingMember.dateJoin}</li>
-                {existingMember.programs && existingMember.programs.length > 0 && (
-                  <li>
-                    <strong>Programs:</strong>{' '}
-                    {existingMember.programs.map(p => p.programName).join(', ')}
-                  </li>
-                )}
+                <li><strong>Join Date:</strong> {existingMember.dateJoin || 'Not joined yet'}</li>
+                <li>
+                  <strong>Yojna / Program:</strong>{' '}
+                  {existingMember.programName || existingMember.program?.programName || 'Not assigned'}
+                </li>
+                <li>
+                  <strong>Status:</strong>{' '}
+                  {existingMember.status === 'active' ? '✅ Active'
+                    : existingMember.status === 'pending_approval' ? '⏳ Pending Approval'
+                    : existingMember.status === 'rejected' ? '❌ Rejected'
+                    : existingMember.status || 'Unknown'}
+                </li>
               </ul>
               <p style={{ marginTop: 8, marginBottom: 0 }}>
                 <small>

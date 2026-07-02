@@ -567,6 +567,7 @@ const EditMember = ({ open, setOpen, programs, agents, currentUser, memberId, on
               isEditMode={true}
               selectedMemberGroup={selectedMemberGroup}
               handleMemberGroupChange={handleMemberGroupChange}
+              currentUserRole={currentUser?.role}
             />
 
             <AddedByForm

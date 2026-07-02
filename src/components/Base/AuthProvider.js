@@ -61,6 +61,9 @@ function AuthProviderInner({ children }) {
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      // Always set loading=true before any async work so the redirect guard
+      // never sees user=null + loading=false while Firestore is still fetching.
+      setLoading(true);
       try {
         if (firebaseUser) {
           let mergedUser = { tokens: firebaseUser?.stsTokenManager };

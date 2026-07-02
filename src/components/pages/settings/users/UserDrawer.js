@@ -464,13 +464,17 @@ const UserDrawer = ({ visible, onClose, editingUser, onSuccess, currentUser }) =
                   { type: 'email', message: 'Invalid email format' },
                   { pattern: /^[^\s@]+@[^\s@]+\.[^\s@]+$/, message: 'Invalid email address' }
                 ]}
+                extra={editingUser ? (
+                  <span style={{ color: '#d97706', fontSize: 11 }}>
+                    ⚠️ Changing email updates Firebase Auth. The user must log in again with the new email.
+                  </span>
+                ) : null}
               >
-                <Input 
+                <Input
                   prefix={<MailOutlined className="text-secondary" />}
                   placeholder="user@example.com"
                   size="large"
                   type="email"
-                  disabled={!!editingUser}
                 />
               </Form.Item>
             </Col>

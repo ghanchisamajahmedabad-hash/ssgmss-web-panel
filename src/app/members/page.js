@@ -28,7 +28,7 @@ import {
 } from './components/firebase-helpers'
 import { auth, db } from '../../../lib/firbase-client'
 import { doc, updateDoc, query, where, orderBy, collection, getDocs } from 'firebase/firestore'
-import { BlobProvider } from '@react-pdf/renderer'
+import { BlobProvider, PDFDownloadLink } from '@react-pdf/renderer'
 import CertificateCom from './components/MemberPdf/CertificateCom'
 import MemberListPdf from './components/MemberPdf/MemberListPdf'
 import RasidDrawer from './components/RasidCom/RasidDrawer'
@@ -375,6 +375,14 @@ const handleDeleteMember = (member) => {
   }
 
   const columns = [
+    {
+      title: 'Sr.',
+      dataIndex: 'srNo',
+      key: 'srNo',
+      width: 60, fixed: 'left',
+      sorter: searchMode === 'paginated',
+      render: (v) => <span className="text-sm font-semibold text-gray-600">{v ?? '—'}</span>,
+    },
     {
       title: 'Reg. No.',
       dataIndex: 'registrationNumber',

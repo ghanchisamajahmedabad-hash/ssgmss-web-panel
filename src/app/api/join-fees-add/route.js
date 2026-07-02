@@ -30,12 +30,35 @@ export async function POST(req) {
     const batch        = db.batch();
     const numTotalAmount = Number(totalAmount);
 
+    // ── Duplicate UTR / transaction ID check ──────────────────────────────────
+    // If transactionId is provided, reject if it was already used in any payment group.
+    if (transactionId && transactionId.trim() !== '') {
+      const utrSnap = await db.collection('paymentGroups')
+        .where('transactionId', '==', transactionId.trim())
+        .limit(1)
+        .get();
+      if (!utrSnap.empty) {
+        const existing = utrSnap.docs[0].data();
+        const existingDate = existing.paymentDate?.toDate
+          ? existing.paymentDate.toDate().toLocaleDateString('en-IN')
+          : existing.paymentDate || '';
+        return NextResponse.json({
+          success: false,
+          message: `Duplicate transaction: UTR/Transaction ID "${transactionId.trim()}" was already used in a ${existing.paymentType === 'joinFees' ? 'Join Fees' : 'Closing'} payment on ${existingDate}. Please verify and use a different ID.`,
+          duplicate: true,
+          existingPaymentGroupId: utrSnap.docs[0].id,
+        }, { status: 409 });
+      }
+    }
+
     // ── Agent doc ─────────────────────────────────────────────────────────────
     const agentRef = db.collection('agents').doc(agentId);
     const agentDoc = await agentRef.get();
     if (!agentDoc.exists) throw new Error("Agent not found");
 
-    let updatedProgramStats = { ...(agentDoc.data().programStats || {}) };
+    // Accumulate per-program deltas — will be written as dot-notation INC()
+    // to avoid overwriting the entire programStats map (race condition).
+    const programDeltas = {}; // { [programId]: { paid: number, pending: number } }
 
     // Track actual deduction sum — some members may be skipped, so body.totalAmount
     // may be larger than what is actually deducted.
@@ -116,13 +139,10 @@ export async function POST(req) {
           updated_at:           admin.firestore.FieldValue.serverTimestamp()
         }, { merge: true });
 
-        // ── Update agent program stats ───────────────────────────────────────
-        if (!updatedProgramStats[programId]) {
-          updatedProgramStats[programId] = { totalJoinFeesPaid: 0, totalJoinFeesPending: 0 };
-        }
-        updatedProgramStats[programId].totalJoinFeesPaid    = (updatedProgramStats[programId].totalJoinFeesPaid    || 0) + deduction;
-        updatedProgramStats[programId].totalJoinFeesPending = Math.max(0, (updatedProgramStats[programId].totalJoinFeesPending || 0) - deduction);
-        updatedProgramStats[programId].lastUpdated          = new Date();
+        // ── Accumulate per-program deltas for agent programStats ─────────────
+        if (!programDeltas[programId]) programDeltas[programId] = { paid: 0, pending: 0 };
+        programDeltas[programId].paid    += deduction;
+        programDeltas[programId].pending -= deduction;
       }
 
       actualTotalPaid += deduction;
@@ -169,13 +189,18 @@ export async function POST(req) {
     });
   }
 
-    // ── Agent totals (use actualTotalPaid, not body.totalAmount — some members may have been skipped) ──
-    batch.set(agentRef, {
+    // ── Agent totals — use dot-notation INC per programId (atomic, no race) ──
+    const agentUpdate = {
       totalJoinFeesPaid:    admin.firestore.FieldValue.increment(actualTotalPaid),
       totalJoinFeesPending: admin.firestore.FieldValue.increment(-actualTotalPaid),
-      programStats:         updatedProgramStats,
-      updated_at:           admin.firestore.FieldValue.serverTimestamp()
-    }, { merge: true });
+      updated_at:           admin.firestore.FieldValue.serverTimestamp(),
+    };
+    for (const [pid, delta] of Object.entries(programDeltas)) {
+      agentUpdate[`programStats.${pid}.totalJoinFeesPaid`]    = admin.firestore.FieldValue.increment(delta.paid);
+      agentUpdate[`programStats.${pid}.totalJoinFeesPending`] = admin.firestore.FieldValue.increment(delta.pending);
+      agentUpdate[`programStats.${pid}.lastUpdated`]          = admin.firestore.FieldValue.serverTimestamp();
+    }
+    batch.set(agentRef, agentUpdate, { merge: true });
 
     // ── Org totals ────────────────────────────────────────────────────────────
     const orgRef = db.collection('organizationStats').doc('current');

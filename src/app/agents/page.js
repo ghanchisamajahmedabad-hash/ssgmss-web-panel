@@ -56,7 +56,7 @@ const AgentsManagementPage = () => {
   const [walletDesc, setWalletDesc] = useState('');
   const [walletProcessing, setWalletProcessing] = useState(false);
   const [form] = Form.useForm();
-  const [pagination, setPagination] = useState({ current: 1, pageSize: 10, total: 0, showSizeChanger: true, pageSizeOptions: ['10','20','50','100'] });
+  const [pagination, setPagination] = useState({ current: 1, pageSize: 50, total: 0, showSizeChanger: true, pageSizeOptions: ['10','20','50','100'] });
   const [filters,    setFilters]    = useState({ status: 'all', search: '' });
   const { message } = App.useApp();
   const { user } = useAuth();
@@ -83,11 +83,12 @@ const isSuperAdmin = (user) => user?.role === 'superadmin';
   const [cities,    setCities]    = useState([]);
 
   // ── Fetch agents ────────────────────────────────────────────────────────────
-  const fetchAgents = async (page = 1, customFilters = {}) => {
+  const fetchAgents = async (page = 1, customFilters = {}, pageSize) => {
     try {
       setLoading(true);
       const f = { ...filters, ...customFilters };
-      const result = await agentApi.getAgents(page, { status: f.status, search: f.search, limit: pagination.pageSize });
+      const limit = pageSize ?? pagination.pageSize;
+      const result = await agentApi.getAgents(page, { status: f.status, search: f.search, limit });
       if (result.success) {
         setAgents(result.data || []);
         setPagination(prev => ({ ...prev, current: page, total: result.pagination?.total || result.data?.length || 0 }));
@@ -116,7 +117,7 @@ const isSuperAdmin = (user) => user?.role === 'superadmin';
     } catch (e) { message.error('Failed to load master data'); }
   };
 
-  const handleTableChange  = (pg) => { setPagination(pg); fetchAgents(pg.current); };
+  const handleTableChange  = (pg) => { setPagination(pg); fetchAgents(pg.current, {}, pg.pageSize); };
   const handleSearch       = (v)  => { setFilters(p => ({...p, search: v})); fetchAgents(1, { search: v }); };
   const handleStatusFilter = (s)  => { setFilters(p => ({...p, status: s})); fetchAgents(1, { status: s }); };
   const handleRefresh      = ()   => { fetchAgents(pagination.current); message.success('Refreshed'); };
@@ -176,7 +177,15 @@ const isSuperAdmin = (user) => user?.role === 'superadmin';
 
   const handleEdit = (agent) => {
     setEditingAgent(agent);
-    form.setFieldsValue({ ...agent, sendEmail: false, password: '', confirmPassword: '' });
+    form.setFieldsValue({
+      ...agent,
+      sendEmail:         false,
+      password:          '',
+      confirmPassword:   '',
+      // default true if field was never saved on the agent doc
+      commissionJoinFeesEnabled: agent.commissionJoinFeesEnabled !== false,
+      commissionClosingEnabled:  agent.commissionClosingEnabled  !== false,
+    });
     setPhotoPreview(agent.photoUrl || null);
     setSignaturePreview(agent.signatureUrl || null);
     setModalVisible(true);
@@ -619,7 +628,20 @@ const isSuperAdmin = (user) => user?.role === 'superadmin';
               <Row gutter={16}>
                 <Col span={8}><Form.Item name="phone1" label="Primary Phone" rules={[{ required: true }, { pattern: /^\d{10}$/ }]}><Input placeholder="10-digit" size="large" /></Form.Item></Col>
                 <Col span={8}><Form.Item name="phone2" label="Secondary Phone" rules={[{ pattern: /^\d{10}$/ }]}><Input placeholder="Optional" size="large" /></Form.Item></Col>
-                <Col span={8}><Form.Item name="email" label="Email" rules={[{ required: true }, { type: 'email' }]}><Input placeholder="Email" size="large" /></Form.Item></Col>
+                <Col span={8}>
+                  <Form.Item
+                    name="email"
+                    label="Email"
+                    rules={[{ required: true }, { type: 'email' }]}
+                    extra={editingAgent ? (
+                      <span style={{ color: '#d97706', fontSize: 11 }}>
+                        ⚠️ Changing email updates Auth. Agent must log in again with the new email.
+                      </span>
+                    ) : null}
+                  >
+                    <Input placeholder="Email" size="large" />
+                  </Form.Item>
+                </Col>
               </Row>
             </Card>
 
@@ -717,24 +739,96 @@ const isSuperAdmin = (user) => user?.role === 'superadmin';
               </div>
             </Card>
 
-            {/* Email + Status */}
-            <Row gutter={16} className="mb-4">
-              <Col span={12}>
-                <Card className="bg-blue-50 border-blue-200">
-                  <Form.Item name="sendEmail" valuePropName="checked" className="mb-0">
-                    <Checkbox><div className="flex items-center gap-3"><MailOutlined className="text-blue-600" /><div><Text className="font-medium">Send welcome email</Text><div className="text-xs text-gray-600">Agent will receive login details</div></div></div></Checkbox>
-                  </Form.Item>
-                </Card>
-              </Col>
-              <Col span={12}>
-                <Card className="border-gray-200">
-                  <Form.Item name="status" label="Agent Status">
-                    <Select size="large"><Option value="active">Active</Option><Option value="inactive">Inactive</Option></Select>
-                  </Form.Item>
-                </Card>
-              </Col>
-            </Row>
+            {/* Settings & Status row */}
+            <Card
+              className="mb-4 border-gray-100"
+              bodyStyle={{ padding: '16px 20px' }}
+              title={
+                <span className="text-xs font-semibold text-gray-400 uppercase tracking-widest">
+                  Settings &amp; Preferences
+                </span>
+              }
+            >
+              <Row gutter={[12, 12]}>
 
+                {/* Send Welcome Email */}
+                <Col xs={12} sm={12} lg={6}>
+                  <div className="p-3 rounded-xl border-2 border-blue-100 bg-blue-50 h-full">
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="w-8 h-8 rounded-lg bg-blue-100 flex items-center justify-center">
+                        <MailOutlined className="text-blue-600 text-sm" />
+                      </div>
+                      <Form.Item name="sendEmail" valuePropName="checked" className="mb-0">
+                        <Switch size="small" />
+                      </Form.Item>
+                    </div>
+                    <div className="text-sm font-semibold text-gray-800 leading-tight">Welcome Email</div>
+                    <div className="text-xs text-gray-500 mt-0.5 leading-tight">Send login credentials to agent</div>
+                  </div>
+                </Col>
+
+                {/* Join Fees Commission */}
+                <Col xs={12} sm={12} lg={6}>
+                  <div className="p-3 rounded-xl border-2 border-amber-100 bg-amber-50 h-full">
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="w-8 h-8 rounded-lg bg-amber-100 flex items-center justify-center">
+                        <DollarOutlined className="text-amber-600 text-sm" />
+                      </div>
+                      <Form.Item name="commissionJoinFeesEnabled" valuePropName="checked" className="mb-0" initialValue={true}>
+                        <Switch size="small" />
+                      </Form.Item>
+                    </div>
+                    <div className="text-sm font-semibold text-gray-800 leading-tight">Join Commission</div>
+                    <div className="text-xs text-gray-500 mt-0.5 leading-tight">Earns % on join fee payments</div>
+                  </div>
+                </Col>
+
+                {/* Closing Commission */}
+                <Col xs={12} sm={12} lg={6}>
+                  <div className="p-3 rounded-xl border-2 border-emerald-100 bg-emerald-50 h-full">
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="w-8 h-8 rounded-lg bg-emerald-100 flex items-center justify-center">
+                        <DollarOutlined className="text-emerald-600 text-sm" />
+                      </div>
+                      <Form.Item name="commissionClosingEnabled" valuePropName="checked" className="mb-0" initialValue={true}>
+                        <Switch size="small" />
+                      </Form.Item>
+                    </div>
+                    <div className="text-sm font-semibold text-gray-800 leading-tight">Closing Commission</div>
+                    <div className="text-xs text-gray-500 mt-0.5 leading-tight">Earns % on closing payments</div>
+                  </div>
+                </Col>
+
+                {/* Agent Status */}
+                <Col xs={12} sm={12} lg={6}>
+                  <div className="p-3 rounded-xl border-2 border-gray-100 bg-gray-50 h-full">
+                    <div className="flex items-center gap-2 mb-2">
+                      <div className="w-8 h-8 rounded-lg bg-gray-200 flex items-center justify-center">
+                        <UserOutlined className="text-gray-600 text-sm" />
+                      </div>
+                      <div className="text-sm font-semibold text-gray-800">Status</div>
+                    </div>
+                    <Form.Item name="status" className="mb-0">
+                      <Select size="small" className="w-full">
+                        <Option value="active">
+                          <span className="flex items-center gap-1">
+                            <span className="inline-block w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
+                            Active
+                          </span>
+                        </Option>
+                        <Option value="inactive">
+                          <span className="flex items-center gap-1">
+                            <span className="inline-block w-2 h-2 rounded-full bg-red-400 shrink-0" />
+                            Inactive
+                          </span>
+                        </Option>
+                      </Select>
+                    </Form.Item>
+                  </div>
+                </Col>
+
+              </Row>
+            </Card>
             <div className="flex justify-end gap-3 pt-4 border-t">
               <Button onClick={resetForm} disabled={loading} size="large">Cancel</Button>
               <Button type="primary" htmlType="submit" loading={loading} icon={<SaveOutlined />} size="large" className="bg-blue-600">

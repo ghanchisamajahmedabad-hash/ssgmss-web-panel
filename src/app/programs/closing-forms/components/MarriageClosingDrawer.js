@@ -14,6 +14,7 @@ import {
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { ref, uploadBytesResumable, getDownloadURL, deleteObject } from 'firebase/storage'
+import { auth } from '../../../../../lib/firbase-client'
 import { paymentApi } from '@/utils/api'
 import { Colors } from '@/constent/antdTheme'
 import {
@@ -41,6 +42,32 @@ const Label = ({ children, required }) => (
     {children}{required && <span style={{ color: C.error }}> *</span>}
   </div>
 )
+
+// ─── open invitation card through authenticated proxy (avoids 404 from Storage rules) ─
+const openInvitationCard = async (firebaseUrl) => {
+  if (!firebaseUrl) return
+  try {
+    const token = await auth.currentUser?.getIdToken()
+    const proxyUrl = `/api/closing-card/view?fileUrl=${encodeURIComponent(firebaseUrl)}`
+    const res = await fetch(proxyUrl, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
+    if (!res.ok) throw new Error(`Server returned ${res.status}`)
+    const blob = await res.blob()
+    const blobUrl = URL.createObjectURL(blob)
+    const win = window.open(blobUrl, '_blank')
+    // Revoke after 2 min so memory is freed
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 120_000)
+    if (!win) {
+      // Popup blocked — fall back to direct URL
+      window.open(firebaseUrl, '_blank')
+    }
+  } catch (e) {
+    console.error('openInvitationCard error:', e)
+    // Fall back to direct Firebase Storage URL
+    window.open(firebaseUrl, '_blank')
+  }
+}
 
 // ─── step bar ─────────────────────────────────────────────────────────────────
 const StepBar = ({ step }) => {
@@ -146,7 +173,7 @@ const MemberSelectCard = ({ member, checked, onChange, programId, existingGroupI
 }
 
 // ─── member detail row (step 3) ───────────────────────────────────────────────
-const MemberDetailRow = ({ member, details, progress, onUpdate, onRemove, onUpload, onRemoveFile }) => {
+const MemberDetailRow = ({ member, details, progress, onUpdate, onRemove, onUpload, onRemoveFile, onViewCard }) => {
   const pct       = progress
   const uploading = typeof pct === 'number' && pct > 0 && pct < 100
   const uploaded  = pct === 'done' || !!details?.invitationUrl
@@ -183,7 +210,7 @@ const MemberDetailRow = ({ member, details, progress, onUpdate, onRemove, onUplo
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: C.success + '10', border: `1px solid ${C.success}35`, borderRadius: 7, padding: '5px 10px' }}>
               <CheckCircleOutlined style={{ color: C.success, fontSize: 13 }} />
               <span style={{ fontSize: 12, fontWeight: 600, color: C.success, flex: 1 }}>Uploaded</span>
-              <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => window.open(details.invitationUrl)} style={{ padding: '0 3px', fontSize: 11, color: C.info }} />
+              <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => onViewCard(details.invitationUrl)} style={{ padding: '0 3px', fontSize: 11, color: C.info }} />
               <Button type="link" size="small" onClick={onRemoveFile} style={{ padding: '0 3px', fontSize: 11, color: C.error }}>✕</Button>
             </div>
           ) : uploading ? (
@@ -863,7 +890,8 @@ const MarriageClosingDrawer = ({ visible, onClose, members: allMembers = [], pro
                 return (
                   <MemberDetailRow key={id} member={member} details={details[id]} progress={uploadProgress[id]}
                     onUpdate={(f, v) => updateDetail(id, f, v)} onRemove={() => removeMember(id)}
-                    onUpload={makeUploader(id)} onRemoveFile={() => handleRemoveFile(id)} />
+                    onUpload={makeUploader(id)} onRemoveFile={() => handleRemoveFile(id)}
+                    onViewCard={openInvitationCard} />
                 )
               })}
             </div>

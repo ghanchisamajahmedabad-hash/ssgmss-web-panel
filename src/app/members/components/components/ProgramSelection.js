@@ -1,6 +1,6 @@
 import React from 'react'
-import { Card, Row, Col, Form, DatePicker, Select, Alert, Tag, Progress } from 'antd'
-import { CheckCircleOutlined, ClockCircleOutlined, TrophyOutlined, TeamOutlined } from '@ant-design/icons'
+import { Card, Row, Col, Form, DatePicker, Select, Alert, Tag, Progress, Tooltip } from 'antd'
+import { CheckCircleOutlined, ClockCircleOutlined, TrophyOutlined, TeamOutlined, LockOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 
 const ProgramSelection = ({
@@ -15,7 +15,10 @@ const ProgramSelection = ({
   existingMember,
   selectedMemberGroup,
   handleMemberGroupChange,
+  currentUserRole,
 }) => {
+  const isSuperAdmin = currentUserRole === 'superadmin'
+  const joinDateLocked = isEditMode && !isSuperAdmin
 
   const programOptions = programs?.map(p => ({
     label: p.name,
@@ -31,17 +34,32 @@ const ProgramSelection = ({
       <Row gutter={16}>
         <Col span={12}>
           <Form.Item
-            label="Join Date"
+            label={
+              <span className="flex items-center gap-1">
+                Join Date
+                {joinDateLocked && <LockOutlined style={{ color: '#faad14', fontSize: 12 }} />}
+              </span>
+            }
             name="joinDate"
             rules={[{ required: true, message: 'Please select join date' }]}
+            extra={joinDateLocked
+              ? <span style={{ color: '#faad14', fontSize: 12 }}>🔒 To change join date, please contact Super Admin.</span>
+              : null
+            }
           >
-            <DatePicker
-              format="DD-MM-YYYY"
-              style={{ width: '100%' }}
-              value={joinDate}
-              onChange={handleJoinDateChange}
-              disabledDate={current => current && current > dayjs().endOf('day')}
-            />
+            <Tooltip
+              title={joinDateLocked ? 'Only Super Admin can change join date. Please contact Super Admin.' : ''}
+              placement="top"
+            >
+              <DatePicker
+                format="DD-MM-YYYY"
+                style={{ width: '100%' }}
+                value={joinDate}
+                onChange={joinDateLocked ? undefined : handleJoinDateChange}
+                disabledDate={current => current && current > dayjs().endOf('day')}
+                disabled={joinDateLocked}
+              />
+            </Tooltip>
           </Form.Item>
         </Col>
 

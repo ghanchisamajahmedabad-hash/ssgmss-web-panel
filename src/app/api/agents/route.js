@@ -111,7 +111,9 @@ export async function POST(req) {
       name, fatherName, email, phone1, phone2, password, caste, aadharNo,
       state, district, city, village, pincode,
       photoFile, signatureFile, document1File, document2File, document3File,
-      sendEmail = false, status = "active"
+      sendEmail = false, status = "active",
+      commissionJoinFeesEnabled = true,   // default: join fees commission ON
+      commissionClosingEnabled  = true,   // default: closing commission ON
     } = body;
 
     if (!name || !email || !phone1 || !aadharNo)
@@ -156,6 +158,8 @@ export async function POST(req) {
       village: village || "", pincode: pincode || "",
       photoUrl, signatureUrl, document1Url, document2Url, document3Url,
       status, role: "agent", active_flag: true, delete_flag: false,
+      commissionJoinFeesEnabled: commissionJoinFeesEnabled !== false,
+      commissionClosingEnabled:  commissionClosingEnabled  !== false,
       walletBalance: 0, totalCommissionEarned: 0, totalCommissionWithdrawn: 0,
       created_at: STS(), updated_at: STS(),
       createdBy: authResult.user.uid, lastPasswordReset: new Date().toISOString()

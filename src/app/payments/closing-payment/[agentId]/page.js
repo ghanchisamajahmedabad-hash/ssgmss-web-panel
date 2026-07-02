@@ -393,7 +393,16 @@ const ClosingMemberPaymentPage = () => {
         setGlobalPaymentAmount('');
       }
     } catch (e) {
-      message.error('Payment failed: ' + e.message);
+      if (e.message?.toLowerCase().includes('duplicate transaction')) {
+        Modal.error({
+          title: '⚠️ Duplicate Transaction Detected',
+          content: e.message,
+          okText: 'OK, I\'ll check',
+          width: 520,
+        });
+      } else {
+        message.error('Payment failed: ' + e.message);
+      }
     } finally {
       setUploading(false);
     }

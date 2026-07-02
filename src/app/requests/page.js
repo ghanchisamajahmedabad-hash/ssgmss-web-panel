@@ -105,7 +105,7 @@ const Page = () => {
   const { user }    = useAuth()
 const isSuperAdmin = (user) => user?.role === 'superadmin';
   const usersPermissions = user?.permissions || {};
-  useEffect(() => { fetchAllData(); generateRegistrationNumber() }, [])
+  useEffect(() => { fetchAllData() }, [])
 
   const fetchAllData = async () => {
     setLoading(true); setDetailDrawerVisible(false)

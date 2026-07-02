@@ -1,23 +1,29 @@
 "use client";
 import React, { useState } from 'react';
-import { 
-  Form, 
-  Input, 
-  Select, 
-  Button, 
-  Card, 
-  Row, 
-  Col, 
-  DatePicker, 
-  InputNumber, 
-  Table, 
-  Space, 
-  Popconfirm, 
+import {
+  Form,
+  Input,
+  Select,
+  Button,
+  Card,
+  Row,
+  Col,
+  DatePicker,
+  InputNumber,
+  Table,
+  Space,
+  Popconfirm,
   message,
   Typography,
   Tag,
-  Radio
+  Radio,
+  Tooltip,
+  Alert
 } from 'antd';
+import {
+  GlobalOutlined,
+  InfoCircleOutlined,
+} from '@ant-design/icons';
 import { 
   PlusOutlined, 
   DeleteOutlined,
@@ -39,31 +45,51 @@ const { TextArea } = Input;
 const ProgramsFormPage = () => {
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
-  
+
   // For age groups table
   const [ageGroups, setAgeGroups] = useState([]);
-   const [programType, setProgramType] = useState('other');
+  const [programType, setProgramType] = useState('other');
   // For member groups
   const [memberGroups, setMemberGroups] = useState([]);
-    const [certificateRule, setCertificateRule] = useState('');
+  const [certificateRule, setCertificateRule] = useState('');
+  // Global date range — applied to ALL periods at once when set
+  const [globalDateRange, setGlobalDateRange] = useState([null, null]);
   // Generate unique ID for groups
   const generateGroupId = () => {
     return 'GRP_' + Math.random().toString(36).substr(2, 9).toUpperCase();
+  };
+
+  // Apply global date range to every period in every age group
+  const applyGlobalDateRange = (dates) => {
+    if (!dates || !dates[0] || !dates[1]) return;
+    const startDate = dates[0].format('DD-MM-YYYY');
+    const endDate   = dates[1].format('DD-MM-YYYY');
+    setAgeGroups(prev =>
+      prev.map(group => ({
+        ...group,
+        periods: group.periods.map(period => ({ ...period, startDate, endDate }))
+      }))
+    );
+    message.success(`Date range applied to all ${ageGroups.reduce((t, g) => t + g.periods.length, 0)} period(s)`);
   };
 
   // Handle form submission
   const handleSubmit = async (values) => {
     try {
       setLoading(true);
-      
+
+      const rawPrefix = (values.regNoPrefix || 'MEM').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+      const regNoPrefix = rawPrefix || 'MEM';
+
       // Prepare program data
       const programData = {
         name: values.name,
         hindiName: values.hindiName,
         description: values.description,
-        programType:programType,
-        certificateRule:certificateRule,
-        ageGroups: ageGroups,
+        programType,
+        certificateRule,
+        regNoPrefix,
+        ageGroups,
         memberGroups: memberGroups.map(group => ({
           id: group.id,
           groupName: group.groupName,
@@ -380,29 +406,62 @@ const ProgramsFormPage = () => {
           {/* Basic Info Card */}
           <Card title="Program Details" className="shadow-md">
             <Row gutter={24}>
-              <Col span={12}>
+              <Col span={10}>
                 <Form.Item
                   name="name"
                   label="Program Name (English)"
                   rules={[{ required: true, message: 'Please enter program name' }]}
                 >
-                  <Input 
-                    placeholder="e.g., Senior Citizen Scheme" 
+                  <Input
+                    placeholder="e.g., Senior Citizen Scheme"
                     size="large"
                     className="hover:border-rose-300"
                   />
                 </Form.Item>
               </Col>
-              <Col span={12}>
+              <Col span={10}>
                 <Form.Item
                   name="hindiName"
                   label="Program Name (Hindi)"
                   rules={[{ required: true, message: 'Please enter Hindi name' }]}
                 >
-                  <Input 
-                    placeholder="e.g., वरिष्ठ नागरिक योजना" 
+                  <Input
+                    placeholder="e.g., वरिष्ठ नागरिक योजना"
                     size="large"
                     className="hover:border-rose-300"
+                  />
+                </Form.Item>
+              </Col>
+              <Col span={4}>
+                <Form.Item
+                  name="regNoPrefix"
+                  label={
+                    <span className="flex items-center gap-1">
+                      Reg. Prefix
+                      <Tooltip title="Members of this yojna will get registration numbers starting with this prefix (e.g. MEM → MEM00012507, SCH → SCH00012507). Only letters/digits allowed.">
+                        <InfoCircleOutlined className="text-gray-400 text-xs" />
+                      </Tooltip>
+                    </span>
+                  }
+                  initialValue="MEM"
+                  rules={[
+                    { required: true, message: 'Required' },
+                    {
+                      validator(_, value) {
+                        if (!value) return Promise.resolve(); // required rule handles empty
+                        const clean = value.replace(/[^A-Z0-9]/gi, '');
+                        if (clean.length >= 1 && clean.length <= 8) return Promise.resolve();
+                        return Promise.reject(new Error('1–8 letters or digits (e.g. R, SC, MEM, SADI)'));
+                      }
+                    }
+                  ]}
+                >
+                  <Input
+                    placeholder="MEM"
+                    size="large"
+                    maxLength={8}
+                    className="hover:border-rose-300 uppercase font-mono"
+                    onChange={e => form.setFieldValue('regNoPrefix', e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''))}
                   />
                 </Form.Item>
               </Col>
@@ -506,7 +565,7 @@ const ProgramsFormPage = () => {
           </Card>
 
           {/* Age Groups Card */}
-          <Card 
+          <Card
             title={
               <div className="flex justify-between items-center">
                 <div>
@@ -527,6 +586,43 @@ const ProgramsFormPage = () => {
             }
             className="shadow-md"
           >
+            {/* ── Global Date Range ───────────────────────────────────── */}
+            <div className="mb-5 p-4 rounded-xl border-2 border-blue-100 bg-blue-50">
+              <div className="flex items-center gap-2 mb-3">
+                <GlobalOutlined className="text-blue-600" />
+                <span className="font-semibold text-blue-700">Global Date Range</span>
+                <span className="text-xs text-blue-500 ml-1">— sets dates on ALL periods at once</span>
+              </div>
+              <div className="flex items-center gap-3 flex-wrap">
+                <DatePicker.RangePicker
+                  format="DD-MM-YYYY"
+                  value={globalDateRange}
+                  onChange={dates => setGlobalDateRange(dates || [null, null])}
+                  size="middle"
+                  placeholder={['Global Start', 'Global End']}
+                  className="flex-1 min-w-[260px]"
+                />
+                <Button
+                  type="primary"
+                  icon={<GlobalOutlined />}
+                  disabled={!globalDateRange[0] || !globalDateRange[1] || ageGroups.length === 0}
+                  onClick={() => applyGlobalDateRange(globalDateRange)}
+                  style={{ background: '#2563eb', border: 'none' }}
+                >
+                  Apply to All Periods
+                </Button>
+                <Button
+                  onClick={() => setGlobalDateRange([null, null])}
+                  disabled={!globalDateRange[0]}
+                >
+                  Clear
+                </Button>
+              </div>
+              {ageGroups.length === 0 && (
+                <div className="text-xs text-blue-400 mt-2">Add at least one age group first to apply global dates.</div>
+              )}
+            </div>
+
             {ageGroups.length === 0 ? (
               <div className="text-center py-12 border-2 border-dashed rounded-lg bg-gray-50">
                 <div className="text-gray-400 mb-4">

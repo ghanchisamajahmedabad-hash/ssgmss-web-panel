@@ -4,12 +4,12 @@ import {
   CheckCircleOutlined,
   LoadingOutlined
 } from '@ant-design/icons'
-import { doc, serverTimestamp, updateDoc } from 'firebase/firestore'
+import { doc, serverTimestamp, updateDoc, runTransaction } from 'firebase/firestore'
 import { db } from '../../../../lib/firbase-client'
 import { auth } from '../../../../lib/firbase-client'
 import dayjs from 'dayjs'
 import isBetween from 'dayjs/plugin/isBetween'
-import { createClosingPayment, createSearchIndex, generateRegistrationNumber, memberAccoiuntCreate, recordJoinFeeTransaction } from '@/app/members/components/components/firebaseUtils'
+import { createClosingPayment, createSearchIndex, generateRegistrationNumber, getNextMemberSrNo, memberAccoiuntCreate, recordJoinFeeTransaction } from '@/app/members/components/components/firebaseUtils'
 import { notifyAgent } from '@/app/utils/notifyAgent'
 
 dayjs.extend(isBetween)
@@ -128,8 +128,11 @@ const ApproveModal = ({ open, setOpen, selectedMember, setSelectedMember, fetchA
       const paymentPct      = joinFees > 0 ? Math.round((finalPaid / joinFees) * 100) : 0
       const paymentStatus   = paymentPct === 100 ? 'paid' : paymentPct > 0 ? 'partial' : 'pending'
 
-      // Final registration number
-      const finalRegNumber = await generateRegistrationNumber()
+      // Final registration number — use program's prefix + per-program sequence
+      const finalRegNumber = await generateRegistrationNumber(programDetail.programId)
+
+      // Atomically assign a global Sr. No.
+      const srNo = await getNextMemberSrNo()
 
       const searchIndex = createSearchIndex({
         name:               selectedMember.displayName,
@@ -158,6 +161,7 @@ const ApproveModal = ({ open, setOpen, selectedMember, setSelectedMember, fetchA
         search_registrationNumber: finalRegNumber,
         search_keywords: searchIndex,
 
+        srNo,
         approvedBy:     user?.uid,
         approvedByName: user?.displayName || user?.email,
         approvedAt:     serverTimestamp(),

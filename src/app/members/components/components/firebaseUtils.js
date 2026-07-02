@@ -1,13 +1,26 @@
-import { 
-  collection, addDoc, serverTimestamp, query, where, getDocs, 
-  getDoc, doc, updateDoc, deleteDoc, 
-  setDoc
+import {
+  collection, addDoc, serverTimestamp, query, where, getDocs,
+  getDoc, doc, updateDoc, deleteDoc,
+  setDoc, runTransaction
 } from 'firebase/firestore'
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage'
 import dayjs from 'dayjs'
 import { auth, db, storage } from '../../../../../lib/firbase-client'
 import { message } from 'antd'
 import { notifyAgent } from '@/app/utils/notifyAgent'
+
+// Atomically increment global member Sr. No. counter and return the new value.
+// Stored at organizationStats/current.totalMembersAdded
+export const getNextMemberSrNo = async () => {
+  const statsRef = doc(db, 'organizationStats', 'current')
+  return await runTransaction(db, async (txn) => {
+    const snap = await txn.get(statsRef)
+    const current = snap.exists() ? (snap.data().totalMembersAdded || 0) : 0
+    const next = current + 1
+    txn.set(statsRef, { totalMembersAdded: next }, { merge: true })
+    return next
+  })
+}
 
 // File upload utility
 export const uploadFile = async (file, folder, fileName) => {
@@ -91,21 +104,44 @@ export const uploadAllFiles = async (files) => {
 }
 
 // Generate registration number
-export const generateRegistrationNumber = async () => {
+// If programId is supplied, fetches that program's regNoPrefix and counts
+// members in that program only — so each yojna has its own independent sequence.
+export const generateRegistrationNumber = async (programId) => {
   try {
-    const prefix = 'MEM';
     const now = dayjs();
-    const year = now.format('YY');
+    const year  = now.format('YY');
     const month = now.format('MM');
 
-    const q = query(
-      collection(db, 'members'),
-      where('status', '==', 'active'),
-      where('active_flag', '==', true)
-    );
+    // ── Resolve prefix from program doc (or fall back to 'MEM') ──────────────
+    let prefix = 'MEM';
+    if (programId) {
+      try {
+        const progSnap = await getDoc(doc(db, 'programs', programId));
+        if (progSnap.exists()) {
+          const raw = (progSnap.data().regNoPrefix || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+          if (raw) prefix = raw;
+        }
+      } catch (_) { /* use default */ }
+    }
 
-    const snapshot = await getDocs(q);
-    const count = snapshot.size + 1;
+    // ── Count existing members for this program (or globally if no programId) ─
+    let q;
+    if (programId) {
+      q = query(
+        collection(db, 'members'),
+        where('programId',   '==', programId),
+        where('active_flag', '==', true)
+      );
+    } else {
+      q = query(
+        collection(db, 'members'),
+        where('status',      '==', 'active'),
+        where('active_flag', '==', true)
+      );
+    }
+
+    const snapshot    = await getDocs(q);
+    const count       = snapshot.size + 1;
     const paddedCount = count.toString().padStart(4, '0');
 
     return `${prefix}${paddedCount}${year}${month}`;
@@ -307,8 +343,11 @@ export const handleSubmit = async (values, context, message) => {
       return false
     }
 
-    // Generate registration number
-    const registrationNumber = await generateRegistrationNumber()
+    // Generate registration number — use program-specific prefix & sequence
+    const registrationNumber = await generateRegistrationNumber(selectedProgramId)
+
+    // Atomically assign a global Sr. No. to this member
+    const srNo = await getNextMemberSrNo()
     
     // Upload files
     const fileUrls = await uploadAllFiles({
@@ -455,6 +494,8 @@ export const handleSubmit = async (values, context, message) => {
       hasDocuments: !!(fileUrls.photoURL && fileUrls.documentFrontURL),
       isActive: true,
       
+      srNo,
+
       createdAt: serverTimestamp(),
       createdBy: currentUser?.uid,
       updated_at: serverTimestamp()

@@ -118,7 +118,8 @@ const router=useRouter()
     form.setFieldsValue({
       name: program.name,
       hindiName: program.hindiName,
-      description: program.description
+      description: program.description,
+      regNoPrefix: program.regNoPrefix || 'MEM',
     });
   };
 
@@ -138,9 +139,13 @@ const router=useRouter()
   const handleEditSubmit = async (values) => {
     try {
       setLoading(true);
-      
+
+      const rawPrefix = (values.regNoPrefix || 'MEM').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+      const regNoPrefix = rawPrefix || 'MEM';
+
       const programData = {
         ...values,
+        regNoPrefix,
         programType:programType,
         certificateRule:certificateRule,
         ageGroups: ageGroups,
@@ -576,7 +581,7 @@ const router=useRouter()
             >
               <Card title="Basic Information" className="shadow-sm">
                 <Row gutter={16}>
-                  <Col span={12}>
+                  <Col span={10}>
                     <Form.Item
                       name="name"
                       label="Program Name (English)"
@@ -585,13 +590,37 @@ const router=useRouter()
                       <Input placeholder="Program name in English" />
                     </Form.Item>
                   </Col>
-                  <Col span={12}>
+                  <Col span={10}>
                     <Form.Item
                       name="hindiName"
                       label="Program Name (Hindi)"
                       rules={[{ required: true, message: 'Required' }]}
                     >
                       <Input placeholder="Program name in Hindi" />
+                    </Form.Item>
+                  </Col>
+                  <Col span={4}>
+                    <Form.Item
+                      name="regNoPrefix"
+                      label="Reg. Prefix"
+                      rules={[
+                        { required: true, message: 'Required' },
+                        {
+                          validator(_, value) {
+                            if (!value) return Promise.resolve();
+                            const clean = value.replace(/[^A-Z0-9]/gi, '');
+                            if (clean.length >= 1 && clean.length <= 8) return Promise.resolve();
+                            return Promise.reject(new Error('1–8 letters/digits'));
+                          }
+                        }
+                      ]}
+                    >
+                      <Input
+                        placeholder="MEM"
+                        maxLength={8}
+                        className="uppercase font-mono"
+                        onChange={e => form.setFieldValue('regNoPrefix', e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''))}
+                      />
                     </Form.Item>
                   </Col>
                 </Row>
@@ -898,16 +927,22 @@ const router=useRouter()
                 {/* Basic Info */}
                 <Card title="Basic Information" className="shadow-sm">
                   <Row gutter={[16, 16]}>
-                    <Col span={12}>
+                    <Col span={10}>
                       <div>
                         <div className="text-sm text-gray-500">Program Name (English)</div>
                         <div className="text-lg font-semibold">{selectedProgram.name}</div>
                       </div>
                     </Col>
-                    <Col span={12}>
+                    <Col span={10}>
                       <div>
                         <div className="text-sm text-gray-500">Program Name (Hindi)</div>
                         <div className="text-lg font-semibold">{selectedProgram.hindiName}</div>
+                      </div>
+                    </Col>
+                    <Col span={4}>
+                      <div>
+                        <div className="text-sm text-gray-500">Reg. Prefix</div>
+                        <div className="text-lg font-semibold font-mono text-blue-600">{selectedProgram.regNoPrefix || 'MEM'}</div>
                       </div>
                     </Col>
                   </Row>

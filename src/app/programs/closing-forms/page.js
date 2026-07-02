@@ -28,6 +28,26 @@ dayjs.extend(relativeTime)
 
 const { Option }  = Select
 const { confirm } = Modal
+
+// ── Proxy invitation card through API so Storage rules can't block it ──────
+const viewInvitationCard = async (firebaseUrl) => {
+  if (!firebaseUrl) return
+  try {
+    const token = await auth.currentUser?.getIdToken()
+    const res = await fetch(
+      `/api/closing-card/view?fileUrl=${encodeURIComponent(firebaseUrl)}`,
+      { headers: token ? { Authorization: `Bearer ${token}` } : {} }
+    )
+    if (!res.ok) throw new Error(`${res.status}`)
+    const blob = await res.blob()
+    const blobUrl = URL.createObjectURL(blob)
+    window.open(blobUrl, '_blank')
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 120_000)
+  } catch {
+    // Fallback: open Firebase URL directly
+    window.open(firebaseUrl, '_blank')
+  }
+}
 const { Text }    = Typography
 
 const colors = {
@@ -115,7 +135,7 @@ const ClosingGroupModal = ({ group, visible, onClose, programList }) => {
         ) : (
           <List size="small" dataSource={groupMembers}
             renderItem={m => (
-              <List.Item extra={<Space>{m.closed_invitation_url ? <Button size="small" type="link" onClick={() => window.open(m.closed_invitation_url)}>View Card</Button> : null}<Tag color="blue">₹{m.amount}</Tag></Space>}>
+              <List.Item extra={<Space>{m.closed_invitation_url ? <Button size="small" type="link" onClick={() => viewInvitationCard(m.closed_invitation_url)}>View Card</Button> : null}<Tag color="blue">₹{m.amount}</Tag></Space>}>
                 <List.Item.Meta
                   avatar={<Avatar src={m.photoURL} icon={<UserOutlined />} size={30} style={{ background: colors.primary + '30', color: colors.primary }} />}
                   title={<Space size={4}><span style={{ fontWeight: 600, fontSize: 13 }}>{m.memberName}</span><Tag style={{ fontSize: 10 }}>{m.registrationNumber}</Tag></Space>}
@@ -311,7 +331,7 @@ const ClosingMembersPage = () => {
     },
     {
       title: 'Invitation', key: 'invitation', width: 110,
-      render: (_, r) => r.closed_invitation_url ? <Button type="link" size="small" onClick={() => window.open(r.closed_invitation_url)}>View Card</Button> : <Tag color="warning">No Card</Tag>
+      render: (_, r) => r.closed_invitation_url ? <Button type="link" size="small" onClick={() => viewInvitationCard(r.closed_invitation_url)}>View Card</Button> : <Tag color="warning">No Card</Tag>
     },
     { title: 'Note', key: 'note', width: 200, render: (_, r) => <span style={{ fontSize: 12, color: '#555' }}>{r.closed_note || '—'}</span> },
     { title: 'Action', key: 'action', width: 80, render: (_, r) => <Button type="text" icon={<EyeOutlined />} onClick={() => handleViewMember(r)} /> },

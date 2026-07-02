@@ -92,44 +92,30 @@ export const generatePassword = (name, dobDate) => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ADD stats — increment agent, program, org counts using flat member fields
+// Uses atomic dot-notation INC() for programStats to avoid read-before-write
+// race conditions when multiple members are added concurrently for the same agent.
 // ─────────────────────────────────────────────────────────────────────────────
 const addMemberStats = async (memberInfo) => {
   const { agentId, programId, programName, joinFees, paidAmount, pendingAmount } = memberInfo;
   const batch = db.batch();
 
   // ── Agent ──────────────────────────────────────────────────────────────────
+  // Use dot-notation INC() — no read required, fully atomic, no race condition.
   if (agentId) {
     const agentRef  = db.collection('agents').doc(agentId);
     const agentSnap = await agentRef.get();
     if (agentSnap.exists) {
-      const existing = agentSnap.data().programStats || {};
-
-      // Build updated programStats for this single program
-      const programStats = { ...existing };
-      if (!programStats[programId]) {
-        programStats[programId] = {
-          programName, memberCount: 1,
-          totalJoinFees: joinFees, totalJoinFeesPaid: paidAmount, totalJoinFeesPending: pendingAmount,
-          lastUpdated: STS()
-        };
-      } else {
-        programStats[programId] = {
-          ...programStats[programId],
-          programName: programName || programStats[programId].programName,
-          memberCount:           (programStats[programId].memberCount           || 0) + 1,
-          totalJoinFees:         (programStats[programId].totalJoinFees         || 0) + joinFees,
-          totalJoinFeesPaid:     (programStats[programId].totalJoinFeesPaid     || 0) + paidAmount,
-          totalJoinFeesPending:  (programStats[programId].totalJoinFeesPending  || 0) + pendingAmount,
-          lastUpdated: STS()
-        };
-      }
-
       batch.update(agentRef, {
-        memberCount:           INC(1),
-        totalJoinFees:         INC(joinFees),
-        totalJoinFeesPaid:     INC(paidAmount),
-        totalJoinFeesPending:  INC(pendingAmount),
-        programStats,
+        memberCount:          INC(1),
+        totalJoinFees:        INC(joinFees),
+        totalJoinFeesPaid:    INC(paidAmount),
+        totalJoinFeesPending: INC(pendingAmount),
+        [`programStats.${programId}.programName`]:          programName,
+        [`programStats.${programId}.memberCount`]:          INC(1),
+        [`programStats.${programId}.totalJoinFees`]:        INC(joinFees),
+        [`programStats.${programId}.totalJoinFeesPaid`]:    INC(paidAmount),
+        [`programStats.${programId}.totalJoinFeesPending`]: INC(pendingAmount),
+        [`programStats.${programId}.lastUpdated`]:          STS(),
         updated_at: STS()
       });
     }
@@ -147,23 +133,14 @@ const addMemberStats = async (memberInfo) => {
   }
 
   // ── Organization ──────────────────────────────────────────────────────────
-  const orgRef  = db.collection('organizationStats').doc('current');
-  const orgSnap = await orgRef.get();
-  if (orgSnap.exists) {
-    batch.update(orgRef, {
-      totalMembers:         INC(1),
-      totalJoinFees:        INC(joinFees),
-      totalJoinFeesPaid:    INC(paidAmount),
-      totalJoinFeesPending: INC(pendingAmount),
-      updated_at:           STS()
-    });
-  } else {
-    batch.set(orgRef, {
-      totalMembers: 1,
-      totalJoinFees: joinFees, totalJoinFeesPaid: paidAmount, totalJoinFeesPending: pendingAmount,
-      createdAt: STS(), updated_at: STS()
-    });
-  }
+  // Use set+merge so it auto-creates if missing — INC() works with merge.
+  batch.set(db.collection('organizationStats').doc('current'), {
+    totalMembers:         INC(1),
+    totalJoinFees:        INC(joinFees),
+    totalJoinFeesPaid:    INC(paidAmount),
+    totalJoinFeesPending: INC(pendingAmount),
+    updated_at:           STS()
+  }, { merge: true });
 
   await batch.commit();
   console.log(`✅ Stats ADDED — program: ${programId}, agent: ${agentId}`);
@@ -171,6 +148,7 @@ const addMemberStats = async (memberInfo) => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // REMOVE stats — decrement (reverse) agent, program, org counts
+// Uses atomic INC(-value) and dot-notation for programStats — no race condition.
 // ─────────────────────────────────────────────────────────────────────────────
 const removeMemberStats = async (memberInfo) => {
   const { agentId, programId, joinFees, paidAmount, pendingAmount,
@@ -179,43 +157,27 @@ const removeMemberStats = async (memberInfo) => {
   const batch = db.batch();
 
   // ── Agent ──────────────────────────────────────────────────────────────────
+  // Atomic INC(-value) — no stale read, no race condition.
   if (agentId) {
     const agentRef  = db.collection('agents').doc(agentId);
     const agentSnap = await agentRef.get();
     if (agentSnap.exists) {
-      const agentData    = agentSnap.data();
-      const programStats = { ...(agentData.programStats || {}) };
-
-      if (programStats[programId]) {
-        const ps           = programStats[programId];
-        const newMemberCnt = Math.max(0, (ps.memberCount || 0) - 1);
-
-        if (newMemberCnt <= 0) {
-          delete programStats[programId];
-        } else {
-          programStats[programId] = {
-            ...ps,
-            memberCount:          newMemberCnt,
-            totalJoinFees:        Math.max(0, (ps.totalJoinFees        || 0) - joinFees),
-            totalJoinFeesPaid:    Math.max(0, (ps.totalJoinFeesPaid    || 0) - paidAmount),
-            totalJoinFeesPending: Math.max(0, (ps.totalJoinFeesPending || 0) - pendingAmount),
-            lastUpdated: STS()
-          };
-        }
-      }
-
       batch.update(agentRef, {
-        memberCount:          Math.max(0, (agentData.memberCount          || 0) - 1),
-        totalJoinFees:        Math.max(0, (agentData.totalJoinFees        || 0) - joinFees),
-        totalJoinFeesPaid:    Math.max(0, (agentData.totalJoinFeesPaid    || 0) - paidAmount),
-        totalJoinFeesPending: Math.max(0, (agentData.totalJoinFeesPending || 0) - pendingAmount),
-        closing_totalAmount:    Math.max(0, (agentData.closing_totalAmount    || 0) - closing_totalAmount),
-        closing_paidAmount:     Math.max(0, (agentData.closing_paidAmount     || 0) - closing_paidAmount),
-        closing_pendingAmount:  Math.max(0, (agentData.closing_pendingAmount  || 0) - closing_pendingAmount),
-        totalClosingCount:      Math.max(0, (agentData.totalClosingCount      || 0) - totalClosingCount),
-        paidClosingCount:       Math.max(0, (agentData.paidClosingCount       || 0) - paidClosingCount),
-        pendingClosingCount:    Math.max(0, (agentData.pendingClosingCount    || 0) - pendingClosingCount),
-        programStats,
+        memberCount:          INC(-1),
+        totalJoinFees:        INC(-joinFees),
+        totalJoinFeesPaid:    INC(-paidAmount),
+        totalJoinFeesPending: INC(-pendingAmount),
+        closing_totalAmount:    INC(-closing_totalAmount),
+        closing_paidAmount:     INC(-closing_paidAmount),
+        closing_pendingAmount:  INC(-closing_pendingAmount),
+        totalClosingCount:      INC(-totalClosingCount),
+        paidClosingCount:       INC(-paidClosingCount),
+        pendingClosingCount:    INC(-pendingClosingCount),
+        [`programStats.${programId}.memberCount`]:          INC(-1),
+        [`programStats.${programId}.totalJoinFees`]:        INC(-joinFees),
+        [`programStats.${programId}.totalJoinFeesPaid`]:    INC(-paidAmount),
+        [`programStats.${programId}.totalJoinFeesPending`]: INC(-pendingAmount),
+        [`programStats.${programId}.lastUpdated`]:          STS(),
         updated_at: STS()
       });
     }
@@ -223,39 +185,31 @@ const removeMemberStats = async (memberInfo) => {
 
   // ── Program ────────────────────────────────────────────────────────────────
   if (programId) {
-    const progSnap = await db.collection('programs').doc(programId).get();
-    if (progSnap.exists) {
-      const pd = progSnap.data();
-      batch.update(db.collection('programs').doc(programId), {
-        memberCount:          Math.max(0, (pd.memberCount          || 0) - 1),
-        totalJoinFees:        Math.max(0, (pd.totalJoinFees        || 0) - joinFees),
-        totalJoinFeesPaid:    Math.max(0, (pd.totalJoinFeesPaid    || 0) - paidAmount),
-        totalJoinFeesPending: Math.max(0, (pd.totalJoinFeesPending || 0) - pendingAmount),
-        totalClosingAmount:       Math.max(0, (pd.totalClosingAmount       || 0) - closing_totalAmount),
-        totalClosingPaidAmount:   Math.max(0, (pd.totalClosingPaidAmount   || 0) - closing_paidAmount),
-        totalClosingPendingAmount: Math.max(0, (pd.totalClosingPendingAmount || 0) - closing_pendingAmount),
-        totalClosingCount:        Math.max(0, (pd.totalClosingCount        || 0) - totalClosingCount),
-        updated_at:           STS()
-      });
-    }
+    batch.update(db.collection('programs').doc(programId), {
+      memberCount:               INC(-1),
+      totalJoinFees:             INC(-joinFees),
+      totalJoinFeesPaid:         INC(-paidAmount),
+      totalJoinFeesPending:      INC(-pendingAmount),
+      totalClosingAmount:        INC(-closing_totalAmount),
+      totalClosingPaidAmount:    INC(-closing_paidAmount),
+      totalClosingPendingAmount: INC(-closing_pendingAmount),
+      totalClosingCount:         INC(-totalClosingCount),
+      updated_at:                STS()
+    });
   }
 
   // ── Organization ──────────────────────────────────────────────────────────
-  const orgSnap = await db.collection('organizationStats').doc('current').get();
-  if (orgSnap.exists) {
-    const od = orgSnap.data();
-    batch.update(db.collection('organizationStats').doc('current'), {
-      totalMembers:         Math.max(0, (od.totalMembers         || 0) - 1),
-      totalJoinFees:        Math.max(0, (od.totalJoinFees        || 0) - joinFees),
-      totalJoinFeesPaid:    Math.max(0, (od.totalJoinFeesPaid    || 0) - paidAmount),
-      totalJoinFeesPending: Math.max(0, (od.totalJoinFeesPending || 0) - pendingAmount),
-      totalClosingAmount:          Math.max(0, (od.totalClosingAmount          || 0) - closing_totalAmount),
-      totalClosingPaidAmount:      Math.max(0, (od.totalClosingPaidAmount      || 0) - closing_paidAmount),
-      totalClosingPendingAmount:   Math.max(0, (od.totalClosingPendingAmount   || 0) - closing_pendingAmount),
-      totalClosingCount:           Math.max(0, (od.totalClosingCount           || 0) - totalClosingCount),
-      updated_at:           STS()
-    });
-  }
+  batch.set(db.collection('organizationStats').doc('current'), {
+    totalMembers:              INC(-1),
+    totalJoinFees:             INC(-joinFees),
+    totalJoinFeesPaid:         INC(-paidAmount),
+    totalJoinFeesPending:      INC(-pendingAmount),
+    totalClosingAmount:        INC(-closing_totalAmount),
+    totalClosingPaidAmount:    INC(-closing_paidAmount),
+    totalClosingPendingAmount: INC(-closing_pendingAmount),
+    totalClosingCount:         INC(-totalClosingCount),
+    updated_at:                STS()
+  }, { merge: true });
 
   await batch.commit();
   console.log(`✅ Stats REMOVED — program: ${programId}, agent: ${agentId}`);

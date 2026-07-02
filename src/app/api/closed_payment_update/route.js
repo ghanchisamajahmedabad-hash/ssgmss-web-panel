@@ -47,11 +47,33 @@ export async function POST(req) {
     const timestamp = STS();
     const now = new Date().toISOString();
 
+    // ── Duplicate UTR / transaction ID check ──────────────────────────────────
+    if (transactionId && transactionId.trim() !== '') {
+      const utrSnap = await db.collection('paymentGroups')
+        .where('transactionId', '==', transactionId.trim())
+        .limit(1)
+        .get();
+      if (!utrSnap.empty) {
+        const existing = utrSnap.docs[0].data();
+        const existingDate = existing.paymentDate?.toDate
+          ? existing.paymentDate.toDate().toLocaleDateString('en-IN')
+          : existing.paymentDate || '';
+        return NextResponse.json({
+          success: false,
+          message: `Duplicate transaction: UTR/Transaction ID "${transactionId.trim()}" was already used in a ${existing.paymentType === 'joinFees' ? 'Join Fees' : 'Closing'} payment on ${existingDate}. Please verify and use a different ID.`,
+          duplicate: true,
+          existingPaymentGroupId: utrSnap.docs[0].id,
+        }, { status: 409 });
+      }
+    }
+
     // ── Agent ──────────────────────────────────────────────────────────────
     const agentRef = db.collection('agents').doc(agentId);
     const agentDoc = await agentRef.get();
     if (!agentDoc.exists) throw new Error('Agent not found');
-    let updatedProgramStats = { ...(agentDoc.data().programStats || {}) };
+    // Accumulate per-program deltas — written as dot-notation INC() to avoid
+    // overwriting the entire programStats map (race condition).
+    const programDeltas = {}; // { [programId]: { paid, pending, paidCount, pendingCount } }
 
     // ── Payment group ──────────────────────────────────────────────────────
     const paymentGroupRef = db.collection('paymentGroups').doc();
@@ -212,16 +234,11 @@ export async function POST(req) {
           updated_at:                timestamp,
         }, { merge: true });
 
-        if (!updatedProgramStats[pId])
-          updatedProgramStats[pId] = {
-            totalClosingPaidAmount: 0, totalClosingPendingAmount: 0,
-            paidClosingCount: 0, pendingClosingCount: 0,
-          };
-        updatedProgramStats[pId].totalClosingPaidAmount     = (updatedProgramStats[pId].totalClosingPaidAmount     || 0) + deduction;
-        updatedProgramStats[pId].totalClosingPendingAmount  = Math.max(0, (updatedProgramStats[pId].totalClosingPendingAmount || 0) - deduction);
-        updatedProgramStats[pId].paidClosingCount           = (updatedProgramStats[pId].paidClosingCount           || 0) + paidDocsCount;
-        updatedProgramStats[pId].pendingClosingCount        = Math.max(0, (updatedProgramStats[pId].pendingClosingCount || 0) - decrementCnt);
-        updatedProgramStats[pId].lastUpdated                = new Date();
+        if (!programDeltas[pId]) programDeltas[pId] = { paid: 0, pending: 0, paidCount: 0, pendingCount: 0 };
+        programDeltas[pId].paid        += deduction;
+        programDeltas[pId].pending     -= deduction;
+        programDeltas[pId].paidCount   += paidDocsCount;
+        programDeltas[pId].pendingCount -= decrementCnt;
       }
 
       // ── Commission ──────────────────────────────────────────────────────
@@ -270,15 +287,22 @@ export async function POST(req) {
       });
     }
 
-    // ── Agent main doc ─────────────────────────────────────────────────────
-    batch.set(agentRef, {
+    // ── Agent main doc — use dot-notation INC per programId (atomic, no race) ──
+    const agentUpdate = {
       closing_paidAmount:    INC(grandTotalPaid),
       closing_pendingAmount: INC(-grandTotalPaid),
       paidClosingCount:      INC(grandTotalCount),
       pendingClosingCount:   INC(-grandTotalCount),
-      programStats:          updatedProgramStats,
       updated_at:            timestamp,
-    }, { merge: true });
+    };
+    for (const [pid, delta] of Object.entries(programDeltas)) {
+      agentUpdate[`programStats.${pid}.totalClosingPaidAmount`]    = INC(delta.paid);
+      agentUpdate[`programStats.${pid}.totalClosingPendingAmount`] = INC(delta.pending);
+      agentUpdate[`programStats.${pid}.paidClosingCount`]          = INC(delta.paidCount);
+      agentUpdate[`programStats.${pid}.pendingClosingCount`]       = INC(delta.pendingCount);
+      agentUpdate[`programStats.${pid}.lastUpdated`]               = timestamp;
+    }
+    batch.set(agentRef, agentUpdate, { merge: true });
 
     // ── Finalize payment group ─────────────────────────────────────────────
     batch.update(paymentGroupRef, {
