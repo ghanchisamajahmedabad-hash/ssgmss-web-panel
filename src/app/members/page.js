@@ -27,7 +27,7 @@ import {
   fetchAllMembersForSearch
 } from './components/firebase-helpers'
 import { auth, db } from '../../../lib/firbase-client'
-import { doc, updateDoc, query, where, orderBy, collection, getDocs } from 'firebase/firestore'
+import { doc, updateDoc, query, where, orderBy, collection, getDocs, getDoc } from 'firebase/firestore'
 import { BlobProvider, PDFDownloadLink } from '@react-pdf/renderer'
 import CertificateCom from './components/MemberPdf/CertificateCom'
 import MemberListPdf from './components/MemberPdf/MemberListPdf'
@@ -262,6 +262,21 @@ const isSuperAdmin = (user) => user?.role === 'superadmin';
   const [paymentDetailsMember, setPaymentDetailsMember] = useState(null)
   const [paymentDetailsVisible, setPaymentDetailsVisible] = useState(false)
   const handlePaymentDetails = (member) => { setPaymentDetailsMember(member); setPaymentDetailsVisible(true) }
+
+  // Re-fetch member from Firestore after a payment is reverted — updates drawer + table row
+  const handlePaymentDeleteSuccess = async () => {
+    if (!paymentDetailsMember?.id) return
+    try {
+      const snap = await getDoc(doc(db, 'members', paymentDetailsMember.id))
+      if (snap.exists()) {
+        const fresh = { id: snap.id, ...snap.data() }
+        // Update the drawer props so summary cards reflect Firestore truth
+        setPaymentDetailsMember(fresh)
+        // Patch the matching row in the members table so the list updates instantly
+        setMembers(prev => prev.map(m => m.id === fresh.id ? fresh : m))
+      }
+    } catch (e) { console.error('Failed to refresh member after revert', e) }
+  }
 
   const handleCertificateMember = (member) => {
     const agentData   = agentList?.find(a => a.id === member.agentId) || {}
@@ -1089,7 +1104,18 @@ ${filterHtml}
       {selectedMember && (
         <MemberDetailDrawer member={selectedMember} visible={detailDrawerVisible}
           onClose={() => { setDetailDrawerVisible(false); setSelectedMember(null) }}
-          programList={programList} agentList={agentList} />
+          programList={programList} agentList={agentList}
+          onPaymentSuccess={async (memberId) => {
+            try {
+              const snap = await getDoc(doc(db, 'members', memberId))
+              if (snap.exists()) {
+                const fresh = { id: snap.id, ...snap.data() }
+                setSelectedMember(fresh)
+                setMembers(prev => prev.map(m => m.id === fresh.id ? fresh : m))
+              }
+            } catch (e) { console.error('Failed to refresh member after payment', e) }
+          }}
+        />
       )}
 
       {openCertificate && (
@@ -1118,6 +1144,7 @@ ${filterHtml}
           member={paymentDetailsMember}
           visible={paymentDetailsVisible}
           onClose={() => { setPaymentDetailsVisible(false); setPaymentDetailsMember(null) }}
+          onDeleteSuccess={handlePaymentDeleteSuccess}
         />
       )}
 

@@ -3,7 +3,7 @@ import React, { useState, useEffect } from 'react'
 import {
   Drawer, Row, Col, Avatar, Tag, Descriptions, Card, Table, Tabs,
   Image, Space, Typography, Button, Divider, Badge, Progress, Tooltip,
-  Statistic, Empty, Modal
+  Statistic, Empty, Modal, Form, Radio, Select, Input, InputNumber, DatePicker, message
 } from 'antd'
 import {
   UserOutlined, PhoneOutlined, IdcardOutlined, HomeOutlined,
@@ -28,15 +28,20 @@ import MemberDetailsPdf from './MemberPdf/MemberDetailsPdf'
 import ClosingRasidPdf from './ClosingRasidPdf'
 import ClosingEntriesList from './ClosingEntriesList'
 import { collection, query, where, getDocs, orderBy, doc, getDoc } from 'firebase/firestore'
+import { getAuth } from 'firebase/auth'
 import dayjs from 'dayjs'
 import relativeTime from 'dayjs/plugin/relativeTime'
 import { db } from '../../../../lib/firbase-client'
+import { useAuth } from '@/components/Base/AuthProvider'
 
 dayjs.extend(relativeTime)
 
 const { Title, Text } = Typography
 
-const MemberDetailDrawer = ({ member, visible, onClose, programList }) => {
+const MemberDetailDrawer = ({ member, visible, onClose, programList, onPaymentSuccess }) => {
+  const { user } = useAuth()
+  const [paymentForm] = Form.useForm()
+
   const [transactions,        setTransactions]        = useState([])
   const [closingTransactions, setClosingTransactions] = useState([])
   const [closingEntries,      setClosingEntries]       = useState([])
@@ -45,6 +50,108 @@ const MemberDetailDrawer = ({ member, visible, onClose, programList }) => {
   const [previewVisible,      setPreviewVisible]       = useState(false)
   const [previewImage,        setPreviewImage]          = useState('')
   const [activeTab,           setActiveTab]             = useState('overview')
+
+  // ── Quick Payment modal state ────────────────────────────────────────────────
+  const [paymentModalVisible, setPaymentModalVisible] = useState(false)
+  const [paymentType,         setPaymentType]         = useState('joinFee')   // 'joinFee' | 'closing'
+  const [paymentSubmitting,   setPaymentSubmitting]   = useState(false)
+  const [selectedClosingGroup, setSelectedClosingGroup] = useState(null)
+
+  const pendingClosingEntries = closingEntries.filter(e => e.status === 'pending' || e.status === 'partial')
+
+  const openPaymentModal = (type = 'joinFee') => {
+    setPaymentType(type)
+    setSelectedClosingGroup(null)
+    paymentForm.resetFields()
+    paymentForm.setFieldsValue({
+      paymentMode: 'cash',
+      paymentDate: dayjs(),
+      amount: type === 'joinFee' ? (member?.pendingAmount || 0) : 0,
+    })
+    setPaymentModalVisible(true)
+  }
+
+  const handlePaymentTypeChange = (type) => {
+    setPaymentType(type)
+    setSelectedClosingGroup(null)
+    paymentForm.setFieldsValue({
+      amount: type === 'joinFee' ? (member?.pendingAmount || 0) : 0,
+    })
+  }
+
+  const handleClosingGroupSelect = (groupId) => {
+    const entry = pendingClosingEntries.find(e => e.closingGroupId === groupId || e.id === groupId)
+    setSelectedClosingGroup(entry)
+    const pending = entry ? Math.max(0, (entry.totalAmount || 0) - (entry.paidAmount || 0)) : 0
+    paymentForm.setFieldsValue({ amount: pending })
+  }
+
+  const handleSubmitPayment = async () => {
+    try {
+      const values = await paymentForm.validateFields()
+      setPaymentSubmitting(true)
+
+      const auth = getAuth()
+      const token = await auth.currentUser?.getIdToken()
+      const headers = { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }
+
+      const paymentDate = values.paymentDate?.format('YYYY-MM-DD') || dayjs().format('YYYY-MM-DD')
+      const agentId = member?.agentId || ''
+
+      let res, data
+      if (paymentType === 'joinFee') {
+        res = await fetch('/api/join-fees-add', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            agentId,
+            totalAmount:    values.amount,
+            paymentMethod:  values.paymentMode,
+            paymentDate,
+            paymentNote:    values.paymentNote || '',
+            transactionId:  values.transactionId || '',
+            memberPayments: [{ memberId: member.id, memberName: member.displayName, amount: values.amount }],
+          }),
+        })
+      } else {
+        // Closing payment — requires a selected closing group
+        if (!selectedClosingGroup) { message.error('Please select a closing group'); setPaymentSubmitting(false); return }
+        const closingGroupId = selectedClosingGroup.closingGroupId || selectedClosingGroup.id?.split('_')[1]
+        res = await fetch('/api/closed_payment_update', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            agentId,
+            totalAmount:     values.amount,
+            paymentMethod:   values.paymentMode,
+            paymentDate,
+            paymentNote:     values.paymentNote || '',
+            transactionId:   values.transactionId || '',
+            closingPayments: [{ memberId: member.id, memberName: member.displayName, amount: values.amount, closingGroupId }],
+          }),
+        })
+      }
+
+      data = await res.json()
+      if (data.success) {
+        message.success(paymentType === 'joinFee' ? 'Join fee payment added!' : 'Closing payment added!')
+        setPaymentModalVisible(false)
+        // Refresh transactions in drawer
+        fetchTransactions()
+        fetchClosingTransactions()
+        fetchClosingEntries()
+        // Notify parent to refresh member row in table
+        if (onPaymentSuccess) onPaymentSuccess(member.id)
+      } else {
+        message.error(data.message || 'Payment failed')
+      }
+    } catch (err) {
+      if (err?.errorFields) return // form validation
+      message.error('Network error')
+    } finally {
+      setPaymentSubmitting(false)
+    }
+  }
 
 
   useEffect(() => {
@@ -358,6 +465,15 @@ const MemberDetailDrawer = ({ member, visible, onClose, programList }) => {
         destroyOnClose
         extra={
           <Space size={4}>
+            <Button
+              type="primary"
+              icon={<PlusOutlined />}
+              size="small"
+              style={{ background: '#52c41a', borderColor: '#52c41a' }}
+              onClick={() => openPaymentModal('joinFee')}
+            >
+              Add Payment
+            </Button>
             <PDFDownloadLink
               document={<MemberDetailsPdf member={member} />}
               fileName={`${member?.registrationNumber || 'member'}_details.pdf`}
@@ -660,6 +776,123 @@ const MemberDetailDrawer = ({ member, visible, onClose, programList }) => {
           </div>
         )}
       </Drawer>
+
+      {/* ── Quick Payment Modal ─────────────────────────────────────────────── */}
+      <Modal
+        open={paymentModalVisible}
+        title={
+          <div className="flex items-center gap-2">
+            <DollarOutlined style={{ color: '#52c41a' }} />
+            <span>Add Payment — {member?.displayName}</span>
+          </div>
+        }
+        onCancel={() => setPaymentModalVisible(false)}
+        onOk={handleSubmitPayment}
+        okText="Submit Payment"
+        okButtonProps={{ loading: paymentSubmitting, style: { background: '#52c41a', borderColor: '#52c41a' } }}
+        cancelText="Cancel"
+        width={500}
+        destroyOnClose
+      >
+        {/* Payment type selector */}
+        <div className="mb-4">
+          <Radio.Group
+            value={paymentType}
+            onChange={e => handlePaymentTypeChange(e.target.value)}
+            buttonStyle="solid"
+            style={{ width: '100%' }}
+          >
+            <Radio.Button value="joinFee" style={{ width: '50%', textAlign: 'center' }}>
+              <DollarOutlined /> Join Fee
+              {(member?.pendingAmount || 0) > 0 && (
+                <span className="ml-1 text-xs">(₹{(member?.pendingAmount || 0).toLocaleString()} pending)</span>
+              )}
+            </Radio.Button>
+            <Radio.Button value="closing" style={{ width: '50%', textAlign: 'center' }}
+              disabled={pendingClosingEntries.length === 0}>
+              <MoneyCollectOutlined /> Closing
+              {pendingClosingEntries.length > 0 && (
+                <span className="ml-1 text-xs">({pendingClosingEntries.length} pending)</span>
+              )}
+            </Radio.Button>
+          </Radio.Group>
+        </div>
+
+        <Form form={paymentForm} layout="vertical" size="small">
+          {/* Closing group selector — only for closing type */}
+          {paymentType === 'closing' && (
+            <Form.Item label="Select Closing Group" required>
+              <Select
+                placeholder="Choose a pending closing group"
+                onChange={handleClosingGroupSelect}
+                style={{ width: '100%' }}
+              >
+                {pendingClosingEntries.map(entry => {
+                  const groupId = entry.closingGroupId || entry.id?.split('_')[1]
+                  const pending = Math.max(0, (entry.totalAmount || 0) - (entry.paidAmount || 0))
+                  return (
+                    <Select.Option key={groupId} value={groupId}>
+                      <div className="flex justify-between items-center">
+                        <span>{entry.closingGroupName || groupId?.slice(-6)}</span>
+                        <span className="text-xs text-red-500 ml-2">₹{pending.toLocaleString()} pending</span>
+                      </div>
+                    </Select.Option>
+                  )
+                })}
+              </Select>
+            </Form.Item>
+          )}
+
+          {/* Join fee info */}
+          {paymentType === 'joinFee' && (member?.pendingAmount || 0) <= 0 && (
+            <div className="mb-3 p-2 bg-green-50 border border-green-200 rounded text-xs text-green-700">
+              ✓ Join fees are fully paid for this member.
+            </div>
+          )}
+
+          <Form.Item
+            name="amount"
+            label="Amount (₹)"
+            rules={[
+              { required: true, message: 'Amount is required' },
+              { type: 'number', min: 1, message: 'Amount must be > 0' },
+            ]}
+          >
+            <InputNumber
+              style={{ width: '100%' }}
+              min={1}
+              max={
+                paymentType === 'joinFee'
+                  ? (member?.pendingAmount || undefined)
+                  : selectedClosingGroup
+                    ? Math.max(0, (selectedClosingGroup.totalAmount || 0) - (selectedClosingGroup.paidAmount || 0))
+                    : undefined
+              }
+              formatter={v => `₹ ${v}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}
+              parser={v => v.replace(/₹\s?|(,*)/g, '')}
+            />
+          </Form.Item>
+
+          <Form.Item name="paymentMode" label="Payment Mode" rules={[{ required: true }]}>
+            <Radio.Group buttonStyle="solid">
+              <Radio.Button value="cash">💵 Cash</Radio.Button>
+              <Radio.Button value="online">📱 Online</Radio.Button>
+            </Radio.Group>
+          </Form.Item>
+
+          <Form.Item name="paymentDate" label="Payment Date" rules={[{ required: true }]}>
+            <DatePicker style={{ width: '100%' }} format="DD/MM/YYYY" disabledDate={d => d && d > dayjs()} />
+          </Form.Item>
+
+          <Form.Item name="transactionId" label="Transaction / UTR ID (optional)">
+            <Input placeholder="Enter UTR or reference ID" />
+          </Form.Item>
+
+          <Form.Item name="paymentNote" label="Note (optional)">
+            <Input placeholder="Any note about this payment" />
+          </Form.Item>
+        </Form>
+      </Modal>
 
       <Modal open={previewVisible} title="Document Preview" footer={null} onCancel={() => setPreviewVisible(false)} width={800} centered>
         {previewImage?.includes('.pdf') ? (

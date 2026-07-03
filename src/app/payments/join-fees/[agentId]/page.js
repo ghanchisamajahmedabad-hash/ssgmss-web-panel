@@ -3,6 +3,7 @@ import { fetchMembersByAgent } from '@/app/members/components/firebase-helpers';
 import { useParams, useSearchParams } from 'next/navigation';
 import React, { useEffect, useState, useMemo } from 'react';
 import { useSelector } from 'react-redux';
+import { useAuth } from '@/components/Base/AuthProvider';
 import {
   Table, Card, Tag, Button, Space, Typography, InputNumber, message,
   Row, Col, Avatar, Select, Checkbox, Empty, Radio, Input, Badge,
@@ -116,6 +117,8 @@ const MemberPaymentPage = () => {
   const searchParams = useSearchParams();
   const programList  = useSelector(s => s.data.programList);
   const agentList    = useSelector(s => s.data.agentList || []);
+  const { user }     = useAuth();
+  const isSuperAdmin = user?.role === 'superadmin';
 
   const agentId      = params?.agentId;
   const programId    = searchParams.get('programId');
@@ -810,6 +813,15 @@ const MemberPaymentPage = () => {
         selectedMember={selectedMemberForHistory}
         programList={programList}
         colors={C}
+        isSuperAdmin={isSuperAdmin}
+        onDeleteSuccess={(deletedTx) => {
+          setTransactionDetailVisible(false);
+          setSelectedTransaction(null);
+          // Remove transaction from the history list immediately (live update)
+          setMemberTransactions(prev => prev.filter(t => t.id !== deletedTx.id));
+          // Re-fetch member data so paidAmount/pendingAmount updates in the table
+          fetchMember();
+        }}
       />
       <PaymentConfirmationDrawer
         visible={isPaymentDrawerVisible}
