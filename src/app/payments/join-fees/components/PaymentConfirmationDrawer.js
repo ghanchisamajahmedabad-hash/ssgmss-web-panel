@@ -1,21 +1,20 @@
 import React from 'react';
 import {
   Drawer, Space, Typography, Card, Row, Col, Tag, Avatar,
-  Divider, List, Button, DatePicker, Input, Upload, Alert, Spin
+  Divider, List, Button, DatePicker, Input, Upload, Alert, Spin, Progress
 } from 'antd';
 import {
   UserOutlined, DollarCircleOutlined, CalendarOutlined,
-  UploadOutlined, ExclamationCircleOutlined, WalletOutlined,
+  UploadOutlined, ExclamationCircleOutlined,
   CheckCircleOutlined, ClockCircleOutlined
 } from '@ant-design/icons';
-import dayjs from 'dayjs';
 
 const { Title, Text } = Typography;
 const { TextArea }    = Input;
 
-// ─── Closing Payment Confirmation Drawer ──────────────────────────────────────
-// Used in: ClosingMemberPaymentPage
-// Member fields used: closing_pendingAmount, pendingClosingCount, programNames
+// ─── Join Fees Payment Confirmation Drawer ────────────────────────────────────
+// Used in: JoinFeesMemberPaymentPage (/payments/join-fees/[agentId])
+// Member fields used: pendingAmount, paidAmount, joinFees, paymentStatus
 // ─────────────────────────────────────────────────────────────────────────────
 const PaymentConfirmationDrawer = ({
   visible, onClose, onConfirm, uploading,
@@ -32,7 +31,7 @@ const PaymentConfirmationDrawer = ({
             <DollarCircleOutlined style={{ color:colors.primary, fontSize:20 }} />
           </div>
           <div>
-            <Title level={5} style={{ margin:0 }}>Confirm Closing Payment</Title>
+            <Title level={5} style={{ margin:0 }}>Confirm Join Fees Payment</Title>
             <Text type="secondary">Review before processing</Text>
           </div>
         </Space>
@@ -52,7 +51,7 @@ const PaymentConfirmationDrawer = ({
       {uploading ? (
         <div style={{ textAlign:'center', padding:'40px 0' }}>
           <Spin size="large" />
-          <div style={{ marginTop:16, color:colors.primary, fontWeight:600 }}>Processing payments...</div>
+          <div style={{ marginTop:16, color:colors.primary, fontWeight:600 }}>Processing join fee payments...</div>
         </div>
       ) : (
         <div style={{ padding:'8px 0' }}>
@@ -134,23 +133,29 @@ const PaymentConfirmationDrawer = ({
           {/* ── Note ── */}
           <div style={{ marginBottom:16 }}>
             <Text type="secondary">Note (Optional)</Text>
-            <TextArea rows={3} placeholder="Add any notes..." value={paymentNote}
+            <TextArea rows={3} placeholder="Add any notes about this payment..." value={paymentNote}
               onChange={e=>setPaymentNote(e.target.value)} style={{ marginTop:4 }} />
           </div>
 
           <Divider style={{ margin:'16px 0' }}>
-            <Tag color="purple">Members ({selectedMembersData.length})</Tag>
+            <Tag color="pink">Join Fees — {selectedMembersData?.length || 0} Members</Tag>
           </Divider>
 
           {/* ── Member list ── */}
           <List
             itemLayout="horizontal"
-            dataSource={selectedMembersData}
+            dataSource={selectedMembersData || []}
             renderItem={member => {
-              const amount  = parseFloat(memberPayments[member.id]) || 0;
-              // Use closing-specific fields
-              const pending = member.closing_pendingAmount || 0;
-              const after   = pending - amount;
+              const amount       = parseFloat(memberPayments?.[member.id]) || 0;
+              // Join fees specific fields
+              const pending      = Number(member.pendingAmount     || 0);
+              const paid         = Number(member.paidAmount        || 0);
+              const totalFees    = Number(member.joinFees          || 0);
+              const afterPending = Math.max(0, pending - amount);
+              const newPaid      = paid + amount;
+              const newPct       = totalFees > 0 ? Math.min(Math.round((newPaid / totalFees) * 100), 100) : 0;
+              const willClear    = afterPending === 0 && amount > 0;
+
               return (
                 <List.Item style={{ padding:'12px', marginBottom:8, background:colors.background, borderRadius:8, border:`1px solid ${colors.border}` }}>
                   <List.Item.Meta
@@ -162,31 +167,47 @@ const PaymentConfirmationDrawer = ({
                       </Space>
                     }
                     description={
-                      <Space size={4} wrap>
-                        {member.programNames && (
-                          <Tag color="geekblue" style={{ fontSize:11 }}>{member.programNames}</Tag>
-                        )}
-                        <Tag color="orange" style={{ fontSize:11 }}>
-                          Closing Pending: ₹{pending.toLocaleString()}
-                        </Tag>
-                        {member.pendingClosingCount > 0 && (
-                          <Tag icon={<ClockCircleOutlined/>} color="volcano" style={{ fontSize:11 }}>
-                            {member.pendingClosingCount} pending closing{member.pendingClosingCount!==1?'s':''}
+                      <div>
+                        <Space size={4} wrap style={{ marginBottom: 4 }}>
+                          {member.programName && (
+                            <Tag color="geekblue" style={{ fontSize:11 }}>{member.programName}</Tag>
+                          )}
+                          <Tag color="orange" style={{ fontSize:11 }}>
+                            Pending: ₹{pending.toLocaleString()}
                           </Tag>
+                          <Tag color="default" style={{ fontSize:11 }}>
+                            Total Fees: ₹{totalFees.toLocaleString()}
+                          </Tag>
+                          {willClear && (
+                            <Tag icon={<CheckCircleOutlined/>} color="success" style={{ fontSize:11 }}>Fully Paid</Tag>
+                          )}
+                        </Space>
+                        {/* Progress bar showing new paid % after this payment */}
+                        {totalFees > 0 && (
+                          <div style={{ marginTop: 4 }}>
+                            <Progress
+                              percent={newPct}
+                              size="small"
+                              strokeColor={willClear ? '#52c41a' : colors.primary}
+                              format={(p) => <span style={{ fontSize:10 }}>{p}%</span>}
+                            />
+                          </div>
                         )}
-                        {after === 0 && amount > 0 && (
-                          <Tag icon={<CheckCircleOutlined/>} color="success" style={{ fontSize:11 }}>Clears balance</Tag>
-                        )}
-                      </Space>
+                      </div>
                     }
                   />
-                  <div style={{ textAlign:'right', minWidth:80 }}>
-                    <Tag color="purple" style={{ fontSize:13, padding:'4px 12px' }}>
+                  <div style={{ textAlign:'right', minWidth:90 }}>
+                    <Tag color="pink" style={{ fontSize:13, padding:'4px 12px', fontWeight:600 }}>
                       ₹{amount.toLocaleString()}
                     </Tag>
-                    {after > 0 && (
+                    {afterPending > 0 && (
                       <div style={{ fontSize:10, color:colors.warning, marginTop:2 }}>
-                        Remaining: ₹{after.toLocaleString()}
+                        Still due: ₹{afterPending.toLocaleString()}
+                      </div>
+                    )}
+                    {willClear && (
+                      <div style={{ fontSize:10, color:'#52c41a', marginTop:2 }}>
+                        ✓ Balance cleared
                       </div>
                     )}
                   </div>
@@ -198,7 +219,7 @@ const PaymentConfirmationDrawer = ({
           {/* ── Footer summary ── */}
           <Card size="small" style={{ marginTop:16, background:colors.background }}>
             <Row justify="space-between">
-              <Col><Text type="secondary">Members</Text><div><Text strong>{selectedMembersData.length}</Text></div></Col>
+              <Col><Text type="secondary">Members</Text><div><Text strong>{selectedMembersData?.length || 0}</Text></div></Col>
               <Col><Text type="secondary">Total</Text><div><Text strong style={{ color:colors.primary }}>₹{totalPaymentAmount.toLocaleString()}</Text></div></Col>
               <Col>
                 <Text type="secondary">Method</Text>
@@ -207,7 +228,7 @@ const PaymentConfirmationDrawer = ({
             </Row>
           </Card>
 
-          <Alert message="This action will update member payment records and cannot be undone"
+          <Alert message="This action will update member join fee records and cannot be undone"
             type="warning" showIcon icon={<ExclamationCircleOutlined/>} style={{ marginTop:16 }} />
         </div>
       )}

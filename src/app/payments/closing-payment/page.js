@@ -1,6 +1,10 @@
 'use client';
-import React, { useState } from 'react';
-import { useSelector } from 'react-redux';
+import React, { useState, useEffect } from 'react';
+import { useSelector, useDispatch } from 'react-redux';
+import { useAuth } from '@/components/Base/AuthProvider';
+import { setAgentList } from '@/Redux/Slice/commonSlice';
+import { db } from '../../../../lib/firbase-client';
+import { doc, getDoc, collection, getDocs } from 'firebase/firestore';
 import {
   Table,
   Card,
@@ -62,6 +66,9 @@ import ClosingAgentDetailDrawer from './components/AgentDetailDrawer';
 };
 const ClosingPayment = () => {
   const router = useRouter();
+  const dispatch = useDispatch();
+  const { user } = useAuth();
+  const isSuperAdmin = user?.role === 'superadmin';
   const agentList = useSelector((state) => state.data.agentList || []);
   const programList = useSelector((state) => state.data.programList || []);
   
@@ -76,12 +83,26 @@ const ClosingPayment = () => {
   const [groupDetailVisible, setGroupDetailVisible] = useState(false);
 
   // Custom hook for payment history
-  const { 
-    paymentGroups, 
-    paymentTransactions, 
-    historyLoading, 
-    fetchPaymentGroups 
+  const {
+    paymentGroups,
+    paymentTransactions,
+    historyLoading,
+    fetchPaymentGroups
   } = useClosingPaymentHistory();
+
+  // Re-fetch agents from Firestore on mount so closing stats are always current
+  useEffect(() => {
+    const refreshAgents = async () => {
+      try {
+        const snap = await getDocs(collection(db, 'agents'));
+        const fresh = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        dispatch(setAgentList(fresh));
+      } catch (e) {
+        console.warn('closing-payment: failed to refresh agents', e.message);
+      }
+    };
+    refreshAgents();
+  }, []);
 
   console.log(agentList,'agentList')
 
@@ -111,6 +132,18 @@ const ClosingPayment = () => {
   const showGroupDetails = (group) => {
     setSelectedGroup(group);
     setGroupDetailVisible(true);
+  };
+
+  const refreshAgentInRedux = async (agentId) => {
+    if (!agentId) return;
+    try {
+      const snap = await getDoc(doc(db, 'agents', agentId));
+      if (!snap.exists()) return;
+      const fresh = { id: snap.id, ...snap.data() };
+      dispatch(setAgentList(agentList.map(a => (a.id === agentId || a.uid === agentId) ? { ...a, ...fresh } : a)));
+    } catch (e) {
+      console.warn('refreshAgentInRedux failed:', e.message);
+    }
   };
 
   const getStatusTag = (pending) => {
@@ -492,6 +525,19 @@ const ClosingPayment = () => {
         group={selectedGroup}
         programList={programList}
         colors={colors}
+        isSuperAdmin={isSuperAdmin}
+        onDeleteSuccess={(deletedGroupId, closeDrawer) => {
+          if (closeDrawer) {
+            setGroupDetailVisible(false);
+            setSelectedGroup(null);
+          }
+          if (selectedAgentForHistory?.uid) {
+            fetchPaymentGroups(selectedAgentForHistory.uid);
+          }
+          if (selectedAgentForHistory?.uid) {
+            refreshAgentInRedux(selectedAgentForHistory.uid);
+          }
+        }}
       />
 
       {/* Agent Detail Drawer */}

@@ -56,7 +56,7 @@ const ProgramSelection = ({
                 style={{ width: '100%' }}
                 value={joinDate}
                 onChange={joinDateLocked ? undefined : handleJoinDateChange}
-                disabledDate={current => current && current > dayjs().endOf('day')}
+                disabledDate={isSuperAdmin ? undefined : (current => current && current > dayjs().endOf('day'))}
                 disabled={joinDateLocked}
               />
             </Tooltip>

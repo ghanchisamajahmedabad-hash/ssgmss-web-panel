@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   Drawer,
   Space,
@@ -10,15 +10,18 @@ import {
   Divider,
   List,
   Avatar,
-  Button
+  Button,
+  Popconfirm,
+  message
 } from 'antd';
 import {
   FileTextOutlined,
   UserOutlined,
-  PrinterOutlined,
-  DownloadOutlined
+  DeleteOutlined,
+  WarningOutlined
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
+import { getAuth } from 'firebase/auth';
 
 const { Text } = Typography;
 
@@ -27,11 +30,43 @@ const ClosingGroupDetailDrawer = ({
   onClose,
   group,
   programList,
-  colors
+  colors,
+  isSuperAdmin,
+  onDeleteSuccess,
 }) => {
+  const [deleting, setDeleting] = useState(false);
   const formatDate = (date) => {
     if (!date) return 'N/A';
     return dayjs(date.toDate?.() || date).format('DD MMM YYYY, hh:mm A');
+  };
+
+  const handleDelete = async () => {
+    if (!group?.id) return;
+    setDeleting(true);
+    try {
+      const auth = getAuth();
+      const token = await auth.currentUser?.getIdToken();
+      const res = await fetch('/api/closing-fees-revert', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ paymentGroupId: group.id }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        message.success(data.message || 'Payment group reverted successfully');
+        onClose();
+        if (onDeleteSuccess) onDeleteSuccess(group.id, true);
+      } else {
+        message.error(data.message || 'Failed to revert payment group');
+      }
+    } catch (err) {
+      message.error('Network error while reverting payment');
+    } finally {
+      setDeleting(false);
+    }
   };
 
   if (!group) return null;
@@ -48,12 +83,32 @@ const ClosingGroupDetailDrawer = ({
       width={500}
       onClose={onClose}
       open={visible}
-    //   extra={
-    //     <Space>
-    //       <Button icon={<PrinterOutlined />}>Print</Button>
-    //       <Button type="primary" icon={<DownloadOutlined />}>Download</Button>
-    //     </Space>
-    //   }
+      extra={
+        isSuperAdmin && (
+          <Popconfirm
+            title="Delete this payment group?"
+            description={
+              <span>
+                This will <strong>permanently reverse</strong> all member payments in this group and cannot be undone.
+              </span>
+            }
+            icon={<WarningOutlined style={{ color: 'red' }} />}
+            onConfirm={handleDelete}
+            okText="Yes, Delete & Revert"
+            okButtonProps={{ danger: true, loading: deleting }}
+            cancelText="Cancel"
+          >
+            <Button
+              danger
+              icon={<DeleteOutlined />}
+              loading={deleting}
+              size="small"
+            >
+              Delete
+            </Button>
+          </Popconfirm>
+        )
+      }
     >
       <div>
         {/* Group Header */}

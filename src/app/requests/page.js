@@ -103,8 +103,9 @@ const Page = () => {
   const programList = useSelector((s) => s.data.programList)
   const agentList   = useSelector((s) => s.data.agentList)
   const { user }    = useAuth()
-const isSuperAdmin = (user) => user?.role === 'superadmin';
-  const usersPermissions = user?.permissions || {};
+  const isSuperAdmin = user?.role === 'superadmin'
+  const usersPermissions = user?.permissions || {}
+  const can = (key) => isSuperAdmin || !!usersPermissions?.actions?.[key]
   useEffect(() => { fetchAllData() }, [])
 
   const fetchAllData = async () => {
@@ -255,77 +256,61 @@ const isSuperAdmin = (user) => user?.role === 'superadmin';
       },
     },
     {
-      title: 'Actions', key: 'actions', width: 110, fixed: 'right',
-    render: (_, r) => (
-  <Space>
+      title: 'Actions', key: 'actions', width: 140, fixed: 'right',
+      render: (_, r) => (
+        <Space>
+          {/* 👁 VIEW */}
+          {can('view') && (
+            <Tooltip title="View">
+              <Button type="text" icon={<EyeOutlined />} size="small" onClick={() => handleViewMember(r)} />
+            </Tooltip>
+          )}
 
-    {/* 👁 VIEW */}
-    {(isSuperAdmin || usersPermissions?.actions?.view) && (
-      <Tooltip title="View">
-        <Button
-          type="text"
-          icon={<EyeOutlined />}
-          size="small"
-          onClick={() => handleViewMember(r)}
-        />
-      </Tooltip>
-    )}
+          {/* ✏️ EDIT — visible to superadmin + users with edit permission */}
+          {can('edit') && (
+            <Tooltip title="Edit Member">
+              <Button type="text" icon={<EditOutlined />} size="small" onClick={() => handleEditMember(r)} />
+            </Tooltip>
+          )}
 
-    {/* ✅ APPROVE */}
-    {usersPermissions?.actions?.approve && (
-      <Tooltip title="Approve">
-        <Button
-          type="text"
-          icon={<CheckCircleOutlined style={{ color: '#52c41a' }} />}
-          size="small"
-          onClick={() => handleApproveMember(r)}
-        />
-      </Tooltip>
-    )}
+          {/* ✅ APPROVE */}
+          {can('approve') && (
+            <Tooltip title="Approve">
+              <Button type="text" icon={<CheckCircleOutlined style={{ color: '#52c41a' }} />} size="small" onClick={() => handleApproveMember(r)} />
+            </Tooltip>
+          )}
 
-    {/* ⋮ MORE OPTIONS */}
-    {(usersPermissions?.actions?.edit ||
-      usersPermissions?.actions?.delete ||
-      usersPermissions?.actions?.reject) && (
-      <Dropdown
-        trigger={['click']}
-        menu={{
-          items: [
-            usersPermissions?.actions?.reject && {
-              key: 'reject',
-              label: 'Reject',
-              icon: <CloseCircleOutlined style={{ color: '#ff4d4f' }} />,
-              onClick: () => handleRejectMember(r),
-            },
-
-            usersPermissions?.actions?.edit && {
-              key: 'edit',
-              label: 'Edit',
-              icon: <EditOutlined />,
-              onClick: () => handleEditMember(r),
-            },
-
-            (usersPermissions?.actions?.edit &&
-              usersPermissions?.actions?.delete) && { type: 'divider' },
-
-            usersPermissions?.actions?.delete && {
-              key: 'delete',
-              label: 'Delete',
-              danger: true,
-              icon: <DeleteOutlined style={{ color: '#ff4d4f' }} />,
-              onClick: () => handleDeleteMember(r),
-            },
-          ].filter(Boolean), // 🚀 remove false/null items
-        }}
-      >
-        <Button type="text" icon={<MoreOutlined />} size="small" />
-      </Dropdown>
-    )}
-  </Space>
-)
+          {/* ⋮ MORE OPTIONS (reject / delete) */}
+          {(can('reject') || can('delete')) && (
+            <Dropdown
+              trigger={['click']}
+              menu={{
+                items: [
+                  can('reject') && {
+                    key: 'reject',
+                    label: 'Reject',
+                    icon: <CloseCircleOutlined style={{ color: '#ff4d4f' }} />,
+                    onClick: () => handleRejectMember(r),
+                  },
+                  can('reject') && can('delete') && { type: 'divider' },
+                  can('delete') && {
+                    key: 'delete',
+                    label: 'Delete',
+                    danger: true,
+                    icon: <DeleteOutlined style={{ color: '#ff4d4f' }} />,
+                    onClick: () => handleDeleteMember(r),
+                  },
+                ].filter(Boolean),
+              }}
+            >
+              <Button type="text" icon={<MoreOutlined />} size="small" />
+            </Dropdown>
+          )}
+        </Space>
+      ),
     },
   ]
-const can = (key) => isSuperAdmin || usersPermissions?.actions?.[key];
+
   // ── Rejected columns ────────────────────────────────────────────────────────
   const rejectedColumns = [
     { title: '#', key: 'idx', width: 50, render: (_, __, i) => i+1 },
@@ -348,61 +333,49 @@ const can = (key) => isSuperAdmin || usersPermissions?.actions?.[key];
         </Tooltip>
       ),
     },
-   {
-  title: 'Actions',
-  key: 'actions',
-  width: 90,
-  fixed: 'right',
-  render: (_, r) => {
-    
-    const menuItems = [
-      can('edit') && {
-        key: 'edit',
-        label: 'Edit',
-        icon: <EditOutlined />,
-        onClick: () => handleEditMember(r),
-      },
+    {
+      title: 'Actions',
+      key: 'actions',
+      width: 130,
+      fixed: 'right',
+      render: (_, r) => (
+        <Space>
+          {/* 👁 VIEW */}
+          {can('view') && (
+            <Tooltip title="View">
+              <Button type="text" icon={<EyeOutlined />} size="small" onClick={() => handleViewMember(r)} />
+            </Tooltip>
+          )}
 
-      can('edit') && can('delete') && { type: 'divider' },
+          {/* ✏️ EDIT — visible to superadmin + users with edit permission */}
+          {can('edit') && (
+            <Tooltip title="Edit Member">
+              <Button type="text" icon={<EditOutlined />} size="small" onClick={() => handleEditMember(r)} />
+            </Tooltip>
+          )}
 
-      can('delete') && {
-        key: 'delete',
-        label: 'Delete',
-        danger: true,
-        icon: <DeleteOutlined style={{ color: '#ff4d4f' }} />,
-        onClick: () => handleDeleteMember(r),
-      },
-    ].filter(Boolean); // 🔥 remove false items
-
-    return (
-      <Space>
-        
-        {/* 👁 VIEW */}
-        {can('view') && (
-          <Tooltip title="View">
-            <Button
-              type="text"
-              icon={<EyeOutlined />}
-              size="small"
-              onClick={() => handleViewMember(r)}
-            />
-          </Tooltip>
-        )}
-
-        {/* ⋮ DROPDOWN (only if items exist) */}
-        {menuItems.length > 0 && (
-          <Dropdown
-            trigger={['click']}
-            menu={{ items: menuItems }}
-          >
-            <Button type="text" icon={<MoreOutlined />} size="small" />
-          </Dropdown>
-        )}
-
-      </Space>
-    );
-  },
-}
+          {/* ⋮ DELETE (dropdown, only if has permission) */}
+          {can('delete') && (
+            <Dropdown
+              trigger={['click']}
+              menu={{
+                items: [
+                  {
+                    key: 'delete',
+                    label: 'Delete',
+                    danger: true,
+                    icon: <DeleteOutlined style={{ color: '#ff4d4f' }} />,
+                    onClick: () => handleDeleteMember(r),
+                  },
+                ],
+              }}
+            >
+              <Button type="text" icon={<MoreOutlined />} size="small" />
+            </Dropdown>
+          )}
+        </Space>
+      ),
+    },
   ]
 
   return (
