@@ -432,14 +432,23 @@ const handleDeleteMember = (member) => {
       render: (text) => <span className="text-sm">{text}</span>,
     },
     {
-      title: 'Agent', key: 'agent', width: 120,
+      title: 'Added By', key: 'agent', width: 130,
       render: (_, r) => {
-        const name = getAgentName(r.agentId)
+        // If added by agent — show agent name; if added by admin — show admin name from addedByName
+        const isAdmin = !r.agentId || r.addedBy === 'admin'
+        const name = isAdmin
+          ? (r.addedByName || 'Admin')
+          : getAgentName(r.agentId)
         return (
           <div className="text-xs">
             <div className="flex items-center gap-1">
-              <UserSwitchOutlined style={{ fontSize: '11px', color: '#1890ff' }} />
+              {isAdmin
+                ? <UserOutlined style={{ fontSize: '11px', color: '#722ed1' }} />
+                : <UserSwitchOutlined style={{ fontSize: '11px', color: '#1890ff' }} />}
               <span className="font-medium truncate" title={name}>{name}</span>
+            </div>
+            <div className="text-gray-400" style={{ fontSize: 9 }}>
+              {isAdmin ? 'Admin' : 'Agent'}
             </div>
           </div>
         )

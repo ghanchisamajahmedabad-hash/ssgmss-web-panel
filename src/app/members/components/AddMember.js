@@ -226,12 +226,29 @@ const AddMember = ({ open, setOpen, programs, agents, currentUser, onSuccess }) 
     else setCities([])
     form.setFieldsValue({ city: undefined })
   }
+
+  // ── Inline quick-add callbacks ─────────────────────────────────────────────
+  const handleDistrictAdded = (newDistrict) => {
+    setDistricts(prev => [...prev, newDistrict])
+    setSelectedDistrict(newDistrict.id)
+    form.setFieldsValue({ district: newDistrict.id, city: undefined })
+    setCities([])
+  }
+
+  const handleCityAdded = (newCity) => {
+    setCities(prev => [...prev, newCity])
+    form.setFieldsValue({ city: newCity.id })
+  }
+
+  const handleRelationAdded = (newRelation) => {
+    setRelations(prev => [...prev, newRelation])
+  }
   const handleAadhaarCheck   = async (aadhaar) => { try { return await checkAadhaarDuplicate(aadhaar) } catch { return null } }
 
   // ── Submit ─────────────────────────────────────────────────────────────────
   const onFormSubmit = async (values) => {
     const addedByName = addedByRole === 'admin'
-      ? currentUser?.displayName || 'Admin'
+      ? currentUser?.name || currentUser?.displayName || currentUser?.email || 'Admin'
       : agents.find(a => a.uid === selectedAgent)?.name || 'Unknown'
 
     const success = await handleSubmit(
@@ -313,9 +330,11 @@ const AddMember = ({ open, setOpen, programs, agents, currentUser, onSuccess }) 
               handleStateChange={handleStateChange}
               handleDistrictChange={handleDistrictChange}
               form={form}
+              onDistrictAdded={handleDistrictAdded}
+              onCityAdded={handleCityAdded}
             />
 
-            <GuardianForm relations={relations} />
+            <GuardianForm relations={relations} onRelationAdded={handleRelationAdded} />
 
             {/* ProgramSelection — single select props */}
             <ProgramSelection

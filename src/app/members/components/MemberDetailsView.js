@@ -593,6 +593,32 @@ const MemberDetailDrawer = ({ member, visible, onClose, programList, onPaymentSu
               </Col>
             </Row>
 
+            {/* Added By info */}
+            <Card size="small" title={<span className="text-sm"><SolutionOutlined className="text-indigo-600 mr-2" />Added By</span>}>
+              <div className="flex items-center gap-3">
+                <div className={`w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 ${member?.addedBy === 'admin' ? 'bg-purple-50' : 'bg-blue-50'}`}>
+                  {member?.addedBy === 'admin'
+                    ? <UserOutlined style={{ color: '#722ed1', fontSize: 16 }} />
+                    : <UserSwitchOutlined style={{ color: '#1890ff', fontSize: 16 }} />}
+                </div>
+                <div>
+                  <div className="font-bold text-base">
+                    {member?.addedByName || (member?.addedBy === 'admin' ? 'Admin' : 'Unknown')}
+                  </div>
+                  <div className="flex items-center gap-2 mt-0.5">
+                    <Tag color={member?.addedBy === 'admin' ? 'purple' : 'blue'} style={{ fontSize: 10, margin: 0 }}>
+                      {member?.addedBy === 'admin' ? 'Admin' : 'Agent'}
+                    </Tag>
+                    {member?.createdAt && (
+                      <span className="text-xs text-gray-400">
+                        {dayjs(member.createdAt?.toDate?.() || member.createdAt).format('DD MMM YYYY')}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </Card>
+
             {/* Program summary on overview */}
             <Card size="small" title={<span className="text-sm"><TrophyOutlined className="text-purple-600 mr-2" />Program</span>}>
               {renderProgramCard()}

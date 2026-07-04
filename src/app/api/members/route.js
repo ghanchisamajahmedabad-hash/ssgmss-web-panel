@@ -173,11 +173,17 @@ const removeMemberStats = async (memberInfo) => {
         totalClosingCount:      INC(-totalClosingCount),
         paidClosingCount:       INC(-paidClosingCount),
         pendingClosingCount:    INC(-pendingClosingCount),
-        [`programStats.${programId}.memberCount`]:          INC(-1),
-        [`programStats.${programId}.totalJoinFees`]:        INC(-joinFees),
-        [`programStats.${programId}.totalJoinFeesPaid`]:    INC(-paidAmount),
-        [`programStats.${programId}.totalJoinFeesPending`]: INC(-pendingAmount),
-        [`programStats.${programId}.lastUpdated`]:          STS(),
+        [`programStats.${programId}.memberCount`]:                  INC(-1),
+        [`programStats.${programId}.totalJoinFees`]:                INC(-joinFees),
+        [`programStats.${programId}.totalJoinFeesPaid`]:            INC(-paidAmount),
+        [`programStats.${programId}.totalJoinFeesPending`]:         INC(-pendingAmount),
+        [`programStats.${programId}.totalClosingAmount`]:           INC(-closing_totalAmount),
+        [`programStats.${programId}.totalClosingPaidAmount`]:       INC(-closing_paidAmount),
+        [`programStats.${programId}.totalClosingPendingAmount`]:    INC(-closing_pendingAmount),
+        [`programStats.${programId}.totalClosingCount`]:            INC(-totalClosingCount),
+        [`programStats.${programId}.paidClosingCount`]:             INC(-paidClosingCount),
+        [`programStats.${programId}.pendingClosingCount`]:          INC(-pendingClosingCount),
+        [`programStats.${programId}.lastUpdated`]:                  STS(),
         updated_at: STS()
       });
     }
@@ -194,6 +200,8 @@ const removeMemberStats = async (memberInfo) => {
       totalClosingPaidAmount:    INC(-closing_paidAmount),
       totalClosingPendingAmount: INC(-closing_pendingAmount),
       totalClosingCount:         INC(-totalClosingCount),
+      paidClosingCount:          INC(-paidClosingCount),
+      pendingClosingCount:       INC(-pendingClosingCount),
       updated_at:                STS()
     });
   }
@@ -208,6 +216,8 @@ const removeMemberStats = async (memberInfo) => {
     totalClosingPaidAmount:    INC(-closing_paidAmount),
     totalClosingPendingAmount: INC(-closing_pendingAmount),
     totalClosingCount:         INC(-totalClosingCount),
+    paidClosingCount:          INC(-paidClosingCount),
+    pendingClosingCount:       INC(-pendingClosingCount),
     updated_at:                STS()
   }, { merge: true });
 
