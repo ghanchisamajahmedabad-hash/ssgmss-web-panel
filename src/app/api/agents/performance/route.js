@@ -94,13 +94,16 @@ export async function GET(req) {
     });
 
     // ── 2. All-time pending requests per agent ────────────────────────────────
+    // NOTE: do NOT add .where('delete_flag', '!=', true) — Firestore inequality
+    // on a different field needs a composite index AND silently drops docs where
+    // the field doesn't exist. Filter in JS instead.
     const pendingSnap = await db.collection('members')
       .where('status', '==', 'pending_approval')
-      .where('delete_flag', '!=', true)
       .get();
     const pendingRequests = {};
     pendingSnap.forEach(d => {
       const m = d.data();
+      if (m.delete_flag === true) return; // skip deleted in JS
       if (m.agentId && agentMap[m.agentId])
         pendingRequests[m.agentId] = (pendingRequests[m.agentId] || 0) + 1;
     });
@@ -108,11 +111,11 @@ export async function GET(req) {
     // ── 3. All-time rejected per agent ────────────────────────────────────────
     const rejectedSnap = await db.collection('members')
       .where('status', '==', 'rejected')
-      .where('delete_flag', '!=', true)
       .get();
     const rejectedRequests = {};
     rejectedSnap.forEach(d => {
       const m = d.data();
+      if (m.delete_flag === true) return; // skip deleted in JS
       if (m.agentId && agentMap[m.agentId])
         rejectedRequests[m.agentId] = (rejectedRequests[m.agentId] || 0) + 1;
     });

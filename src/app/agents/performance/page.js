@@ -335,31 +335,83 @@ export default function AgentPerformance() {
       ),
     },
     {
-      title: 'Requests', key: 'requests', width: 210,
-      render: (_, r) => (
-        <Space size={4} wrap>
-          <Tooltip title="Approved (all time)">
-            <Tag icon={<CheckCircleOutlined />} color="success" style={{ borderRadius: 20, margin: 0 }}>
-              {num(r.lifetimeMembers)}
-            </Tag>
-          </Tooltip>
-          {r.pendingRequests > 0 && (
-            <Tooltip title="Waiting for approval">
-              <Tag icon={<ClockCircleOutlined />} color="warning" style={{ borderRadius: 20, margin: 0 }}>
-                {r.pendingRequests} pending
-              </Tag>
-            </Tooltip>
-          )}
-          {r.rejectedRequests > 0 && (
-            <Tooltip title="Rejected">
-              <Tag icon={<CloseCircleOutlined />} color="error" style={{ borderRadius: 20, margin: 0 }}>
-                {r.rejectedRequests}
-              </Tag>
-            </Tooltip>
-          )}
-          {r.approvalRate < 100 && <ApprovalBadge rate={r.approvalRate} />}
-        </Space>
-      ),
+      title: 'Member Requests',
+      key: 'requests',
+      width: 220,
+      sorter: (a, b) => (a.pendingRequests || 0) - (b.pendingRequests || 0),
+      render: (_, r) => {
+        const total = (r.lifetimeMembers || 0) + (r.pendingRequests || 0) + (r.rejectedRequests || 0)
+        return (
+          <div style={{
+            background: C.background, borderRadius: 8,
+            border: `1px solid ${C.border}`, padding: '6px 10px',
+          }}>
+            {/* Total submitted */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 5 }}>
+              <Text style={{ fontSize: 10, color: C.muted }}>Total Submitted</Text>
+              <Text strong style={{ fontSize: 11, color: C.foreground }}>{total}</Text>
+            </div>
+            {/* Three status pills */}
+            <div style={{ display: 'flex', gap: 4 }}>
+              <Tooltip title="Approved members (all time)">
+                <div style={{
+                  flex: 1, textAlign: 'center', borderRadius: 6, padding: '3px 0',
+                  background: C.success + '15', border: `1px solid ${C.success}40`,
+                }}>
+                  <div style={{ fontSize: 13, fontWeight: 800, color: C.success, lineHeight: 1.2 }}>
+                    {r.lifetimeMembers || 0}
+                  </div>
+                  <div style={{ fontSize: 9, color: C.success }}>Approved</div>
+                </div>
+              </Tooltip>
+              <Tooltip title="Awaiting approval">
+                <div style={{
+                  flex: 1, textAlign: 'center', borderRadius: 6, padding: '3px 0',
+                  background: r.pendingRequests > 0 ? C.warning + '20' : '#f5f5f5',
+                  border: `1px solid ${r.pendingRequests > 0 ? C.warning + '60' : '#e0e0e0'}`,
+                }}>
+                  <div style={{
+                    fontSize: 13, fontWeight: 800, lineHeight: 1.2,
+                    color: r.pendingRequests > 0 ? C.warning : C.muted,
+                  }}>
+                    {r.pendingRequests || 0}
+                  </div>
+                  <div style={{ fontSize: 9, color: r.pendingRequests > 0 ? C.warning : C.muted }}>Pending</div>
+                </div>
+              </Tooltip>
+              <Tooltip title="Rejected">
+                <div style={{
+                  flex: 1, textAlign: 'center', borderRadius: 6, padding: '3px 0',
+                  background: r.rejectedRequests > 0 ? C.error + '12' : '#f5f5f5',
+                  border: `1px solid ${r.rejectedRequests > 0 ? C.error + '40' : '#e0e0e0'}`,
+                }}>
+                  <div style={{
+                    fontSize: 13, fontWeight: 800, lineHeight: 1.2,
+                    color: r.rejectedRequests > 0 ? C.error : C.muted,
+                  }}>
+                    {r.rejectedRequests || 0}
+                  </div>
+                  <div style={{ fontSize: 9, color: r.rejectedRequests > 0 ? C.error : C.muted }}>Rejected</div>
+                </div>
+              </Tooltip>
+            </div>
+            {/* Approval rate bar */}
+            <div style={{ marginTop: 5 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 2 }}>
+                <Text style={{ fontSize: 9, color: C.muted }}>Approval Rate</Text>
+                <Text style={{ fontSize: 9, fontWeight: 700, color: r.approvalRate >= 70 ? C.success : C.warning }}>
+                  {r.approvalRate}%
+                </Text>
+              </div>
+              <Progress
+                percent={Math.min(r.approvalRate, 100)} size="small" showInfo={false}
+                strokeColor={r.approvalRate >= 70 ? C.success : r.approvalRate >= 40 ? C.warning : C.error}
+                trailColor="#e5e7eb"
+              />
+            </div>
+          </div>
+        )
+      },
     },
     {
       title: '', key: 'action', width: 48, fixed: 'right',
@@ -528,21 +580,34 @@ export default function AgentPerformance() {
                         </Col>
                       </Row>
 
-                      {/* Request badges */}
-                      {(agent.pendingRequests > 0 || agent.rejectedRequests > 0) && (
-                        <div style={{ marginTop: 8, display: 'flex', justifyContent: 'center', gap: 6, flexWrap: 'wrap' }}>
-                          {agent.pendingRequests > 0 && (
-                            <Tag icon={<ClockCircleOutlined />} color="warning" style={{ borderRadius: 20, margin: 0 }}>
-                              {agent.pendingRequests} pending
-                            </Tag>
-                          )}
-                          {agent.rejectedRequests > 0 && (
-                            <Tag icon={<CloseCircleOutlined />} color="error" style={{ borderRadius: 20, margin: 0 }}>
-                              {agent.rejectedRequests} rejected
-                            </Tag>
-                          )}
-                        </div>
-                      )}
+                      {/* Request summary mini-bar */}
+                      <div style={{ marginTop: 8, display: 'flex', gap: 4 }}>
+                        <Tooltip title="Approved members">
+                          <div style={{ flex: 1, textAlign: 'center', borderRadius: 6, padding: '3px 0',
+                            background: C.success + '15', border: `1px solid ${C.success}40` }}>
+                            <div style={{ fontSize: 11, fontWeight: 800, color: C.success }}>{agent.lifetimeMembers || 0}</div>
+                            <div style={{ fontSize: 8, color: C.success }}>Approved</div>
+                          </div>
+                        </Tooltip>
+                        <Tooltip title="Pending approval">
+                          <div style={{ flex: 1, textAlign: 'center', borderRadius: 6, padding: '3px 0',
+                            background: agent.pendingRequests > 0 ? C.warning + '20' : '#f5f5f5',
+                            border: `1px solid ${agent.pendingRequests > 0 ? C.warning + '60' : '#e0e0e0'}` }}>
+                            <div style={{ fontSize: 11, fontWeight: 800,
+                              color: agent.pendingRequests > 0 ? C.warning : C.muted }}>{agent.pendingRequests || 0}</div>
+                            <div style={{ fontSize: 8, color: agent.pendingRequests > 0 ? C.warning : C.muted }}>Pending</div>
+                          </div>
+                        </Tooltip>
+                        <Tooltip title="Rejected">
+                          <div style={{ flex: 1, textAlign: 'center', borderRadius: 6, padding: '3px 0',
+                            background: agent.rejectedRequests > 0 ? C.error + '12' : '#f5f5f5',
+                            border: `1px solid ${agent.rejectedRequests > 0 ? C.error + '40' : '#e0e0e0'}` }}>
+                            <div style={{ fontSize: 11, fontWeight: 800,
+                              color: agent.rejectedRequests > 0 ? C.error : C.muted }}>{agent.rejectedRequests || 0}</div>
+                            <div style={{ fontSize: 8, color: agent.rejectedRequests > 0 ? C.error : C.muted }}>Rejected</div>
+                          </div>
+                        </Tooltip>
+                      </div>
                     </Card>
                   </Col>
                 )
