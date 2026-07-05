@@ -325,7 +325,8 @@ export const handleSubmit = async (values, context, message) => {
     currentUser,
     form,
     setOpen,
-    setLoading
+    setLoading,
+    sendWhatsApp,
   } = context
 
   setLoading(true)
@@ -547,6 +548,35 @@ export const handleSubmit = async (values, context, message) => {
     await memberAccoiuntCreate({ ...memberData, id: memberId }, commissionPayload)
     await createClosingPayment({ ...memberData, id: memberId })
     message.success('Member added successfully!')
+
+    // ── Send WhatsApp welcome message ─────────────────────────────────────────
+    if (sendWhatsApp !== false && values.phone) {
+      const joinFeesText = selectedProgramDetail?.joinFees
+        ? `\n💰 Join Fees: ₹${selectedProgramDetail.joinFees}${actualPaidAmount > 0 ? `\n✅ Paid: ₹${actualPaidAmount}` : ''}${pendingAmount > 0 ? `\n⏳ Pending: ₹${pendingAmount}` : ''}`
+        : ''
+      const waMessage =
+        `🎉 Welcome to SSGMS!\n\n` +
+        `Dear *${values.name}*,\n` +
+        `Your membership has been successfully registered.\n\n` +
+        `📋 Member Details:\n` +
+        `• Name: ${values.name} ${values.fatherName || ''}\n` +
+        `• Reg. No: ${registrationNumber}\n` +
+        `• Program: ${selectedProgramDetail?.programName || ''}\n` +
+        `• Join Date: ${joinDate.format('DD-MM-YYYY')}` +
+        joinFeesText +
+        `\n\nThank you for joining us! 🙏\n_SSGMS Management_`
+
+      try {
+        await fetch('/api/whatsapp', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ phone: values.phone, message: waMessage }),
+        })
+      } catch (waErr) {
+        console.warn('WhatsApp send failed (non-critical):', waErr)
+      }
+    }
+
     // Notify agent
     const agentIdToNotify = addedByRole === 'agent' ? selectedAgent : memberData.agentId
     if (agentIdToNotify) {

@@ -10,17 +10,21 @@ export const processAgentStats = (agentList, programList) => {
         : 0,
     }));
 
-    const totalJoinFees = programs.reduce((s, p) => s + (p.totalJoinFees || 0), 0);
-    const totalPaid = programs.reduce((s, p) => s + (p.totalJoinFeesPaid || 0), 0);
-    const totalPending = programs.reduce((s, p) => s + (p.totalJoinFeesPending || 0), 0);
-    const totalMembers = programs.reduce((s, p) => s + (p.memberCount || 0), 0);
+    const totalJoinFeesFromStats   = programs.reduce((s, p) => s + (p.totalJoinFees        || 0), 0);
+    const totalPaidFromStats       = programs.reduce((s, p) => s + (p.totalJoinFeesPaid    || 0), 0);
+    const totalPendingFromStats    = programs.reduce((s, p) => s + (p.totalJoinFeesPending || 0), 0);
+    const totalMembers             = programs.reduce((s, p) => s + (p.memberCount          || 0), 0);
 
+    // Top-level agent fields (totalJoinFeesPaid, totalJoinFeesPending) are updated by
+    // MORE code paths (join-fees-add, adjust-stats, addMemberStats) and are reliable.
+    // programStats.{pid} fields may be stale (older payments skipped updating them).
+    // Use ?? so that a legitimate 0 doesn't fall through to the programStats sum.
     return {
       ...agent,
-      totalJoinFees: totalJoinFees || agent.totalJoinFees || 0,
-      totalJoinFeesPaid: totalPaid || agent.totalJoinFeesPaid || 0,
-      totalJoinFeesPending: totalPending || agent.totalJoinFeesPending || 0,
-      totalMembers,
+      totalJoinFees:        agent.totalJoinFees        ?? totalJoinFeesFromStats,
+      totalJoinFeesPaid:    agent.totalJoinFeesPaid    ?? totalPaidFromStats,
+      totalJoinFeesPending: agent.totalJoinFeesPending ?? totalPendingFromStats,
+      totalMembers:         totalMembers || (agent.memberCount || 0),
       programs,
     };
   });

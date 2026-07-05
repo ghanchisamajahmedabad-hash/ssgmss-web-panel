@@ -19,47 +19,64 @@ export async function POST(req) {
 
     const batch = db.batch();
 
+    const ts = admin.firestore.FieldValue.serverTimestamp();
+
     if (type === 'joinFees' || !type) {
       if (agentId) {
-        batch.set(db.collection('agents').doc(agentId), {
-          totalJoinFeesPaid: INC(delta),
+        // Update both top-level agent fields AND programStats.{pid} so that
+        // processAgentStats (which prefers programStats) shows correct numbers.
+        const agentUpdate = {
+          totalJoinFeesPaid:    INC(delta),
           totalJoinFeesPending: INC(-delta),
-          updated_at: admin.firestore.FieldValue.serverTimestamp(),
-        }, { merge: true });
+          updated_at:           ts,
+        };
+        if (programId) {
+          agentUpdate[`programStats.${programId}.totalJoinFeesPaid`]    = INC(delta);
+          agentUpdate[`programStats.${programId}.totalJoinFeesPending`] = INC(-delta);
+          agentUpdate[`programStats.${programId}.lastUpdated`]          = ts;
+        }
+        batch.set(db.collection('agents').doc(agentId), agentUpdate, { merge: true });
       }
       if (programId) {
         batch.set(db.collection('programs').doc(programId), {
-          totalJoinFeesPaid: INC(delta),
+          totalJoinFeesPaid:    INC(delta),
           totalJoinFeesPending: INC(-delta),
-          updated_at: admin.firestore.FieldValue.serverTimestamp(),
+          updated_at:           ts,
         }, { merge: true });
       }
       batch.set(db.collection('organizationStats').doc('current'), {
-        totalJoinFeesPaid: INC(delta),
+        totalJoinFeesPaid:    INC(delta),
         totalJoinFeesPending: INC(-delta),
-        updated_at: admin.firestore.FieldValue.serverTimestamp(),
+        updated_at:           ts,
       }, { merge: true });
     }
 
     if (type === 'closingPayment') {
       if (agentId) {
-        batch.set(db.collection('agents').doc(agentId), {
-          closing_paidAmount: INC(delta),
+        // Same: update both top-level and programStats closing fields.
+        const agentUpdate = {
+          closing_paidAmount:    INC(delta),
           closing_pendingAmount: INC(-delta),
-          updated_at: admin.firestore.FieldValue.serverTimestamp(),
-        }, { merge: true });
+          updated_at:            ts,
+        };
+        if (programId) {
+          agentUpdate[`programStats.${programId}.totalClosingPaidAmount`]    = INC(delta);
+          agentUpdate[`programStats.${programId}.totalClosingPendingAmount`] = INC(-delta);
+          agentUpdate[`programStats.${programId}.lastUpdated`]               = ts;
+        }
+        batch.set(db.collection('agents').doc(agentId), agentUpdate, { merge: true });
       }
       if (programId) {
         batch.set(db.collection('programs').doc(programId), {
-          totalClosingPaidAmount: INC(delta),
+          totalClosingPaidAmount:    INC(delta),
           totalClosingPendingAmount: INC(-delta),
-          updated_at: admin.firestore.FieldValue.serverTimestamp(),
+          updated_at:                ts,
         }, { merge: true });
       }
       batch.set(db.collection('organizationStats').doc('current'), {
-        totalClosingPaidAmount: INC(delta),
+        totalClosingPaidAmount:    INC(delta),
         totalClosingPendingAmount: INC(-delta),
-        updated_at: admin.firestore.FieldValue.serverTimestamp(),
+        updated_at:                ts,
       }, { merge: true });
     }
 

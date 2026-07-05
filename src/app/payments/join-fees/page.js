@@ -31,8 +31,11 @@ import {
   ArrowRightOutlined,
   HistoryOutlined,
   PhoneOutlined,
-  EnvironmentOutlined
+  EnvironmentOutlined,
+  SyncOutlined,
 } from '@ant-design/icons';
+import { message as antMessage } from 'antd';
+import { auth } from '../../../../lib/firbase-client';
 import { useRouter } from 'next/navigation';
 
 // Import custom components
@@ -70,6 +73,7 @@ const JoinFeesPage = () => {
   
   const [drawerAgent, setDrawerAgent] = useState(null);
   const [expandedRowKeys, setExpandedRowKeys] = useState([]);
+  const [syncing, setSyncing] = useState(false);
   
   // Payment History State
   const [historyDrawerVisible, setHistoryDrawerVisible] = useState(false);
@@ -142,6 +146,29 @@ const JoinFeesPage = () => {
       dispatch(setAgentList(agentList.map(a => (a.id === agentId || a.uid === agentId) ? { ...a, ...fresh } : a)));
     } catch (e) {
       console.warn('refreshAgentInRedux failed:', e.message);
+    }
+  };
+
+  // ── Recalculate all agent stats from member docs ─────────────────────────────
+  const handleSyncStats = async () => {
+    setSyncing(true);
+    try {
+      const token = await auth.currentUser?.getIdToken();
+      const res = await fetch('/api/agents/recalculate-stats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({}),
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.message);
+      antMessage.success(`Stats synced for ${data.results?.length || 0} agent(s)`);
+      // Refresh agents from Firestore to show updated numbers
+      const snap = await getDocs(collection(db, 'agents'));
+      dispatch(setAgentList(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
+    } catch (err) {
+      antMessage.error(`Sync failed: ${err.message}`);
+    } finally {
+      setSyncing(false);
     }
   };
 
@@ -426,21 +453,42 @@ const JoinFeesPage = () => {
           </Title>
           <Text type="secondary">Track and manage agent join fee payments across programs</Text>
         </div>
-        <Button
-          icon={<HistoryOutlined />}
-          onClick={() => router.push('/payments/history')}
-          style={{
-            background: colors.historyBtnBg,
-            border: 'none',
-            color: '#fff',
-            borderRadius: 8,
-            fontWeight: 600,
-            fontSize: 12,
-            height: 36,
-          }}
-        >
-          Payment History
-        </Button>
+        <Space>
+          {isSuperAdmin && (
+            <Tooltip title="Recalculate all agent stats from member data to fix any mismatch">
+              <Button
+                icon={<SyncOutlined spin={syncing} />}
+                loading={syncing}
+                onClick={handleSyncStats}
+                style={{
+                  borderColor: colors.primary,
+                  color: colors.primary,
+                  borderRadius: 8,
+                  fontWeight: 600,
+                  fontSize: 12,
+                  height: 36,
+                }}
+              >
+                Sync Stats
+              </Button>
+            </Tooltip>
+          )}
+          <Button
+            icon={<HistoryOutlined />}
+            onClick={() => router.push('/payments/history')}
+            style={{
+              background: colors.historyBtnBg,
+              border: 'none',
+              color: '#fff',
+              borderRadius: 8,
+              fontWeight: 600,
+              fontSize: 12,
+              height: 36,
+            }}
+          >
+            Payment History
+          </Button>
+        </Space>
       </div>
 
       {/* Summary Cards */}
