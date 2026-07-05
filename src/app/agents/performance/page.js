@@ -1,325 +1,595 @@
 "use client"
 import React, { useState, useEffect, useCallback } from 'react'
 import {
-  Card, Table, Tag, Select, Row, Col, Statistic, Avatar, Spin,
-  Typography, Space, Divider, Progress, Badge, Tooltip, message,
-  Grid, Tabs
+  Card, Table, Tag, Select, Row, Col, Avatar, Spin, Typography,
+  Space, Progress, Badge, Tooltip, message, Button, Divider, Empty, Alert
 } from 'antd'
 import {
   TrophyOutlined, UserOutlined, DollarOutlined, RiseOutlined,
-  TeamOutlined, WalletOutlined, PercentageOutlined,
-  FireOutlined, StarOutlined, CrownOutlined, GoldOutlined
+  TeamOutlined, WalletOutlined, PercentageOutlined, FireOutlined,
+  StarOutlined, CrownOutlined, GoldOutlined, CheckCircleOutlined,
+  ClockCircleOutlined, CloseCircleOutlined, ReloadOutlined,
+  PhoneOutlined, EnvironmentOutlined, InfoCircleOutlined,
+  SafetyCertificateOutlined, BarChartOutlined, ArrowRightOutlined,
 } from '@ant-design/icons'
 import { useAuth } from '@/components/Base/AuthProvider'
 import { auth } from '../../../../lib/firbase-client'
-
+import { useRouter } from 'next/navigation'
+import { Drawer } from 'antd'
 
 const { Title, Text } = Typography
-const { useBreakpoint } = Grid
 
-const periods = [
-  { label: 'Today',     value: 'daily' },
-  { label: 'This Week', value: 'weekly' },
+// ─── Project theme (matches join-fees and other pages) ───────────────────────
+const C = {
+  primary:    '#db2777',
+  secondary:  '#ea580c',
+  accent:     '#059669',
+  warning:    '#f59e0b',
+  success:    '#16a34a',
+  error:      '#dc2626',
+  info:       '#2563eb',
+  purple:     '#7c3aed',
+  background: '#fff8f5',
+  surface:    '#ffffff',
+  border:     '#fde2d8',
+  foreground: '#3e1f1a',
+  muted:      '#9ca3af',
+  textLight:  '#6b7280',
+}
+
+const RANK_MEDAL = [
+  { color: '#f59e0b', shadow: 'rgba(245,158,11,0.15)', icon: <CrownOutlined />,  label: '1st', bg: '#fffbeb', border: '#fcd34d' },
+  { color: '#94a3b8', shadow: 'rgba(148,163,184,0.15)', icon: <GoldOutlined />,  label: '2nd', bg: '#f8fafc', border: '#cbd5e1' },
+  { color: '#cd7c32', shadow: 'rgba(205,124,50,0.15)',  icon: <TrophyOutlined />,label: '3rd', bg: '#fefce8', border: '#d97706' },
+]
+
+const PERIODS = [
+  { label: 'Today',      value: 'daily'   },
+  { label: 'This Week',  value: 'weekly'  },
   { label: 'This Month', value: 'monthly' },
-  { label: 'This Year', value: 'yearly' },
-  { label: 'All Time',  value: 'all' },
+  { label: 'This Year',  value: 'yearly'  },
+  { label: 'All Time',   value: 'all'     },
 ]
 
-const metrics = [
-  { label: 'Overall Score',  value: 'overall',   icon: <StarOutlined /> },
-  { label: 'Members Joined', value: 'members',   icon: <TeamOutlined /> },
-  { label: 'Join Fees',      value: 'joinFees',  icon: <DollarOutlined /> },
-  { label: 'Closing Fees',   value: 'closing',   icon: <WalletOutlined /> },
-  { label: 'Commission',     value: 'commission',icon: <RiseOutlined /> },
-  { label: 'Efficiency',     value: 'efficiency',icon: <PercentageOutlined /> },
+const METRICS = [
+  { label: 'Overall Score',    value: 'overall',    icon: <StarOutlined />        },
+  { label: 'Members Joined',   value: 'members',    icon: <TeamOutlined />        },
+  { label: 'Join Fees',        value: 'joinFees',   icon: <DollarOutlined />      },
+  { label: 'Closing Fees',     value: 'closing',    icon: <WalletOutlined />      },
+  { label: 'Commission',       value: 'commission', icon: <RiseOutlined />        },
+  { label: 'Efficiency',       value: 'efficiency', icon: <PercentageOutlined />  },
+  { label: 'Pending Requests', value: 'requests',   icon: <ClockCircleOutlined /> },
 ]
 
-const rankColors = ['#FFD700', '#C0C0C0', '#CD7F32']
-const rankIcons   = [<CrownOutlined />, <GoldOutlined />, <FireOutlined />]
+const fmt = v => '₹' + (v || 0).toLocaleString('en-IN')
+const num = v => (v || 0).toLocaleString()
 
+// ─── Score ring ───────────────────────────────────────────────────────────────
+const ScoreRing = ({ score, size = 52 }) => {
+  const color = score >= 75 ? C.success : score >= 45 ? C.warning : C.secondary
+  return (
+    <Progress
+      type="circle"
+      percent={Math.min(score, 100)}
+      size={size}
+      strokeColor={color}
+      trailColor="#f0f0f0"
+      format={() => (
+        <span style={{ color: C.foreground, fontWeight: 800, fontSize: size * 0.22 }}>{score}</span>
+      )}
+    />
+  )
+}
+
+// ─── Approval badge ───────────────────────────────────────────────────────────
+const ApprovalBadge = ({ rate }) => {
+  const color = rate >= 80 ? C.success : rate >= 50 ? C.warning : C.error
+  return (
+    <Tooltip title={`${rate}% approval rate`}>
+      <Tag icon={<SafetyCertificateOutlined />} style={{
+        background: color + '15', border: `1px solid ${color}55`,
+        color, borderRadius: 20, fontWeight: 700, fontSize: 11, margin: 0
+      }}>
+        {rate}% approved
+      </Tag>
+    </Tooltip>
+  )
+}
+
+// ─── Agent detail drawer ──────────────────────────────────────────────────────
+const AgentDrawer = ({ agent, rank, onClose }) => {
+  if (!agent) return null
+  const medal = RANK_MEDAL[rank] || { color: C.primary, icon: <UserOutlined /> }
+  return (
+    <Drawer
+      open={!!agent}
+      onClose={onClose}
+      width={380}
+      title={
+        <Space>
+          <span style={{ color: medal.color, fontSize: 16 }}>{medal.icon}</span>
+          <Text strong style={{ color: C.foreground }}>{agent.name}</Text>
+        </Space>
+      }
+      styles={{ body: { background: C.background, padding: 16 } }}
+    >
+      {/* Avatar */}
+      <div style={{ textAlign: 'center', marginBottom: 16 }}>
+        <Avatar size={72} src={agent.photoUrl} icon={<UserOutlined />}
+          style={{ border: `3px solid ${medal.color}`, marginBottom: 8 }} />
+        <div><Text strong style={{ color: C.foreground, fontSize: 15 }}>{agent.name}</Text></div>
+        {agent.fatherName && <div><Text type="secondary" style={{ fontSize: 12 }}>S/o {agent.fatherName}</Text></div>}
+        <Space style={{ marginTop: 6 }} size={4}>
+          {agent.phone1 && <Tag icon={<PhoneOutlined />} style={{ borderRadius: 20 }}>{agent.phone1}</Tag>}
+          {agent.village && <Tag icon={<EnvironmentOutlined />} style={{ borderRadius: 20 }}>{agent.village}</Tag>}
+        </Space>
+      </div>
+
+      {/* Score */}
+      <div style={{ textAlign: 'center', marginBottom: 12 }}>
+        <ScoreRing score={agent.score} size={72} />
+        <div style={{ marginTop: 6 }}><Text type="secondary" style={{ fontSize: 11 }}>Performance Score</Text></div>
+      </div>
+
+      <Divider style={{ margin: '10px 0' }} />
+
+      {/* Period stats */}
+      <Card size="small" style={{ marginBottom: 10, borderColor: C.border, background: C.surface }}>
+        <Text strong style={{ color: C.primary, fontSize: 11, letterSpacing: 1 }}>PERIOD PERFORMANCE</Text>
+        <Row gutter={[8, 8]} style={{ marginTop: 8 }}>
+          {[
+            { label: 'Members',    value: num(agent.periodNewMembers),  color: C.info     },
+            { label: 'Join Fees',  value: fmt(agent.periodJoinFees),    color: C.success  },
+            { label: 'Closing',    value: fmt(agent.periodClosing),     color: C.purple   },
+            { label: 'Commission', value: fmt(agent.periodCommission),  color: C.warning  },
+          ].map(s => (
+            <Col span={12} key={s.label}>
+              <div style={{ background: C.background, borderRadius: 8, padding: '7px 10px', border: `1px solid ${C.border}` }}>
+                <div style={{ color: C.muted, fontSize: 10 }}>{s.label}</div>
+                <div style={{ color: s.color, fontWeight: 700, fontSize: 13 }}>{s.value}</div>
+              </div>
+            </Col>
+          ))}
+        </Row>
+      </Card>
+
+      {/* Request stats */}
+      <Card size="small" style={{ marginBottom: 10, borderColor: C.border, background: C.surface }}>
+        <Text strong style={{ color: C.secondary, fontSize: 11, letterSpacing: 1 }}>REQUEST OVERVIEW</Text>
+        {[
+          { label: 'Approved Members', value: num(agent.lifetimeMembers), color: C.success, icon: <CheckCircleOutlined /> },
+          { label: 'Pending Approval', value: num(agent.pendingRequests), color: C.warning, icon: <ClockCircleOutlined /> },
+          { label: 'Rejected',         value: num(agent.rejectedRequests),color: C.error,   icon: <CloseCircleOutlined /> },
+          { label: 'Approval Rate',    value: `${agent.approvalRate}%`,   color: agent.approvalRate >= 70 ? C.success : C.warning, icon: <SafetyCertificateOutlined /> },
+        ].map(s => (
+          <div key={s.label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', borderBottom: `1px solid ${C.border}` }}>
+            <Space size={6}>
+              <span style={{ color: s.color }}>{s.icon}</span>
+              <Text type="secondary" style={{ fontSize: 12 }}>{s.label}</Text>
+            </Space>
+            <Text strong style={{ color: s.color }}>{s.value}</Text>
+          </div>
+        ))}
+      </Card>
+
+      {/* Lifetime */}
+      <Card size="small" style={{ borderColor: C.border, background: C.surface }}>
+        <Text strong style={{ color: C.info, fontSize: 11, letterSpacing: 1 }}>LIFETIME TOTALS</Text>
+        {[
+          { label: 'Join Fees Paid',    value: fmt(agent.lifetimeJoinFeesPaid),    color: C.success  },
+          { label: 'Join Fees Pending', value: fmt(agent.lifetimeJoinFeesPending), color: C.secondary},
+          { label: 'Closing Paid',      value: fmt(agent.lifetimeClosingPaid),     color: C.purple   },
+          { label: 'Commission Earned', value: fmt(agent.lifetimeCommission),      color: C.warning  },
+          { label: 'Wallet Balance',    value: fmt(agent.walletBalance),           color: C.info     },
+          { label: 'Collection Rate',   value: `${agent.efficiency}%`,            color: agent.efficiency >= 70 ? C.success : C.warning },
+        ].map(s => (
+          <div key={s.label} style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: `1px solid ${C.border}` }}>
+            <Text type="secondary" style={{ fontSize: 12 }}>{s.label}</Text>
+            <Text strong style={{ color: s.color, fontSize: 12 }}>{s.value}</Text>
+          </div>
+        ))}
+      </Card>
+    </Drawer>
+  )
+}
+
+// ─── Main page ────────────────────────────────────────────────────────────────
 export default function AgentPerformance() {
-  const { user, can } = useAuth()
-  const screens = useBreakpoint()
-  const [period, setPeriod] = useState('monthly')
-  const [metric, setMetric] = useState('overall')
-  const [agents, setAgents] = useState([])
-  const [loading, setLoading] = useState(false)
-  const [dateRange, setDateRange] = useState(null)
-  const [top3Metric, setTop3Metric] = useState('overall')
+  const { user } = useAuth()
+  const router   = useRouter()
+  const [period,   setPeriod]   = useState('monthly')
+  const [metric,   setMetric]   = useState('overall')
+  const [agents,   setAgents]   = useState([])
+  const [summary,  setSummary]  = useState({})
+  const [loading,  setLoading]  = useState(false)
+  const [dateRange,setDateRange]= useState(null)
+  const [selected, setSelected] = useState(null)
+  const [selRank,  setSelRank]  = useState(null)
 
   const fetchData = useCallback(async () => {
+    if (!user) return
     setLoading(true)
     try {
       const token = await auth.currentUser?.getIdToken()
-      const res = await fetch(`/api/agents/performance?period=${period}&metric=${metric}`, {
-        headers: { 'Authorization': `Bearer ${token}` }
+      const res   = await fetch(`/api/agents/performance?period=${period}&metric=${metric}`, {
+        headers: { Authorization: `Bearer ${token}` },
       })
       const data = await res.json()
       if (data.success) {
-        setAgents(data.agents)
+        setAgents(data.agents || [])
+        setSummary(data.summary || {})
         setDateRange(data.dateRange)
       } else {
-        message.error(data.message)
+        message.error(data.message || 'Failed to load')
       }
-    } catch (e) {
-      console.error(e)
+    } catch {
       message.error('Failed to fetch performance data')
     } finally {
       setLoading(false)
     }
   }, [period, metric, user])
 
-  useEffect(() => { if (user) fetchData() }, [fetchData, user])
+  useEffect(() => { fetchData() }, [fetchData])
 
-  const getMetricValue = (agent, key) => {
-    switch (key) {
-      case 'overall': return agent.score || 0
-      case 'members': return agent.periodNewMembers || 0
-      case 'joinFees': return agent.periodJoinFees || 0
-      case 'closing': return agent.periodClosing || 0
-      case 'commission': return agent.periodCommission || 0
-      case 'efficiency': return agent.efficiency || 0
-      default: return agent.score || 0
-    }
-  }
+  const topAgents = agents.slice(0, 3)
 
-  const getMetricSuffix = (key) => {
-    switch (key) {
-      case 'members': return ' members'
-      case 'efficiency': return '%'
-      default: return ''
-    }
-  }
+  // ── KPI cards ─────────────────────────────────────────────────────────────
+  const kpiCards = [
+    { label: 'Total Agents',     value: num(summary.totalAgents),           color: C.info,      icon: <TeamOutlined />        },
+    { label: 'Members Added',    value: num(summary.totalNewMembers),        color: C.success,   icon: <UserOutlined />        },
+    { label: 'Join Fees',        value: fmt(summary.totalJoinFees),          color: C.primary,   icon: <DollarOutlined />      },
+    { label: 'Closing Fees',     value: fmt(summary.totalClosing),           color: C.purple,    icon: <WalletOutlined />      },
+    { label: 'Commission',       value: fmt(summary.totalCommission),        color: C.warning,   icon: <RiseOutlined />        },
+    { label: 'Pending Requests', value: num(summary.totalPendingRequests),   color: C.secondary, icon: <ClockCircleOutlined /> },
+  ]
 
-  const formatCurrency = (val) => {
-    if (!val && val !== 0) return '—'
-    return '₹' + val.toLocaleString('en-IN')
-  }
-
-  // Top agents for the hero section
-  const topAgents = [...agents].sort((a, b) => (b.score || 0) - (a.score || 0)).slice(0, 3)
-
+  // ── Table columns ─────────────────────────────────────────────────────────
   const columns = [
     {
-      title: '#', key: 'rank', width: 60,
-      render: (_, __, idx) => (
-        <Space>
-          {idx < 3 ? (
-            <Avatar size={28} style={{ backgroundColor: rankColors[idx], color: '#000' }}>
-              {rankIcons[idx]}
-            </Avatar>
-          ) : (
-            <Text strong style={{ width: 28, textAlign: 'center', display: 'inline-block' }}>
-              {idx + 1}
-            </Text>
-          )}
-        </Space>
-      )
+      title: '#', key: 'rank', width: 56, fixed: 'left',
+      render: (_, __, idx) => {
+        if (idx < 3) {
+          const m = RANK_MEDAL[idx]
+          return (
+            <div style={{
+              width: 32, height: 32, borderRadius: '50%',
+              background: m.color + '22', border: `2px solid ${m.color}`,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              color: m.color, fontSize: 14,
+            }}>{m.icon}</div>
+          )
+        }
+        return <Text strong style={{ color: C.muted, paddingLeft: 4 }}>{idx + 1}</Text>
+      },
     },
     {
-      title: 'Agent', dataIndex: 'name', key: 'name', width: 220,
-      render: (name, r) => (
+      title: 'Agent', key: 'agent', width: 220, fixed: 'left',
+      render: (_, r, idx) => (
         <Space>
-          <Avatar src={r.photoUrl} icon={<UserOutlined />} />
+          <div style={{ position: 'relative', cursor: 'pointer' }}
+            onClick={() => { setSelected(r); setSelRank(idx) }}>
+            <Avatar size={40} src={r.photoUrl} icon={<UserOutlined />}
+              style={{ border: `2px solid ${RANK_MEDAL[idx]?.border || C.border}` }} />
+            {r.pendingRequests > 0 && (
+              <Badge count={r.pendingRequests} size="small"
+                style={{ position: 'absolute', top: -4, right: -4, background: C.secondary }} />
+            )}
+          </div>
           <div>
-            <Text strong>{name}</Text>
-            <div><Text type="secondary" style={{ fontSize: 11 }}>{r.village}{r.village && r.district ? ', ' : ''}{r.district}</Text></div>
+            <Text strong style={{ color: C.foreground, fontSize: 13, cursor: 'pointer' }}
+              onClick={() => { setSelected(r); setSelRank(idx) }}>{r.name}</Text>
+            <div>
+              <Text type="secondary" style={{ fontSize: 11 }}>
+                {r.village}{r.village && r.district ? ', ' : ''}{r.district}
+              </Text>
+            </div>
           </div>
         </Space>
-      )
+      ),
     },
     {
-      title: 'Members Joined', dataIndex: 'periodNewMembers', key: 'members', width: 140, align: 'center',
-      render: (val) => <Text strong style={{ fontSize: 16 }}>{val || 0}</Text>,
+      title: 'Score', key: 'score', width: 90, align: 'center',
+      defaultSortOrder: 'descend',
+      sorter: (a, b) => (a.score || 0) - (b.score || 0),
+      render: (_, r) => <ScoreRing score={r.score} size={44} />,
+    },
+    {
+      title: 'Members', dataIndex: 'periodNewMembers', key: 'members', width: 100, align: 'center',
       sorter: (a, b) => (a.periodNewMembers || 0) - (b.periodNewMembers || 0),
+      render: v => (
+        <div>
+          <div style={{ fontWeight: 800, fontSize: 20, color: C.info, lineHeight: 1 }}>{v || 0}</div>
+          <div style={{ fontSize: 10, color: C.muted }}>this period</div>
+        </div>
+      ),
     },
     {
-      title: 'Join Fees', dataIndex: 'periodJoinFees', key: 'joinFees', width: 140, align: 'right',
-      render: (val) => <Text strong style={{ color: '#1890ff' }}>{formatCurrency(val)}</Text>,
+      title: 'Join Fees', dataIndex: 'periodJoinFees', key: 'joinFees', width: 130, align: 'right',
       sorter: (a, b) => (a.periodJoinFees || 0) - (b.periodJoinFees || 0),
+      render: v => <Text strong style={{ color: C.success }}>{fmt(v)}</Text>,
     },
     {
-      title: 'Closing Paid', dataIndex: 'periodClosing', key: 'closing', width: 140, align: 'right',
-      render: (val) => <Text strong style={{ color: '#52c41a' }}>{formatCurrency(val)}</Text>,
+      title: 'Closing', dataIndex: 'periodClosing', key: 'closing', width: 130, align: 'right',
       sorter: (a, b) => (a.periodClosing || 0) - (b.periodClosing || 0),
+      render: v => <Text strong style={{ color: C.purple }}>{fmt(v)}</Text>,
     },
     {
-      title: 'Commission', dataIndex: 'periodCommission', key: 'commission', width: 140, align: 'right',
-      render: (val) => <Text strong style={{ color: '#fa8c16' }}>{formatCurrency(val)}</Text>,
+      title: 'Commission', dataIndex: 'periodCommission', key: 'commission', width: 130, align: 'right',
       sorter: (a, b) => (a.periodCommission || 0) - (b.periodCommission || 0),
+      render: v => <Text strong style={{ color: C.warning }}>{fmt(v)}</Text>,
     },
     {
-      title: 'Efficiency', dataIndex: 'efficiency', key: 'efficiency', width: 160,
-      render: (val) => (
-        <Tooltip title={`${val}% collection rate`}>
-          <Progress percent={Math.min(val, 100)} size="small" strokeColor={val >= 80 ? '#52c41a' : val >= 50 ? '#faad14' : '#ff4d4f'} />
+      title: 'Collection %', dataIndex: 'efficiency', key: 'efficiency', width: 150,
+      sorter: (a, b) => (a.efficiency || 0) - (b.efficiency || 0),
+      render: v => (
+        <Tooltip title={`${v}% collection efficiency`}>
+          <div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
+              <Text type="secondary" style={{ fontSize: 11 }}>Efficiency</Text>
+              <Text strong style={{ fontSize: 11, color: v >= 80 ? C.success : v >= 50 ? C.warning : C.error }}>{v}%</Text>
+            </div>
+            <Progress percent={Math.min(v, 100)} size="small" showInfo={false}
+              strokeColor={v >= 80 ? C.success : v >= 50 ? C.warning : C.error} />
+          </div>
         </Tooltip>
       ),
-      sorter: (a, b) => (a.efficiency || 0) - (b.efficiency || 0),
     },
     {
-      title: 'Score', dataIndex: 'score', key: 'score', width: 110, align: 'center',
-      render: (val, r) => {
-        const color = val >= 80 ? '#52c41a' : val >= 50 ? '#faad14' : '#ff4d4f'
-        return (
-          <Badge count={<Text style={{ color, fontWeight: 700, fontSize: 15 }}>{val || 0}</Text>} />
-        )
-      },
-      defaultSortOrder: 'descend',
-      sorter: { compare: (a, b) => (a.score || 0) - (b.score || 0) },
-    },
-  ]
-
-  const top3Columns = [
-    {
-      title: 'Metric', dataIndex: 'label', key: 'label', width: 120,
-    },
-    ...topAgents.map((agent, i) => ({
-      title: (
-        <Space size={4}>
-          <Avatar src={agent.photoUrl} icon={<UserOutlined />} size={20} />
-          <Text strong>{i + 1}. {agent.name}</Text>
+      title: 'Requests', key: 'requests', width: 210,
+      render: (_, r) => (
+        <Space size={4} wrap>
+          <Tooltip title="Approved (all time)">
+            <Tag icon={<CheckCircleOutlined />} color="success" style={{ borderRadius: 20, margin: 0 }}>
+              {num(r.lifetimeMembers)}
+            </Tag>
+          </Tooltip>
+          {r.pendingRequests > 0 && (
+            <Tooltip title="Waiting for approval">
+              <Tag icon={<ClockCircleOutlined />} color="warning" style={{ borderRadius: 20, margin: 0 }}>
+                {r.pendingRequests} pending
+              </Tag>
+            </Tooltip>
+          )}
+          {r.rejectedRequests > 0 && (
+            <Tooltip title="Rejected">
+              <Tag icon={<CloseCircleOutlined />} color="error" style={{ borderRadius: 20, margin: 0 }}>
+                {r.rejectedRequests}
+              </Tag>
+            </Tooltip>
+          )}
+          {r.approvalRate < 100 && <ApprovalBadge rate={r.approvalRate} />}
         </Space>
       ),
-      dataIndex: agent.id, key: agent.id, align: 'right',
-      render: (val) => {
-        if (val === undefined || val === null) return '—'
-        if (top3Metric === 'efficiency') return `${val.toFixed(1)}%`
-        if (top3Metric === 'members') return val
-        return formatCurrency(val)
-      }
-    }))
-  ]
-
-  const top3Data = [
-    { label: 'Score', ...Object.fromEntries(topAgents.map(a => [a.id, a.score || 0])) },
-    { label: 'Members Joined', ...Object.fromEntries(topAgents.map(a => [a.id, a.periodNewMembers || 0])) },
-    { label: 'Join Fees', ...Object.fromEntries(topAgents.map(a => [a.id, a.periodJoinFees || 0])) },
-    { label: 'Closing Paid', ...Object.fromEntries(topAgents.map(a => [a.id, a.periodClosing || 0])) },
-    { label: 'Commission', ...Object.fromEntries(topAgents.map(a => [a.id, a.periodCommission || 0])) },
-    { label: 'Efficiency', ...Object.fromEntries(topAgents.map(a => [a.id, (a.efficiency || 0).toFixed(1)])) },
+    },
+    {
+      title: '', key: 'action', width: 48, fixed: 'right',
+      render: (_, r, idx) => (
+        <Button type="text" size="small" icon={<InfoCircleOutlined />}
+          style={{ color: C.primary }}
+          onClick={() => { setSelected(r); setSelRank(idx) }} />
+      ),
+    },
   ]
 
   return (
-    <div style={{ padding: screens.xs ? 12 : 24 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12, marginBottom: 20 }}>
-        <Title level={3} style={{ margin: 0 }}>
-          <TrophyOutlined style={{ color: '#faad14', marginRight: 8 }} />
-          Agent Performance Rankings
-        </Title>
+    <div style={{ padding: 20, background: C.background, minHeight: '100vh' }}>
+
+      {/* ── Header ───────────────────────────────────────────────────────── */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start',
+        flexWrap: 'wrap', gap: 12, marginBottom: 20 }}>
+        <div>
+          <Title level={3} style={{
+            margin: 0,
+            background: `linear-gradient(135deg, ${C.primary}, ${C.secondary})`,
+            WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent',
+          }}>
+            <TrophyOutlined style={{ WebkitTextFillColor: C.warning, marginRight: 8 }} />
+            Agent Performance Rankings
+          </Title>
+          {dateRange && (
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              {new Date(dateRange.start).toLocaleDateString('en-IN', { day:'numeric', month:'short', year:'numeric' })}
+              {' – '}
+              {new Date(dateRange.end).toLocaleDateString('en-IN', { day:'numeric', month:'short', year:'numeric' })}
+            </Text>
+          )}
+        </div>
         <Space wrap>
-          <Select
-            value={period}
-            onChange={setPeriod}
-            options={periods}
-            style={{ width: 140 }}
-          />
-          <Select
-            value={metric}
-            onChange={setMetric}
-            options={metrics}
-            style={{ width: 180 }}
-          />
+          <Select value={period} onChange={setPeriod} options={PERIODS} style={{ width: 140 }} />
+          <Select value={metric} onChange={setMetric} style={{ width: 190 }}
+            options={METRICS.map(m => ({ label: <Space size={6}>{m.icon}<span>{m.label}</span></Space>, value: m.value }))} />
+          <Button icon={<ReloadOutlined />} onClick={fetchData} loading={loading}
+            style={{ borderColor: C.primary, color: C.primary }}>
+            Refresh
+          </Button>
         </Space>
       </div>
 
-      {dateRange && (
-        <Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
-          Period: {new Date(dateRange.start).toLocaleDateString()} – {new Date(dateRange.end).toLocaleDateString()}
-        </Text>
-      )}
-
       <Spin spinning={loading}>
 
+        {/* ── Pending requests alert ───────────────────────────────────────── */}
+        {(summary.totalPendingRequests || 0) > 0 && (
+          <Alert
+            type="warning"
+            showIcon
+            message={`${summary.totalPendingRequests} member request(s) are awaiting approval across all agents`}
+            action={
+              <Button size="small" type="link" icon={<ArrowRightOutlined />}
+                onClick={() => router.push('/requests')} style={{ color: C.secondary }}>
+                Review
+              </Button>
+            }
+            style={{ marginBottom: 16, borderRadius: 8 }}
+          />
+        )}
+
+        {/* ── KPI summary ──────────────────────────────────────────────────── */}
+        <Row gutter={[12, 12]} style={{ marginBottom: 20 }}>
+          {kpiCards.map((k, i) => (
+            <Col xs={12} sm={8} md={4} key={i}>
+              <Card size="small" style={{ border: `1px solid ${C.border}`, borderRadius: 10, background: C.surface }} bodyStyle={{ padding: '12px 14px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <div style={{
+                    width: 34, height: 34, borderRadius: 8,
+                    background: k.color + '18',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    color: k.color, fontSize: 15, flexShrink: 0,
+                  }}>{k.icon}</div>
+                  <div>
+                    <div style={{ fontSize: 10, color: C.muted, lineHeight: 1.3 }}>{k.label}</div>
+                    <div style={{ fontSize: 15, fontWeight: 800, color: k.color, lineHeight: 1.3 }}>{k.value}</div>
+                  </div>
+                </div>
+              </Card>
+            </Col>
+          ))}
+        </Row>
+
+        {/* ── Top 3 Podium ─────────────────────────────────────────────────── */}
         {topAgents.length > 0 && (
-          <>
-            <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
+          <div style={{ marginBottom: 20 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+              <CrownOutlined style={{ color: C.warning, fontSize: 16 }} />
+              <Text strong style={{ fontSize: 15, color: C.foreground }}>Top Performers</Text>
+            </div>
+            <Row gutter={[16, 16]}>
               {topAgents.map((agent, i) => {
-                const metricVal = getMetricValue(agent, top3Metric)
-                const maxVal = Math.max(1, ...topAgents.map(a => getMetricValue(a, top3Metric)))
-                const pct = (metricVal / maxVal) * 100
+                const m = RANK_MEDAL[i]
                 return (
                   <Col xs={24} sm={8} key={agent.id}>
                     <Card
                       hoverable
+                      onClick={() => { setSelected(agent); setSelRank(i) }}
                       style={{
-                        borderTop: `4px solid ${rankColors[i]}`,
-                        textAlign: 'center',
-                        boxShadow: i === 0 ? '0 4px 12px rgba(255,215,0,0.3)' : undefined,
+                        borderTop: `4px solid ${m.color}`,
+                        borderColor: m.border,
+                        borderRadius: 12,
+                        background: m.bg,
+                        boxShadow: `0 4px 16px ${m.shadow}`,
+                        cursor: 'pointer',
                       }}
+                      bodyStyle={{ padding: '16px 14px', textAlign: 'center' }}
                     >
-                      <Avatar
-                        size={64}
-                        src={agent.photoUrl}
-                        icon={<UserOutlined />}
-                        style={{ border: `3px solid ${rankColors[i]}`, marginBottom: 8 }}
-                      />
-                      <div>
-                        <Space>
-                          {rankIcons[i]}
-                          <Text strong style={{ fontSize: 16 }}>{agent.name}</Text>
-                        </Space>
+                      {/* Rank badge */}
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                        <div style={{
+                          width: 28, height: 28, borderRadius: '50%',
+                          background: m.color, display: 'flex', alignItems: 'center',
+                          justifyContent: 'center', color: '#fff', fontSize: 13,
+                        }}>{m.icon}</div>
+                        <Tag style={{ background: m.color + '22', borderColor: m.color, color: m.color, borderRadius: 20, fontWeight: 700 }}>
+                          #{i + 1}
+                        </Tag>
                       </div>
-                      <Text type="secondary" style={{ fontSize: 12 }}>{agent.village}</Text>
-                      <Divider style={{ margin: '8px 0' }} />
-                      <Progress
-                        type="dashboard"
-                        percent={Math.round(pct)}
-                        size={80}
-                        strokeColor={rankColors[i]}
-                        format={() => (
-                          <div>
-                            <div style={{ fontSize: 18, fontWeight: 700, lineHeight: 1.2 }}>{metricVal}</div>
-                            <div style={{ fontSize: 9, lineHeight: 1.2 }}>{metrics.find(m => m.value === top3Metric)?.label}</div>
+
+                      <Avatar size={60} src={agent.photoUrl} icon={<UserOutlined />}
+                        style={{ border: `3px solid ${m.color}`, marginBottom: 8 }} />
+
+                      <div style={{ marginBottom: 2 }}>
+                        <Text strong style={{ color: C.foreground, fontSize: 14 }}>{agent.name}</Text>
+                      </div>
+                      <Text type="secondary" style={{ fontSize: 11 }}>
+                        {agent.village}{agent.village && agent.district ? ', ' : ''}{agent.district}
+                      </Text>
+
+                      <Divider style={{ borderColor: m.color + '40', margin: '10px 0' }} />
+
+                      <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 10 }}>
+                        <ScoreRing score={agent.score} size={60} />
+                      </div>
+
+                      <Row gutter={[6, 6]}>
+                        <Col span={12}>
+                          <div style={{ background: C.surface, borderRadius: 8, padding: '6px 8px', border: `1px solid ${C.border}` }}>
+                            <div style={{ fontSize: 9, color: C.muted }}>Members</div>
+                            <div style={{ fontWeight: 800, color: C.info, fontSize: 16 }}>{agent.periodNewMembers}</div>
                           </div>
-                        )}
-                      />
-                      <div style={{ marginTop: 8 }}>
-                        <Space size={12} wrap style={{ justifyContent: 'center' }}>
-                          <Statistic title="Members" value={agent.periodNewMembers || 0} prefix={<TeamOutlined />} valueStyle={{ fontSize: 14 }} />
-                          <Statistic title="Commission" value={agent.periodCommission || 0} prefix="₹" valueStyle={{ fontSize: 14, color: '#fa8c16' }} />
-                        </Space>
-                      </div>
+                        </Col>
+                        <Col span={12}>
+                          <div style={{ background: C.surface, borderRadius: 8, padding: '6px 8px', border: `1px solid ${C.border}` }}>
+                            <div style={{ fontSize: 9, color: C.muted }}>Join Fees</div>
+                            <div style={{ fontWeight: 700, color: C.success, fontSize: 11 }}>{fmt(agent.periodJoinFees)}</div>
+                          </div>
+                        </Col>
+                        <Col span={12}>
+                          <div style={{ background: C.surface, borderRadius: 8, padding: '6px 8px', border: `1px solid ${C.border}` }}>
+                            <div style={{ fontSize: 9, color: C.muted }}>Commission</div>
+                            <div style={{ fontWeight: 700, color: C.warning, fontSize: 11 }}>{fmt(agent.periodCommission)}</div>
+                          </div>
+                        </Col>
+                        <Col span={12}>
+                          <div style={{ background: C.surface, borderRadius: 8, padding: '6px 8px', border: `1px solid ${C.border}` }}>
+                            <div style={{ fontSize: 9, color: C.muted }}>Efficiency</div>
+                            <div style={{ fontWeight: 700, fontSize: 13,
+                              color: agent.efficiency >= 70 ? C.success : C.warning }}>
+                              {agent.efficiency}%
+                            </div>
+                          </div>
+                        </Col>
+                      </Row>
+
+                      {/* Request badges */}
+                      {(agent.pendingRequests > 0 || agent.rejectedRequests > 0) && (
+                        <div style={{ marginTop: 8, display: 'flex', justifyContent: 'center', gap: 6, flexWrap: 'wrap' }}>
+                          {agent.pendingRequests > 0 && (
+                            <Tag icon={<ClockCircleOutlined />} color="warning" style={{ borderRadius: 20, margin: 0 }}>
+                              {agent.pendingRequests} pending
+                            </Tag>
+                          )}
+                          {agent.rejectedRequests > 0 && (
+                            <Tag icon={<CloseCircleOutlined />} color="error" style={{ borderRadius: 20, margin: 0 }}>
+                              {agent.rejectedRequests} rejected
+                            </Tag>
+                          )}
+                        </div>
+                      )}
                     </Card>
                   </Col>
                 )
               })}
             </Row>
-
-            <Card size="small" style={{ marginBottom: 20 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                <Text strong>Top 3 Comparison</Text>
-                <Select
-                  size="small"
-                  value={top3Metric}
-                  onChange={setTop3Metric}
-                  options={metrics}
-                  style={{ width: 150 }}
-                />
-              </div>
-              <Table
-                dataSource={top3Data}
-                columns={top3Columns}
-                pagination={false}
-                size="small"
-                rowKey="label"
-                bordered
-              />
-            </Card>
-          </>
+          </div>
         )}
 
-        <Table
-          dataSource={agents}
-          columns={columns}
-          rowKey="id"
-          pagination={{ pageSize: 20, showSizeChanger: true, pageSizeOptions: ['10', '20', '50'] }}
-          scroll={{ x: 1100 }}
-          size="middle"
-          bordered
-          locale={{ emptyText: 'No agent data found for this period' }}
-        />
+        {/* ── Full table ────────────────────────────────────────────────────── */}
+        <Card
+          style={{ border: `1px solid ${C.border}`, borderRadius: 10, background: C.surface }}
+          bodyStyle={{ padding: 0 }}
+          title={
+            <Space>
+              <BarChartOutlined style={{ color: C.primary }} />
+              <Text strong style={{ color: C.foreground }}>Full Rankings</Text>
+              <Tag style={{
+                background: `linear-gradient(135deg, ${C.primary}, ${C.secondary})`,
+                border: 'none', color: '#fff', borderRadius: 20
+              }}>{agents.length} agents</Tag>
+            </Space>
+          }
+        >
+          <Table
+            dataSource={agents}
+            columns={columns}
+            rowKey="id"
+            pagination={{
+              pageSize: 20, showSizeChanger: true,
+              pageSizeOptions: ['10', '20', '50'],
+              style: { padding: '12px 20px' },
+            }}
+            scroll={{ x: 1350 }}
+            size="middle"
+            locale={{ emptyText: <Empty description="No agent data for this period" /> }}
+            rowClassName={(_, idx) => idx < 3 ? 'top-rank-row' : ''}
+          />
+        </Card>
+
       </Spin>
+
+      {/* ── Detail drawer ─────────────────────────────────────────────────── */}
+      <AgentDrawer
+        agent={selected}
+        rank={selRank}
+        onClose={() => { setSelected(null); setSelRank(null) }}
+      />
     </div>
   )
 }
