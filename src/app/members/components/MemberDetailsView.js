@@ -20,7 +20,8 @@ import {
   AppstoreOutlined,
   PlusOutlined, MoneyCollectOutlined, CalculatorOutlined,
   UploadOutlined, FilterOutlined,
-  SwapOutlined
+  SwapOutlined,
+  UserSwitchOutlined
 } from '@ant-design/icons'
 import { PDFDownloadLink } from '@react-pdf/renderer'
 import PaymentHistoryPdf from './MemberPdf/PaymentHistoryPdf'
