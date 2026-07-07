@@ -243,11 +243,22 @@ const ClosingMemberPaymentPage = () => {
   const fetchMemberPaymentHistory = async (memberId) => {
     setHistoryLoading(true);
     try {
-      const q = query(collection(db, 'memberClosingFees'), where('memberId', '==', memberId), orderBy('createdAt', 'desc'));
+      // where('memberId') + orderBy('createdAt') needs a composite index — sort in JS instead
+      const q = query(collection(db, 'memberClosingFees'), where('memberId', '==', memberId));
       const snap = await getDocs(q);
-      setMemberTransactions(snap.docs.map(d => ({ id: d.id, ...d.data(), createdAt: d.data().createdAt?.toDate?.() || d.data().createdAt })));
-    } catch {
-      message.error('Failed to load payment history');
+      const rows = snap.docs.map(d => ({
+        id: d.id,
+        ...d.data(),
+        createdAt: d.data().createdAt?.toDate?.() || d.data().createdAt,
+      }));
+      rows.sort((a, b) => {
+        const aT = a.createdAt instanceof Date ? a.createdAt.getTime() : (a.createdAt?.toMillis?.() ?? 0);
+        const bT = b.createdAt instanceof Date ? b.createdAt.getTime() : (b.createdAt?.toMillis?.() ?? 0);
+        return bT - aT;
+      });
+      setMemberTransactions(rows);
+    } catch (e) {
+      message.error('Failed to load payment history: ' + e.message);
     } finally {
       setHistoryLoading(false);
     }

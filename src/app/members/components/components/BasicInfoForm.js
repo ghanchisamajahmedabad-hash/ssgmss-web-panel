@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { Card, Row, Col, Form, Input, DatePicker, Select, Alert, Spin } from 'antd'
+import { Card, Row, Col, Form, Input, DatePicker, Select, Alert, Spin, Radio } from 'antd'
 import dayjs from "dayjs"
 import { LoadingOutlined } from '@ant-design/icons'
 
@@ -154,7 +154,20 @@ const BasicInfoForm = ({ handleDobChange, age, castes, form, onAadhaarCheck,exis
             />
           </Form.Item>
         </Col>
-      <Col span={8}>
+        <Col span={8}>
+          <Form.Item
+            label="Gender"
+            name="gender"
+            rules={[{ required: true, message: 'Please select gender' }]}
+          >
+            <Radio.Group buttonStyle="solid">
+              <Radio.Button value="male">Male</Radio.Button>
+              <Radio.Button value="female">Female</Radio.Button>
+              <Radio.Button value="other">Other</Radio.Button>
+            </Radio.Group>
+          </Form.Item>
+        </Col>
+        <Col span={8}>
           <Form.Item
             label="Phone Number"
             name="phone"
@@ -166,6 +179,9 @@ const BasicInfoForm = ({ handleDobChange, age, castes, form, onAadhaarCheck,exis
             <Input placeholder="Enter phone number" />
           </Form.Item>
         </Col>
+      </Row>
+
+      <Row gutter={16}>
         <Col span={8}>
           <Form.Item
             label="Alternate Phone"

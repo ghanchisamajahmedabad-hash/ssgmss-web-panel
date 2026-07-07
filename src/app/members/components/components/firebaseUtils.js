@@ -143,8 +143,10 @@ export const generateRegistrationNumber = async (programId) => {
     const snapshot    = await getDocs(q);
     const count       = snapshot.size + 1;
     const paddedCount = count.toString().padStart(4, '0');
+    const monthNoZero = String(now.month() + 1); // 1–12, no leading zero
 
-    return `${prefix}${paddedCount}${year}${month}`;
+    // Format: {prefix}5{YY}{M}{NNNN}  →  e.g. MEM52670001
+    return `${prefix}5${year}${monthNoZero}${paddedCount}`;
   } catch (error) {
     console.error('Error generating registration number:', error);
     return `MEM${dayjs().format('YYYYMMDDHHmmss')}`;
@@ -193,54 +195,83 @@ export function createSearchIndex(data) {
 }
 
 // Record join fee transaction
+// Also creates a paymentGroups document so this payment appears in
+// Payment History (which queries paymentGroups → memberJoinFees by groupId).
 export const recordJoinFeeTransaction = async (memberData, paymentData) => {
   try {
     const displayName = memberData.displayName || '';
-    const regNo = memberData.registrationNumber || '';
-    const fatherName = memberData.fatherName || '';
-    const phone = memberData.phone || '';
-    const aadhaarNo = memberData.aadhaarNo || '';
-    const keyword = [displayName, regNo, fatherName, phone, aadhaarNo]
+    const regNo       = memberData.registrationNumber || '';
+    const fatherName  = memberData.fatherName || '';
+    const phone       = memberData.phone || '';
+    const aadhaarNo   = memberData.aadhaarNo || '';
+    const agentId     = memberData.agentId || '';
+    const amount      = parseFloat(paymentData.paidAmount || 0);
+    const keyword     = [displayName, regNo, fatherName, phone, aadhaarNo]
       .filter(Boolean).join(' ').toLowerCase();
 
+    // ── 1. Create paymentGroups doc so this shows in Payment History ───────────
+    // (join-fees-add route does the same; we mirror the same structure here)
+    const paymentDate = paymentData.transactionDate
+      ? new Date(paymentData.transactionDate)
+      : new Date();
+
+    const groupRef = await addDoc(collection(db, 'paymentGroups'), {
+      agentId,
+      totalAmount:   amount,
+      paymentMethod: paymentData.paymentMode || 'cash',
+      transactionId: paymentData.transactionId || '',
+      paymentDate,
+      paymentNote:   paymentData.notes || '',
+      fileUrl:       '',
+      paymentType:   'joinFees',
+      source:        paymentData.transactionType === 'additional_payment'
+                       ? 'additional_payment'
+                       : 'member_approval',
+      createdBy:     memberData.createdBy || '',
+      createdAt:     serverTimestamp(),
+    });
+
+    // ── 2. Create the memberJoinFees transaction doc, linked to the group ──────
     const transactionRef = await addDoc(collection(db, 'memberJoinFees'), {
-      memberId: memberData.memberId,
-      memberName: displayName,
+      memberId:         memberData.memberId,
+      memberName:       displayName,
       memberFatherName: fatherName,
+      memberRegNo:      regNo,
+      memberPhone:      phone,
+      memberAadhaar:    aadhaarNo,
       registrationNumber: regNo,
-      memberPhone: phone,
-      memberAadhaar: aadhaarNo,
 
       transactionType: paymentData.transactionType || 'join_fee',
-      amount: parseFloat(paymentData.paidAmount || 0),
-      previousBalance: paymentData.previousBalance || 0,
-      newBalance: parseFloat(paymentData.totalPendingAmount || 0),
+      amount,
+      previousBalance:  paymentData.previousBalance || 0,
+      newBalance:       parseFloat(paymentData.totalPendingAmount || 0),
 
-      paymentMode: paymentData.paymentMode,
-      transactionId: paymentData.transactionId || '',
-      transactionDate: paymentData.transactionDate 
+      paymentMode:     paymentData.paymentMode || 'cash',
+      transactionId:   paymentData.transactionId || '',
+      transactionDate: paymentData.transactionDate
         ? dayjs(paymentData.transactionDate).format('DD-MM-YYYY')
         : dayjs().format('DD-MM-YYYY'),
 
-      programId: paymentData.programId || '',
+      programId:   paymentData.programId   || '',
       programName: paymentData.programName || '',
 
-      status: 'completed',
+      status:   'completed',
       verified: true,
-      notes: paymentData.notes || 'Initial join fee payment',
+      notes:    paymentData.notes || 'Initial join fee payment',
 
-      agentId: memberData.agentId || '',
-      createdBy: memberData.createdBy,
+      agentId,
+      groupId:   groupRef.id,   // ← links to paymentGroups for history
+      createdBy: memberData.createdBy || '',
       createdAt: serverTimestamp(),
       updated_at: serverTimestamp(),
 
       search_keyword: keyword,
     });
-    
+
     return transactionRef.id;
   } catch (error) {
-    console.error('Error recording transaction:', error)
-    throw error
+    console.error('Error recording transaction:', error);
+    throw error;
   }
 }
 
@@ -412,6 +443,7 @@ export const handleSubmit = async (values, context, message) => {
       displayName: values.name,
       fatherName: values.fatherName,
       surname: values.surname,
+      gender: values.gender || '',
       caste: selectedCasteName,
       casteId: values.caste,
       phone: values.phone,

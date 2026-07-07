@@ -24,7 +24,10 @@ export async function GET(req) {
     const endDate = searchParams.get('endDate');
     const search = searchParams.get('search') || '';
 
-    let groupsQuery = db.collection('paymentGroups').orderBy('createdAt', 'desc');
+    // NOTE: combining orderBy('createdAt') with where() on different fields requires
+    // a composite Firestore index. To avoid that, apply where() filters only and
+    // sort the results in JS instead.
+    let groupsQuery = db.collection('paymentGroups');
 
     if (type !== 'all') {
       groupsQuery = groupsQuery.where('paymentType', '==', type);
@@ -38,6 +41,13 @@ export async function GET(req) {
 
     const allSnap = await groupsQuery.get();
     let allGroups = allSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+    // Sort by createdAt desc in JS (no composite index needed)
+    allGroups.sort((a, b) => {
+      const aT = a.createdAt?.toMillis?.() ?? (a.createdAt ? new Date(a.createdAt).getTime() : 0);
+      const bT = b.createdAt?.toMillis?.() ?? (b.createdAt ? new Date(b.createdAt).getTime() : 0);
+      return bT - aT;
+    });
 
     if (startDate || endDate) {
       allGroups = allGroups.filter(g => {
