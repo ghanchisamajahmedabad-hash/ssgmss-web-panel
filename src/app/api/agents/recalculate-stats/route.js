@@ -44,10 +44,12 @@ export async function POST(req) {
 
     for (const agent of agentDocs) {
       try {
-        // ── Fetch all non-deleted members for this agent ──────────────────────
+        // ── Fetch only ACTIVE, non-deleted members for this agent ────────────
+        // Two equality where() clauses work without a composite index in Firestore.
+        // Only 'active' (accepted) members count — pending/rejected are excluded at DB level.
         const membersSnap = await db.collection('members')
           .where('agentId', '==', agent.id)
-          .where('delete_flag', '==', false)
+          .where('status',  '==', 'active')
           .get();
 
         // ── Accumulate stats per program ──────────────────────────────────────
@@ -58,6 +60,8 @@ export async function POST(req) {
 
         membersSnap.forEach(doc => {
           const m = doc.data();
+          // Extra guard: skip soft-deleted docs
+          if (m.delete_flag === true) return;
           const pid = m.programId || '__none__';
 
           if (!programTotals[pid]) {

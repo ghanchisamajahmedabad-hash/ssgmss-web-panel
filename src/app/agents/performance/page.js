@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import {
   Card, Table, Tag, Select, Row, Col, Avatar, Spin, Typography,
-  Space, Progress, Badge, Tooltip, message, Button, Divider, Empty, Alert
+  Space, Progress, Badge, Tooltip, message, Button, Divider, Empty, Alert, Modal
 } from 'antd'
 import {
   TrophyOutlined, UserOutlined, DollarOutlined, RiseOutlined,
@@ -11,6 +11,7 @@ import {
   ClockCircleOutlined, CloseCircleOutlined, ReloadOutlined,
   PhoneOutlined, EnvironmentOutlined, InfoCircleOutlined,
   SafetyCertificateOutlined, BarChartOutlined, ArrowRightOutlined,
+  SyncOutlined, WarningOutlined,
 } from '@ant-design/icons'
 import { useAuth } from '@/components/Base/AuthProvider'
 import { auth } from '../../../../lib/firbase-client'
@@ -203,8 +204,49 @@ export default function AgentPerformance() {
   const [summary,  setSummary]  = useState({})
   const [loading,  setLoading]  = useState(false)
   const [dateRange,setDateRange]= useState(null)
-  const [selected, setSelected] = useState(null)
-  const [selRank,  setSelRank]  = useState(null)
+  const [selected,     setSelected]     = useState(null)
+  const [selRank,      setSelRank]      = useState(null)
+  const [resetLoading, setResetLoading] = useState(false)
+
+  // ── Reset / recalculate all agent stats (superadmin only) ─────────────────
+  const resetStats = () => {
+    Modal.confirm({
+      title: 'Reset & Recalculate Agent Stats',
+      icon: <WarningOutlined style={{ color: '#f59e0b' }} />,
+      content: (
+        <div style={{ marginTop: 8 }}>
+          <p>This will <strong>recalculate join fees, closing fees, and member counts</strong> for every agent from scratch — using only <strong>accepted (active)</strong> members.</p>
+          <p style={{ color: '#dc2626', marginTop: 8 }}>Any wrong amounts from pending/rejected members will be corrected.</p>
+          <p style={{ color: '#6b7280', fontSize: 12, marginTop: 8 }}>This may take a few seconds depending on the number of agents.</p>
+        </div>
+      ),
+      okText: 'Yes, Reset Now',
+      okType: 'danger',
+      cancelText: 'Cancel',
+      onOk: async () => {
+        setResetLoading(true)
+        try {
+          const token = await auth.currentUser?.getIdToken()
+          const res   = await fetch('/api/agents/recalculate-stats', {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+            body:    JSON.stringify({}),
+          })
+          const data = await res.json()
+          if (data.success) {
+            message.success(`Stats reset for ${data.results?.length || 0} agent(s)`)
+            fetchData()
+          } else {
+            message.error(data.message || 'Reset failed')
+          }
+        } catch {
+          message.error('Failed to reset stats')
+        } finally {
+          setResetLoading(false)
+        }
+      },
+    })
+  }
 
   const fetchData = useCallback(async () => {
     if (!user) return
@@ -450,6 +492,18 @@ export default function AgentPerformance() {
           <Select value={period} onChange={setPeriod} options={PERIODS} style={{ width: 140 }} />
           <Select value={metric} onChange={setMetric} style={{ width: 190 }}
             options={METRICS.map(m => ({ label: <Space size={6}>{m.icon}<span>{m.label}</span></Space>, value: m.value }))} />
+          {/* {user?.role === 'superadmin' && (
+            <Tooltip title="Recalculate all agent stats from scratch (active members only)">
+              <Button
+                icon={<SyncOutlined />}
+                onClick={resetStats}
+                loading={resetLoading}
+                danger
+              >
+                Reset Stats
+              </Button>
+            </Tooltip>
+          )} */}
           <Button icon={<ReloadOutlined />} onClick={fetchData} loading={loading}
             style={{ borderColor: C.primary, color: C.primary }}>
             Refresh

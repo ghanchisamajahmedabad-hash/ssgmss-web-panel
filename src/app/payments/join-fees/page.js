@@ -17,7 +17,9 @@ import {
   Row,
   Col,
   Avatar,
-  Badge
+  Badge,
+  Input,
+  Select,
 } from 'antd';
 import {
   UserOutlined,
@@ -33,6 +35,8 @@ import {
   PhoneOutlined,
   EnvironmentOutlined,
   SyncOutlined,
+  SearchOutlined,
+  FilterOutlined,
 } from '@ant-design/icons';
 import { message as antMessage } from 'antd';
 import { auth } from '../../../../lib/firbase-client';
@@ -74,6 +78,8 @@ const JoinFeesPage = () => {
   const [drawerAgent, setDrawerAgent] = useState(null);
   const [expandedRowKeys, setExpandedRowKeys] = useState([]);
   const [syncing, setSyncing] = useState(false);
+  const [searchText, setSearchText]     = useState('');
+  const [statusFilter, setStatusFilter] = useState('all');
   
   // Payment History State
   const [historyDrawerVisible, setHistoryDrawerVisible] = useState(false);
@@ -108,8 +114,19 @@ const JoinFeesPage = () => {
   // Process agents with stats
   const agentsWithStats = processAgentStats(agentList, programList);
   const activeAgents = agentsWithStats.filter((a) => a.active_flag && !a.delete_flag);
-  console.log(agentList,'agentList')
-  console.log(activeAgents,'activeAgents')
+
+  // Search + status filter
+  const filteredAgents = activeAgents.filter((a) => {
+    const q = searchText.trim().toLowerCase();
+    if (q) {
+      const nameMatch  = (a.name  || '').toLowerCase().includes(q);
+      const phoneMatch = (a.phone1 || a.phone || '').toLowerCase().includes(q);
+      if (!nameMatch && !phoneMatch) return false;
+    }
+    if (statusFilter === 'pending') return (a.totalJoinFeesPending || 0) > 0;
+    if (statusFilter === 'paid')    return (a.totalJoinFeesPending || 0) === 0;
+    return true;
+  });
 
   // Summary calculations
   const totalPending = activeAgents.reduce((s, a) => s + (a.totalJoinFeesPending || 0), 0);
@@ -195,7 +212,6 @@ const JoinFeesPage = () => {
   };
 
   const expandedRowRender = (record) => {
-    console.log(record,'record')
     const programColumns = [
       {
         title: 'Program',
@@ -511,9 +527,49 @@ const JoinFeesPage = () => {
         }}
         bodyStyle={{ padding: 0 }}
       >
+        {/* Search & Filter bar */}
+        <div style={{
+          display: 'flex', gap: 10, flexWrap: 'wrap',
+          padding: '14px 16px',
+          borderBottom: `1px solid ${colors.border}`,
+          alignItems: 'center',
+        }}>
+          <Input
+            prefix={<SearchOutlined style={{ color: colors.muted || '#9ca3af' }} />}
+            placeholder="Search by agent name or phone..."
+            value={searchText}
+            onChange={(e) => setSearchText(e.target.value)}
+            allowClear
+            style={{ width: 280, borderRadius: 8, borderColor: colors.border }}
+          />
+          <Select
+            value={statusFilter}
+            onChange={setStatusFilter}
+            style={{ width: 170 }}
+            prefix={<FilterOutlined />}
+            options={[
+              { label: '🔵 All Agents',      value: 'all'     },
+              { label: '🟡 Has Pending',     value: 'pending' },
+              { label: '🟢 Fully Paid',      value: 'paid'    },
+            ]}
+          />
+          {(searchText || statusFilter !== 'all') && (
+            <Button
+              size="small"
+              onClick={() => { setSearchText(''); setStatusFilter('all'); }}
+              style={{ borderRadius: 6, color: colors.primary, borderColor: colors.border }}
+            >
+              Clear
+            </Button>
+          )}
+          <span style={{ marginLeft: 'auto', fontSize: 12, color: '#9ca3af' }}>
+            {filteredAgents.length} of {activeAgents.length} agents
+          </span>
+        </div>
+
         <Table
           columns={columns}
-          dataSource={activeAgents}
+          dataSource={filteredAgents}
           rowKey="uid"
           pagination={{ pageSize: 10, size: 'small', showTotal: (t) => `${t} agents` }}
           size="middle"
