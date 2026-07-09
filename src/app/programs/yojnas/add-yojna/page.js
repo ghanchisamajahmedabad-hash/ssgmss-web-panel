@@ -557,7 +557,7 @@ const ProgramsFormPage = () => {
                 placeholder="e.g., यह प्रमाणपत्र जारी करने वाली संस्था की तरफ से दिया गया है..."
                 rows={2}
                 size="large"
-                maxLength={200}
+                maxLength={250}
                 showCount
                 className="hover:border-rose-300"
               />

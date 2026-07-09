@@ -315,7 +315,7 @@ const styles = StyleSheet.create({
   
   rulesRow: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
+    alignItems: 'center',
   },
   
   rulesLabel: {
@@ -326,7 +326,7 @@ const styles = StyleSheet.create({
   },
   
   rulesText: {
-    fontSize: 10,
+    fontSize: 9.5,
     color: '#000',
     lineHeight: 1.3,
     flex: 1,
@@ -449,7 +449,20 @@ const styles = StyleSheet.create({
     height: '100%',
     objectFit: 'fill',
     zIndex: -1,
-      }
+      },
+       rowContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    flexWrap: 'wrap', // For smaller screens
+  },
+
+  joinFeesText: {
+    fontSize: 10,
+    color: '#000',
+    marginLeft: 10,
+    fontWeight: '500',
+  },
 });
 
   const formatDate = (dateString) => {
@@ -531,7 +544,7 @@ const styles = StyleSheet.create({
               सदस्य क्रमांक : <Text style={styles.memberIdValue}>{data?.registrationNumber || 'S1001511'}</Text>
             </Text>
             <Text style={styles.schemeNameText}>
-             {memberProgram?.hindiName || '-'}
+             {memberProgram?.name || '-'} Group - { data.ageGroupName || data.memberGroupName || data.ageGroup || '-'}
             </Text>
             <View style={styles.dateContainer}>
               <Text style={styles.dateLabel}>दिनांक : </Text>
@@ -666,21 +679,27 @@ const styles = StyleSheet.create({
           </View>
 
           {/* Scheme Information */}
-          <View style={styles.schemeInfo}>  
-            <Text style={styles.contributionText}>
-              सहयोग राशि : ₹ {data?.payAmount} रूपये प्रत्येक कार्यक्रम पर लागु।
-            </Text>
-          {
-            memberProgram?.certificateRule.trim() &&  <View style={styles.rulesRow}>
-              <Text style={styles.rulesLabel}>योजना नियम :</Text>
-              <Text style={styles.rulesText}>
-                
-               {memberProgram?.certificateRule}
-              </Text>
-            </View>
-          }
-           
-          </View>
+ <View style={styles.schemeInfo}>
+  <View style={styles.rowContainer}>
+    <Text style={styles.contributionText}>
+      सहयोग राशि : ₹ {data?.payAmount} रूपये प्रत्येक कार्यक्रम पर लागु।
+    </Text>
+    {data?.joinFees && (
+      <Text style={styles.joinFeesText}>
+        जॉइन फीस : ₹ {data?.fixedJoinFees-data?.joinFees} Pending
+      </Text>
+    )}
+  </View>
+  
+  {memberProgram?.certificateRule?.trim() && (
+    <View style={styles.rulesRow}>
+      <Text style={styles.rulesLabel}>योजना नियम :</Text>
+      <Text style={styles.rulesText}>
+        {memberProgram?.certificateRule}
+      </Text>
+    </View>
+  )}
+</View>
 
           {/* Improved Footer Section */}
           <View style={styles.footer}>
