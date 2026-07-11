@@ -1088,7 +1088,7 @@ const isSuperAdmin = (user) => user?.role === 'superadmin';
                           </div>
                         ) : (
                           <div className="border border-gray-200 rounded-xl overflow-hidden shadow-sm">
-                            <div className="max-h-80 overflow-y-auto">
+                            <div className="overflow-y-auto" style={{ height: 'calc(100vh - 380px)', minHeight: 240 }}>
                               <table className="w-full text-xs">
                                 <thead>
                                   <tr className="bg-gray-50 border-b border-gray-200">
@@ -1228,7 +1228,7 @@ const isSuperAdmin = (user) => user?.role === 'superadmin';
                           </div>
                         ) : (
                           <div className="border border-gray-200 rounded-xl overflow-hidden shadow-sm">
-                            <div className="max-h-80 overflow-y-auto">
+                            <div className="overflow-y-auto" style={{ height: 'calc(100vh - 360px)', minHeight: 240 }}>
                               <table className="w-full text-xs">
                                 <thead>
                                   <tr className="bg-gray-50 border-b border-gray-200">

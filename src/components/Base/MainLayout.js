@@ -10,6 +10,8 @@ import store from '@/Redux/store';
 import { db } from '../../../lib/firbase-client';
 import { collection, getDocs } from 'firebase/firestore';
 import { setAgentList, setProgramList } from '@/Redux/Slice/commonSlice';
+import { PinLockProvider } from './PinLockContext';
+import PinLockScreen from './PinLockScreen';
 
 const { Content } = Layout;
 
@@ -98,7 +100,8 @@ const MainLayout = ({ children }) => {
 
 
   return (
-       
+    <PinLockProvider>
+      <PinLockScreen />
     <Layout className="min-h-screen">
       {/* Sidebar */}
       <SideBar collapsed={collapsed} setCollapsed={setCollapsed} />
@@ -175,6 +178,7 @@ const MainLayout = ({ children }) => {
         }
       `}</style>
     </Layout>
+    </PinLockProvider>
 
   );
 };

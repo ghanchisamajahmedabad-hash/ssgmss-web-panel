@@ -159,6 +159,7 @@ const buildMenuItems = (user, pendingCount, collapsed) => {
           children: [
             { key: '/settings/security/change-password', label: 'Password Change', module: 'settings' },
             { key: '/settings/security/sessions', label: 'Sessions', module: 'settings' },
+            { key: '/settings/security/pin', label: 'PIN Lock', module: 'settings' },
           ],
         },
         { key: '/settings/commission', label: 'Commission', module: 'settings' },
