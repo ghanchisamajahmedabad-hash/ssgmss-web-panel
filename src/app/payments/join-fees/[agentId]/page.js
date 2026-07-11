@@ -140,6 +140,8 @@ const MemberPaymentPage = () => {
   const [memberPayments,       setMemberPayments]       = useState({});
   const [programOptions,       setProgramOptions]       = useState([]);
 
+  const [advanceBalance,             setAdvanceBalance]             = useState(0);
+
   const [historyDrawerVisible,       setHistoryDrawerVisible]       = useState(false);
   const [selectedMemberForHistory,   setSelectedMemberForHistory]   = useState(null);
   const [memberTransactions,         setMemberTransactions]         = useState([]);
@@ -198,8 +200,37 @@ const MemberPaymentPage = () => {
     return order;
   }, [filteredMembers, selectedMembers, memberPayments]);
 
+  // ── Fetch agent advance balance ───────────────────────────────────────────
+  const fetchAdvanceBalance = async () => {
+    try {
+      const token = await auth.currentUser?.getIdToken();
+      const res   = await fetch(`/api/agents/advance?agentId=${agentId}&limit=1`, {
+        headers: { 'Authorization': `Bearer ${token}` },
+      });
+      const result = await res.json();
+      if (result.success && result.data?.length > 0) {
+        setAdvanceBalance(result.data[0]?.balanceAfter ?? 0);
+      }
+    } catch (e) { console.error('fetchAdvanceBalance error:', e); }
+  };
+
+  // Deduct from advance after a successful payment
+  const deductFromAdvance = async (amount, description) => {
+    try {
+      const token = await auth.currentUser?.getIdToken();
+      const res   = await fetch('/api/agents/advance', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ agentId, amount, action: 'deduct', description }),
+      });
+      const result = await res.json();
+      if (result.success) setAdvanceBalance(result.data.newBalance);
+      return result;
+    } catch (e) { console.error('deductFromAdvance error:', e); return { success: false }; }
+  };
+
   // ── Effects ───────────────────────────────────────────────────────────────
-  useEffect(() => { if (agentId) fetchMember(); }, [agentId]);
+  useEffect(() => { if (agentId) { fetchMember(); fetchAdvanceBalance(); } }, [agentId]);
 
   useEffect(() => {
     const programs = new Set();
@@ -326,6 +357,11 @@ const MemberPaymentPage = () => {
     });
     if (!valid.length) { message.warning('No valid payment amounts entered.'); return; }
     if (paymentMethod === 'online' && !transactionId) { message.warning('Enter Transaction ID'); return; }
+    const total = valid.reduce((s, id) => s + (parseFloat(memberPayments[id]) || 0), 0);
+    if (paymentMethod === 'advance') {
+      if (advanceBalance <= 0) { message.error('No advance balance available'); return; }
+      if (total > advanceBalance) { message.error(`Advance balance ₹${advanceBalance.toLocaleString()} is less than total ₹${total.toLocaleString()}`); return; }
+    }
     setProcessingPayments(valid.map(id => {
       const m = membersMap[id];
       return { memberId: id, memberName: m.displayName, registrationNumber: m.registrationNumber, programId: m.programId, amount: parseFloat(memberPayments[id]) };
@@ -342,16 +378,23 @@ const MemberPaymentPage = () => {
         const result = await uploadFile(uploadedFile, `memberpayments/JoinFees/${agentId}/${Date.now()}_${uploadedFile.name}`);
         fileUrl = result?.url || null;
       }
+      const totalAmt = processingPayments.reduce((s, p) => s + p.amount, 0);
       const res = await paymentApi.JoinFeesAdd({
         memberPayments:  processingPayments,
         paymentDate:     paymentDate.toISOString(),
-        paymentMethod, paymentNote, transactionId,
+        paymentMethod: paymentMethod === 'advance' ? 'advance' : paymentMethod,
+        paymentNote, transactionId,
         fileUrl,
-        totalAmount: processingPayments.reduce((s, p) => s + p.amount, 0),
+        totalAmount: totalAmt,
         agentId,
         programId: selectedProgram !== 'all' ? selectedProgram : null,
       });
       if (res.success) {
+        // Deduct from advance balance if payment method is advance
+        if (paymentMethod === 'advance') {
+          const deductResult = await deductFromAdvance(totalAmt, `Join Fees — ${processingPayments.length} member(s)`);
+          if (!deductResult.success) message.warning('Payment recorded but advance deduction failed: ' + deductResult.message);
+        }
         message.success(`Processed ${processingPayments.length} payment(s)`);
         setIsPaymentDrawerVisible(false);
         fetchMember();
@@ -748,6 +791,11 @@ const MemberPaymentPage = () => {
               <Radio.Group value={paymentMethod} onChange={e => setPaymentMethod(e.target.value)} size="small" buttonStyle="solid">
                 <Radio.Button value="cash">Cash</Radio.Button>
                 <Radio.Button value="online">Online</Radio.Button>
+                {advanceBalance > 0 && (
+                  <Radio.Button value="advance" style={{ color: paymentMethod === 'advance' ? undefined : '#059669' }}>
+                    Advance ₹{advanceBalance.toLocaleString()}
+                  </Radio.Button>
+                )}
               </Radio.Group>
               {paymentMethod === 'online' ? (
                 <Input
@@ -757,6 +805,14 @@ const MemberPaymentPage = () => {
                   style={{ width: 160 }}
                   size="small"
                 />
+              ) : paymentMethod === 'advance' ? (
+                <div style={{ background: '#f0fdf4', border: '1px solid #a7f3d0', borderRadius: 6, padding: '2px 10px' }}>
+                  <Text style={{ fontSize: 11, color: '#065f46' }}>Available:</Text>
+                  <Text strong style={{ fontSize: 13, color: '#059669', marginLeft: 4 }}>₹{advanceBalance.toLocaleString()}</Text>
+                  {totalPaymentAmount > advanceBalance && (
+                    <Text style={{ fontSize: 11, color: '#dc2626', marginLeft: 6 }}>⚠ Insufficient</Text>
+                  )}
+                </div>
               ) : (
                 <div>
                   <Text style={{ fontSize: 11, color: C.textMuted }}>To Pay:</Text>
@@ -769,7 +825,7 @@ const MemberPaymentPage = () => {
               type="primary"
               icon={<DollarCircleOutlined />}
               onClick={handleProcessPayments}
-              disabled={totalPaymentAmount === 0 || (paymentMethod === 'online' && !transactionId)}
+              disabled={totalPaymentAmount === 0 || (paymentMethod === 'online' && !transactionId) || (paymentMethod === 'advance' && totalPaymentAmount > advanceBalance)}
               style={{
                 background: `linear-gradient(135deg, ${C.primary}, ${C.secondary})`,
                 border: 'none', borderRadius: 8,

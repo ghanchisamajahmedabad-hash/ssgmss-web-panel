@@ -101,8 +101,8 @@ const AgentAdvancePanel = ({ agentId }) => {
                     <td style={{ padding: '5px 10px', fontFamily: 'monospace', fontSize: 11, color: tx.utrId ? '#374151' : '#d1d5db' }}>
                       {tx.utrId || '-'}
                     </td>
-                    <td style={{ padding: '5px 10px', textAlign: 'right', fontWeight: 700, color: '#16a34a', whiteSpace: 'nowrap' }}>
-                      +₹{(tx.amount || 0).toLocaleString('en-IN')}
+                    <td style={{ padding: '5px 10px', textAlign: 'right', fontWeight: 700, color: tx.type === 'deduction' ? '#dc2626' : '#16a34a', whiteSpace: 'nowrap' }}>
+                      {tx.type === 'deduction' ? '-' : '+'}₹{(tx.amount || 0).toLocaleString('en-IN')}
                     </td>
                     <td style={{ padding: '5px 10px', textAlign: 'right', fontWeight: 600, color: '#374151', whiteSpace: 'nowrap' }}>
                       ₹{(tx.balanceAfter || 0).toLocaleString('en-IN')}

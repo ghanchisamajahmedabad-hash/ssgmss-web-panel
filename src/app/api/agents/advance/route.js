@@ -57,10 +57,54 @@ export async function POST(req) {
       return NextResponse.json({ success: false, message: "Insufficient permissions" }, { status: 403 });
 
     const body = await req.json();
-    const { agentId, amount, description, note, paymentMode, utrId } = body;
+    const { agentId, amount, description, note, paymentMode, utrId, action } = body;
 
     if (!agentId || !amount || Number(amount) <= 0)
       return NextResponse.json({ success: false, message: "agentId and a positive amount are required" }, { status: 400 });
+
+    // ── Deduct from advance (used when payment is sourced from advance) ────────
+    if (action === 'deduct') {
+      const deductAmount = Math.round(Number(amount) * 100) / 100;
+      const agentRef   = db.collection("agents").doc(agentId);
+      const agentSnap  = await agentRef.get();
+      if (!agentSnap.exists)
+        return NextResponse.json({ success: false, message: "Agent not found" }, { status: 404 });
+
+      const agentData      = agentSnap.data();
+      const currentBalance = agentData.advanceBalance || 0;
+
+      if (currentBalance < deductAmount)
+        return NextResponse.json({ success: false, message: `Insufficient advance balance. Available: ₹${currentBalance}` }, { status: 400 });
+
+      const batch  = db.batch();
+      batch.update(agentRef, {
+        advanceBalance: INC(-deductAmount),
+        updated_at:     STS(),
+      });
+
+      const txRef = db.collection("agentAdvancePayments").doc();
+      batch.set(txRef, {
+        agentId,
+        agentName:    agentData.name || "",
+        type:         "deduction",
+        amount:       deductAmount,
+        description:  description || "Advance Deducted — Payment",
+        note:         note        || "",
+        paymentMode:  "advance",
+        utrId:        "",
+        balanceBefore: currentBalance,
+        balanceAfter:  currentBalance - deductAmount,
+        createdBy:    authResult.user.uid,
+        createdAt:    STS(),
+      });
+
+      await batch.commit();
+      return NextResponse.json({
+        success: true,
+        message: `Advance ₹${deductAmount.toLocaleString("en-IN")} deducted`,
+        data: { deductAmount, newBalance: currentBalance - deductAmount },
+      });
+    }
 
     const depositAmount = Math.round(Number(amount) * 100) / 100;
 
