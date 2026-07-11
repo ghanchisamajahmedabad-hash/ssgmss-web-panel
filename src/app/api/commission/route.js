@@ -88,6 +88,7 @@ export const creditCommissionStandalone = async ({
       agentName:        agentData.name || "",
       type:             "credit",
       amount:           commissionAmount,
+      baseAmount:       amount,              // original join fee / closing payment amount
       source,
       sourceId:         sourceId         || "",
       memberName:       memberName       || "",
@@ -154,6 +155,7 @@ export const addCommission = async (
     agentName:        agentName || agentData.name || "",
     type:             "credit",
     amount:           commissionAmount,
+    baseAmount:       amount,              // original join fee / closing payment amount
     source,
     sourceId:         sourceId         || "",
     memberName:       memberName       || "",

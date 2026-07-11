@@ -26,6 +26,7 @@ import { collection, query, where, getDocs, orderBy } from 'firebase/firestore';
 import PaymentConfirmationDrawer    from '../components/PaymentConfirmationDrawer';
 import TransactionDetailDrawer      from '../components/TransactionDetailDrawer';
 import PaymentHistoryDrawer         from '../components/PaymentHistoryDrawer';
+import AgentAdvancePanel            from '../components/AgentAdvancePanel';
 import { uploadFile }               from '@/utils/uploadUtils/common';
 import { generateJoinFeesPDF } from '@/utils/pdf/generateJoinFeesPDF';
 
@@ -273,6 +274,12 @@ const MemberPaymentPage = () => {
     if (globalPaymentAmount) {
       const sorted = filteredMembers.filter(m => newSel.includes(m.id)).map(m => m.id);
       setMemberPayments(prev => ({ ...prev, ...waterfallDistribute(Number(globalPaymentAmount), sorted, membersMap) }));
+    } else if (checked) {
+      // Auto-fill with member's full pending amount when no global amount is set
+      setMemberPayments(prev => ({ ...prev, [memberId]: m.pendingAmount || 0 }));
+    } else {
+      // Clear amount when unchecked
+      setMemberPayments(prev => ({ ...prev, [memberId]: 0 }));
     }
   };
 
@@ -282,7 +289,12 @@ const MemberPaymentPage = () => {
     setSelectedMembers(newSel);
     if (globalPaymentAmount && checked)
       setMemberPayments(prev => ({ ...prev, ...waterfallDistribute(Number(globalPaymentAmount), newSel, membersMap) }));
-    else if (!checked) {
+    else if (checked) {
+      // Auto-fill each member's full pending amount
+      const filled = {};
+      selectable.forEach(id => { filled[id] = membersMap[id]?.pendingAmount || 0; });
+      setMemberPayments(prev => ({ ...prev, ...filled }));
+    } else if (!checked) {
       const cleared = {};
       selectable.forEach(id => { cleared[id] = 0; });
       setMemberPayments(prev => ({ ...prev, ...cleared }));
@@ -649,6 +661,9 @@ const MemberPaymentPage = () => {
             </Button>
           </Flex>
         </Card>
+
+        {/* ── Advance Payment Panel ─────────────────────────────────────────────── */}
+        <AgentAdvancePanel agentId={agentId} />
 
         {/* ── 3. Filters & Controls (Compact Row) ──────────────────────────────────── */}
         <Card size="small" style={{ marginBottom: 12, borderRadius: 12 }} bodyStyle={{ padding: '12px' }}>

@@ -33,7 +33,7 @@ const GuardianForm = ({ relations, onRelationAdded }) => {
 
   const relationLabel = (
     <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-      Relation with Guardian
+      Relation with Nominee / Varisdar
       <Button
         type="link"
         size="small"
@@ -49,15 +49,15 @@ const GuardianForm = ({ relations, onRelationAdded }) => {
 
   return (
     <>
-      <Card title="Guardian Information" size="small" className="mb-4">
+      <Card title="Nominee / Varisdar Information" size="small" className="mb-4">
         <Row gutter={16}>
           <Col span={8}>
             <Form.Item
-              label="Guardian Name"
+              label="Nominee / Varisdar Name"
               name="guardian"
-              rules={[{ required: true, message: 'Please enter guardian name' }]}
+              rules={[{ required: true, message: 'Please enter nominee / varisdar name' }]}
             >
-              <Input placeholder="Enter guardian name" />
+              <Input placeholder="Enter nominee / varisdar name" />
             </Form.Item>
           </Col>
           <Col span={8}>

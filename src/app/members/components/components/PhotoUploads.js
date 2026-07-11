@@ -112,7 +112,7 @@ const handleMemberChange = ({ fileList }) => {
     } else {
       setGuardianFileList([])
       setGuardianPhoto(null)
-      message.success('Guardian photo removed!')
+      message.success('Nominee / Varisdar photo removed!')
     }
   }
 
@@ -207,13 +207,13 @@ const handleMemberChange = ({ fileList }) => {
           </Form.Item>
         </Col>
         
-        {/* Guardian Photo Column */}
+        {/* Nominee / Varisdar Photo Column */}
         <Col xs={24} md={12}>
-          <Form.Item 
-            label="Guardian Photo" 
+          <Form.Item
+            label="Nominee / Varisdar Photo"
             required={!isEditMode}
             validateStatus={guardianFileList.length > 0 ? 'success' : ''}
-            help={guardianFileList.length > 0 ? "Photo ready for submission" : "Please upload guardian photo"}
+            help={guardianFileList.length > 0 ? "Photo ready for submission" : "Please upload nominee / varisdar photo"}
           >
             <div className="space-y-4">
               <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
@@ -229,7 +229,7 @@ const handleMemberChange = ({ fileList }) => {
                       rotationSlider 
                       aspectSlider 
                       showReset
-                      modalTitle="Crop Guardian Photo"
+                      modalTitle="Crop Nominee / Varisdar Photo"
                       modalWidth={800}
                       modalOk="Save"
                       modalCancel="Cancel"

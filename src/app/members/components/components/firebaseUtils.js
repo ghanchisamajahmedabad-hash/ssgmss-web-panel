@@ -9,6 +9,16 @@ import { auth, db, storage } from '../../../../../lib/firbase-client'
 import { message } from 'antd'
 import { notifyAgent } from '@/app/utils/notifyAgent'
 
+// Auto-generate a cash reference ID so cash payments are searchable in history
+const generateCashId = () => {
+  const d   = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  const date = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}`;
+  const time = `${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+  const rand = Math.random().toString(36).substring(2, 6).toUpperCase();
+  return `CSH-${date}-${time}-${rand}`;
+};
+
 // Atomically increment global member Sr. No. counter and return the new value.
 // Stored at organizationStats/current.totalMembersAdded
 export const getNextMemberSrNo = async () => {
@@ -215,11 +225,16 @@ export const recordJoinFeeTransaction = async (memberData, paymentData) => {
       ? new Date(paymentData.transactionDate)
       : new Date();
 
+    // Auto-generate a CSH-... ID for cash payments so they are searchable
+    const finalTxId = paymentData.transactionId && paymentData.transactionId.trim()
+      ? paymentData.transactionId.trim()
+      : (paymentData.paymentMode || 'cash') === 'cash' ? generateCashId() : '';
+
     const groupRef = await addDoc(collection(db, 'paymentGroups'), {
       agentId,
       totalAmount:   amount,
       paymentMethod: paymentData.paymentMode || 'cash',
-      transactionId: paymentData.transactionId || '',
+      transactionId: finalTxId,
       paymentDate,
       paymentNote:   paymentData.notes || '',
       fileUrl:       '',
@@ -247,7 +262,7 @@ export const recordJoinFeeTransaction = async (memberData, paymentData) => {
       newBalance:       parseFloat(paymentData.totalPendingAmount || 0),
 
       paymentMode:     paymentData.paymentMode || 'cash',
-      transactionId:   paymentData.transactionId || '',
+      transactionId:   finalTxId,
       transactionDate: paymentData.transactionDate
         ? dayjs(paymentData.transactionDate).format('DD-MM-YYYY')
         : dayjs().format('DD-MM-YYYY'),

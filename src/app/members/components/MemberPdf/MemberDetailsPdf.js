@@ -202,10 +202,10 @@ const MemberDetailsPdf = ({ member }) => {
 
   const docItems = [
     { label: 'Member Photo',    url: member.photoURL },
-    { label: 'Guardian Photo',  url: member.guardianPhotoURL },
+    { label: 'Nominee Photo',   url: member.guardianPhotoURL },
     { label: 'Doc Front',       url: member.documentFrontURL },
     { label: 'Doc Back',        url: member.documentBackURL },
-    { label: 'Guardian Doc',    url: member.guardianDocumentURL },
+    { label: 'Nominee Doc',     url: member.guardianDocumentURL },
   ].filter(d => d.url);
 
   return (
@@ -392,9 +392,9 @@ const MemberDetailsPdf = ({ member }) => {
             </View>
           </View>
 
-          {/* ═══ Guardian ═══ */}
+          {/* ═══ Nominee / Varisdar ═══ */}
           <View style={styles.card}>
-            <View style={styles.cardHdr}><Text style={styles.cardHdrText}>अभिभावक विवरण</Text></View>
+            <View style={styles.cardHdr}><Text style={styles.cardHdrText}>नॉमिनी / वारिसदार विवरण</Text></View>
             <View style={styles.cardBody}>
               <View style={styles.guardRow}>
                 {member.guardianPhotoURL ? (

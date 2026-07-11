@@ -85,10 +85,21 @@ export async function GET(req) {
       let filteredTx = transactions;
       if (search) {
         const s = search.toLowerCase();
-        filteredTx = transactions.filter(tx => {
-          const kw = tx.search_keyword || '';
-          return kw.includes(s) || (tx.transactionId || '').toLowerCase().includes(s);
-        });
+        // If the GROUP's UTR/transactionId matches, include all transactions in that group
+        const groupTxMatch = (g.transactionId || '').toLowerCase().includes(s);
+        if (groupTxMatch) {
+          filteredTx = transactions; // whole group matches
+        } else {
+          filteredTx = transactions.filter(tx => {
+            const kw = tx.search_keyword || '';
+            return (
+              kw.includes(s) ||
+              (tx.transactionId   || '').toLowerCase().includes(s) ||
+              (tx.memberRegNo     || '').toLowerCase().includes(s) ||
+              (tx.registrationNumber || '').toLowerCase().includes(s)
+            );
+          });
+        }
       }
 
       if (filteredTx.length > 0 || !search) {

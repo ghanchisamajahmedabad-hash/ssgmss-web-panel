@@ -39,7 +39,7 @@ dayjs.extend(relativeTime)
 
 const { Title, Text } = Typography
 
-const MemberDetailDrawer = ({ member, visible, onClose, programList, onPaymentSuccess }) => {
+const MemberDetailDrawer = ({ member, visible, onClose, programList, agentList, onPaymentSuccess }) => {
   const { user } = useAuth()
   const [paymentForm] = Form.useForm()
 
@@ -273,10 +273,10 @@ const MemberDetailDrawer = ({ member, visible, onClose, programList, onPaymentSu
 
   const documents = [
     { type: 'Member Photo',            url: member?.photoURL,            icon: <UserOutlined />,    color: '#1890ff', required: true  },
-    { type: 'Guardian Photo',          url: member?.guardianPhotoURL,    icon: <SafetyOutlined />,  color: '#52c41a', required: true  },
+    { type: 'Nominee / Varisdar Photo', url: member?.guardianPhotoURL,    icon: <SafetyOutlined />,  color: '#52c41a', required: true  },
     { type: 'Member Document (Front)', url: member?.documentFrontURL,    icon: <IdcardOutlined />,  color: '#faad14', required: true  },
     { type: 'Member Document (Back)',  url: member?.documentBackURL,     icon: <IdcardOutlined />,  color: '#fadb14', required: false },
-    { type: 'Guardian Document',       url: member?.guardianDocumentURL, icon: <ProfileOutlined />, color: '#722ed1', required: true  },
+    { type: 'Nominee / Varisdar Document', url: member?.guardianDocumentURL, icon: <ProfileOutlined />, color: '#722ed1', required: true  },
   ]
 
   const getAgeGroupColor = (g) => ({ minor: '#ff7875', adult: '#1890ff', senior: '#722ed1' }[g?.toLowerCase()] || '#d9d9d9')
@@ -326,6 +326,33 @@ const MemberDetailDrawer = ({ member, visible, onClose, programList, onPaymentSu
               <span><Text type="secondary">Pending:</Text> <Text strong style={{ color: (member.pendingAmount || 0) > 0 ? '#ff4d4f' : '#52c41a' }}>₹{member.pendingAmount || 0}</Text></span>
             </div>
 
+            {/* Latest payment method + transaction ID */}
+            {(() => {
+              const latestTx = transactions[0]
+              const mode = latestTx?.paymentMode  || member.paymentMode
+              const txId = latestTx?.transactionId || member.joinFeesTxtId
+              if (!mode && !txId) return null
+              return (
+                <div className="flex gap-3 mt-2 items-center flex-wrap">
+                  {mode && (
+                    <Tag
+                      color={mode === 'cash' ? 'green' : 'blue'}
+                      style={{ textTransform: 'uppercase', fontWeight: 600, margin: 0 }}
+                    >
+                      {mode === 'cash' ? '💵 Cash' : '🌐 Online'}
+                    </Tag>
+                  )}
+                  {txId && (
+                    <Text
+                      copyable
+                      style={{ fontSize: 11, fontFamily: 'monospace', color: '#db2777', background: '#fff0f6', padding: '2px 8px', borderRadius: 4 }}
+                    >
+                      {txId}
+                    </Text>
+                  )}
+                </div>
+              )
+            })()}
 
           </div>
         </div>
@@ -552,6 +579,15 @@ const MemberDetailDrawer = ({ member, visible, onClose, programList, onPaymentSu
                     <Col span={12}><div className="text-sm text-gray-500">Age</div><div className="font-semibold">{member?.age} years</div></Col>
                     <Col span={12}><div className="text-sm text-gray-500">DOB</div><div className="font-semibold">{member?.dobDate}</div></Col>
                     <Col span={12}><div className="text-sm text-gray-500">Caste</div><div className="font-semibold">{member?.caste}</div></Col>
+                    <Col span={12}>
+                      <div className="text-sm text-gray-500">Gender</div>
+                      {member?.gender
+                        ? <Tag color={member.gender === 'male' ? 'blue' : member.gender === 'female' ? 'magenta' : 'default'} style={{ marginTop: 2, textTransform: 'capitalize', fontWeight: 600 }}>
+                            {member.gender === 'male' ? '♂ Male' : member.gender === 'female' ? '♀ Female' : 'Other'}
+                          </Tag>
+                        : <span className="font-semibold text-gray-400">—</span>
+                      }
+                    </Col>
                     <Col span={24}>
                       <div className="text-sm text-gray-500">Aadhaar</div>
                       <div className="font-semibold flex items-center gap-2"><IdcardOutlined className="text-green-600" />{member?.aadhaarNo || 'Not Provided'}</div>
@@ -580,45 +616,75 @@ const MemberDetailDrawer = ({ member, visible, onClose, programList, onPaymentSu
                 </Card>
               </Col>
 
-              {/* Guardian */}
+              {/* Nominee / Varisdar */}
               <Col xs={24}>
-                <Card size="small" title={<span className="text-sm"><SafetyOutlined className="text-orange-600 mr-2" />Guardian Information</span>}>
+                <Card size="small" title={<span className="text-sm"><SafetyOutlined className="text-orange-600 mr-2" />Nominee / Varisdar Details</span>}>
                   <div className="flex items-start gap-4">
                     <Avatar src={member?.guardianPhotoURL} size={70} icon={<UserOutlined />} className="border-2 border-orange-500" />
                     <div>
-                      <div className="font-bold text-lg">{member?.guardian}</div>
-                      <div className="text-gray-600">{member?.guardianRelation}</div>
+                      <div className="text-xs text-gray-400 mb-0.5">Nominee / Varisdar</div>
+                      <div className="font-bold text-lg">{member?.guardian || '—'}</div>
+                      <div className="text-gray-600 text-sm">{member?.guardianRelation || '—'}</div>
                     </div>
                   </div>
                 </Card>
               </Col>
             </Row>
 
-            {/* Added By info */}
-            <Card size="small" title={<span className="text-sm"><SolutionOutlined className="text-indigo-600 mr-2" />Added By</span>}>
-              <div className="flex items-center gap-3">
-                <div className={`w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 ${member?.addedBy === 'admin' ? 'bg-purple-50' : 'bg-blue-50'}`}>
-                  {member?.addedBy === 'admin'
-                    ? <UserOutlined style={{ color: '#722ed1', fontSize: 16 }} />
-                    : <UserSwitchOutlined style={{ color: '#1890ff', fontSize: 16 }} />}
-                </div>
-                <div>
-                  <div className="font-bold text-base">
-                    {member?.addedByName || (member?.addedBy === 'admin' ? 'Admin' : 'Unknown')}
+            {/* Agent / Added By info */}
+            {(() => {
+              const agent = agentList?.find(a => a.id === member?.agentId || a.uid === member?.agentId)
+              const isAgent = !!agent
+              return (
+                <Card size="small" title={<span className="text-sm"><UserSwitchOutlined className="text-indigo-600 mr-2" />{isAgent ? 'Agent Details' : 'Added By'}</span>}>
+                  <div className="flex items-start gap-3">
+                    <Avatar
+                      src={agent?.photoURL}
+                      size={44}
+                      icon={isAgent ? <UserSwitchOutlined /> : <UserOutlined />}
+                      style={{ backgroundColor: isAgent ? '#1890ff' : '#722ed1', flexShrink: 0 }}
+                    />
+                    <div className="flex-1 min-w-0">
+                      <div className="font-bold text-base leading-tight">
+                        {agent?.name || member?.addedByName || (member?.addedBy === 'admin' ? 'Admin' : 'Unknown')}
+                      </div>
+                      <div className="flex items-center gap-2 mt-1 flex-wrap">
+                        <Tag color={isAgent ? 'blue' : 'purple'} style={{ fontSize: 10, margin: 0 }}>
+                          {isAgent ? 'Agent' : 'Admin'}
+                        </Tag>
+                        {member?.createdAt && (
+                          <span className="text-xs text-gray-400">
+                            Joined {dayjs(member.createdAt?.toDate?.() || member.createdAt).format('DD MMM YYYY')}
+                          </span>
+                        )}
+                      </div>
+                      {isAgent && (
+                        <div className="mt-2 space-y-1">
+                          {(agent.phone1 || agent.phone) && (
+                            <div className="flex items-center gap-2 text-sm text-gray-700">
+                              <PhoneOutlined className="text-blue-500 text-xs" />
+                              <span>{agent.phone1 || agent.phone}</span>
+                            </div>
+                          )}
+                          {agent.phone2 && (
+                            <div className="flex items-center gap-2 text-sm text-gray-500">
+                              <PhoneOutlined className="text-gray-400 text-xs" />
+                              <span>{agent.phone2}</span>
+                            </div>
+                          )}
+                          {(agent.village || agent.area) && (
+                            <div className="flex items-center gap-2 text-sm text-gray-600">
+                              <EnvironmentOutlined className="text-green-500 text-xs" />
+                              <span>{[agent.village, agent.area, agent.district].filter(Boolean).join(', ')}</span>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
                   </div>
-                  <div className="flex items-center gap-2 mt-0.5">
-                    <Tag color={member?.addedBy === 'admin' ? 'purple' : 'blue'} style={{ fontSize: 10, margin: 0 }}>
-                      {member?.addedBy === 'admin' ? 'Admin' : 'Agent'}
-                    </Tag>
-                    {member?.createdAt && (
-                      <span className="text-xs text-gray-400">
-                        {dayjs(member.createdAt?.toDate?.() || member.createdAt).format('DD MMM YYYY')}
-                      </span>
-                    )}
-                  </div>
-                </div>
-              </div>
-            </Card>
+                </Card>
+              )
+            })()}
 
             {/* Program summary on overview */}
             <Card size="small" title={<span className="text-sm"><TrophyOutlined className="text-purple-600 mr-2" />Program</span>}>

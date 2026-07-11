@@ -104,13 +104,13 @@ const Page = () => {
   const [searchLoading, setSearchLoading] = useState(false)
 
   const [pagination, setPagination] = useState({
-    current: 1, pageSize: 10, total: 0, lastDoc: null, lastDocs: {}
+    current: 1, pageSize: 100, total: 0, lastDoc: null, lastDocs: {}
   })
 
   const [filters, setFilters] = useState({
     search: '', programId: 'all', agentId: 'all',
     status: 'all', paymentStatus: 'all',
-    closingPaymentStatus: 'all',
+    closingPaymentStatus: 'all', gender: 'all',
     fromDate: null, toDate: null,
     sortField: 'createdAt', sortOrder: 'desc'
   })
@@ -219,7 +219,7 @@ const isSuperAdmin = (user) => user?.role === 'superadmin';
   }
 
   const resetFilters = () => {
-    const reset = { programId: 'all', agentId: 'all', status: 'all', paymentStatus: 'all', closingPaymentStatus: 'all', fromDate: null, toDate: null, sortField: 'createdAt', sortOrder: 'desc' }
+    const reset = { programId: 'all', agentId: 'all', status: 'all', paymentStatus: 'all', closingPaymentStatus: 'all', gender: 'all', fromDate: null, toDate: null, sortField: 'createdAt', sortOrder: 'desc' }
     setFilters(prev => ({ ...prev, ...reset }))
     filterForm.resetFields()
     setSearchMode('paginated'); setSearchResults([])
@@ -229,11 +229,12 @@ const isSuperAdmin = (user) => user?.role === 'superadmin';
 
   const getActiveFilterCount = () => {
     let c = 0
-    if (filters.programId          !== 'all') c++
-    if (filters.agentId            !== 'all') c++
-    if (filters.status             !== 'all') c++
-    if (filters.paymentStatus      !== 'all') c++
+    if (filters.programId            !== 'all') c++
+    if (filters.agentId              !== 'all') c++
+    if (filters.status               !== 'all') c++
+    if (filters.paymentStatus        !== 'all') c++
     if (filters.closingPaymentStatus !== 'all') c++
+    if (filters.gender               !== 'all') c++
     if (filters.fromDate) c++
     if (filters.toDate)   c++
     return c
@@ -335,14 +336,29 @@ const isSuperAdmin = (user) => user?.role === 'superadmin';
   }
 
   const handleBatchCertSelected = () => {
-    const selected = selectedRowKeys.map(id => displayedMembers.find(m => m.id === id)).filter(Boolean)
+    const selected = selectedRowKeys
+      .map(id => displayedMembers.find(m => m.id === id))
+      .filter(Boolean)
+      .filter(m => m.active_flag === true)
+    if (selected.length === 0) {
+      message.warning('No accepted members in selection. Only accepted members can get certificates.')
+      return
+    }
     downloadMultipleCertificates(selected)
   }
 
   const handleBatchCertAll = async () => {
     const data = allMembersForExport || await fetchAllMembersForExport()
     if (!data || data.length === 0) { message.warning('No members found'); return }
-    downloadMultipleCertificates(data)
+    const accepted = data.filter(m => m.active_flag === true)
+    if (accepted.length === 0) {
+      message.warning('No accepted members found. Only accepted members can get certificates.')
+      return
+    }
+    if (accepted.length < data.length) {
+      message.info(`Downloading certificates for ${accepted.length} accepted members (${data.length - accepted.length} pending skipped)`)
+    }
+    downloadMultipleCertificates(accepted)
   }
 
   const handleEditMember = (member) => { setEditMemberId(member.id); setOpenEditMember(true) }
@@ -713,19 +729,26 @@ const handleDeleteMember = (member) => {
   const exportAllToCSV = async () => {
     const data = allMembersForExport || await fetchAllMembersForExport()
     if (data && data.length > 0) {
-      exportToCSV(data)
-      message.success(`Exported ${data.length} members to CSV`)
+      const active = data.filter(m => m.active_flag === true)
+      if (active.length === 0) { message.warning('No accepted members found to export'); return }
+      if (active.length < data.length) message.info(`Exporting ${active.length} accepted members (${data.length - active.length} pending skipped)`)
+      exportToCSV(active)
+      message.success(`Exported ${active.length} members to CSV`)
     } else {
       message.warning('No members found to export')
     }
   }
 
   const printMembers = async () => {
-    const data = allMembersForExport || await fetchAllMembersForExport()
+    let data = allMembersForExport || await fetchAllMembersForExport()
     if (!data || data.length === 0) {
       message.warning('No members found to print')
       return
     }
+    const before = data.length
+    data = data.filter(m => m.active_flag === true)
+    if (data.length === 0) { message.warning('No accepted members found to print'); return }
+    if (data.length < before) message.info(`Printing ${data.length} accepted members (${before - data.length} pending skipped)`)
 
     const filterParts = []
     if (filters.programId !== 'all') filterParts.push(`Yojna: ${programList?.find(p => p.id === filters.programId)?.name || filters.programId}`)
@@ -964,11 +987,14 @@ ${filterHtml}
                       setAllMembersExportLoading(true)
                       try {
                         // Use cached data if available, otherwise fetch
-                        const data = allMembersForExport || await fetchAllMembersForExport()
-                        if (!data || data.length === 0) {
+                        const raw = allMembersForExport || await fetchAllMembersForExport()
+                        if (!raw || raw.length === 0) {
                           message.warning('No members found')
                           return
                         }
+                        const data = raw.filter(m => m.active_flag === true)
+                        if (data.length === 0) { message.warning('No accepted members found'); return }
+                        if (data.length < raw.length) message.info(`PDF: ${data.length} accepted members (${raw.length - data.length} pending skipped)`)
                         setPdfMeta({ data, filters, programList, agentList })
                       } catch (err) {
                         console.error('PDF error:', err)
@@ -1082,6 +1108,15 @@ ${filterHtml}
               </Select>
             </Form.Item>
 
+            <Form.Item label="Gender" name="gender">
+              <Select placeholder="Select Gender">
+                <Option value="all">All</Option>
+                <Option value="male">♂ Male</Option>
+                <Option value="female">♀ Female</Option>
+                <Option value="other">Other</Option>
+              </Select>
+            </Form.Item>
+
             <Form.Item label="From Date" name="fromDate">
               <DatePicker format="DD-MM-YYYY" style={{ width: '100%' }} />
             </Form.Item>
@@ -1097,6 +1132,7 @@ ${filterHtml}
             <div>• Agent: {filters.agentId === 'all' ? 'All' : getAgentName(filters.agentId)}</div>
             <div>• Status: {filters.status === 'all' ? 'All' : filters.status}</div>
             <div>• Payment: {filters.paymentStatus === 'all' ? 'All' : filters.paymentStatus}</div>
+            <div>• Gender: {filters.gender === 'all' ? 'All' : filters.gender}</div>
             <div>• Dates: {filters.fromDate ? formatDate(filters.fromDate) : 'Any'} → {filters.toDate ? formatDate(filters.toDate) : 'Any'}</div>
           </div>
         </Form>

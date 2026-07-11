@@ -6,6 +6,16 @@ import { sendToAgent } from "../db/fcm";
 
 const db = admin.firestore();
 
+// Auto-generate a cash reference ID so cash payments are searchable
+const generateCashId = () => {
+  const d   = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  const date = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}`;
+  const time = `${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+  const rand = Math.random().toString(36).substring(2, 6).toUpperCase();
+  return `CSH-${date}-${time}-${rand}`;
+};
+
 export async function POST(req) {
   try {
     const authResult = await verifyToken(req);
@@ -30,8 +40,14 @@ export async function POST(req) {
     const batch        = db.batch();
     const numTotalAmount = Number(totalAmount);
 
-    // ── Duplicate UTR / transaction ID check ──────────────────────────────────
-    // If transactionId is provided, reject if it was already used in any payment group.
+    // ── Resolve final transaction ID (auto-generate for cash) ─────────────────
+    // Online payments provide a UTR; cash payments get an auto-generated CSH-... ID
+    // so they are searchable in payment history.
+    const finalTxId = (transactionId && transactionId.trim())
+      ? transactionId.trim()
+      : paymentMethod === 'cash' ? generateCashId() : '';
+
+    // ── Duplicate UTR / transaction ID check (online only) ───────────────────
     if (transactionId && transactionId.trim() !== '') {
       const utrSnap = await db.collection('paymentGroups')
         .where('transactionId', '==', transactionId.trim())
@@ -70,7 +86,7 @@ export async function POST(req) {
       agentId,
       totalAmount:   numTotalAmount,
       paymentMethod,
-      transactionId,
+      transactionId: finalTxId,
       paymentDate:   new Date(paymentDate),
       createdBy:     authResult.user.uid,
       paymentNote,
@@ -169,7 +185,7 @@ export async function POST(req) {
       amount:           deduction,          // actual applied amount
       requestedAmount,                       // original requested amount
       paymentMode:      paymentMethod,
-      transactionId:    transactionId || '',
+      transactionId:    finalTxId,
       transactionDate:  paymentDate,
       status:           'completed',
       createdBy:        authResult.user.uid,

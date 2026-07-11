@@ -3,17 +3,19 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Table, Card, Tag, Button, Space, Typography,
   Badge, Spin, Empty, message, Select, DatePicker,
-  Flex, Input
+  Flex, Input, Modal, Tooltip
 } from 'antd';
 import {
   DownloadOutlined, FileExcelOutlined, FilePdfOutlined,
   SearchOutlined,
   DownOutlined, RightOutlined, ReloadOutlined,
+  DeleteOutlined, ExclamationCircleOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import * as XLSX from 'xlsx';
 import { auth } from '../../../../lib/firbase-client';
 import { useSelector } from 'react-redux';
+import { useAuth } from '@/components/Base/AuthProvider';
 
 const { Text, Title } = Typography;
 const { RangePicker } = DatePicker;
@@ -34,8 +36,12 @@ const C = {
 const PAGE_SIZE = 100;
 
 const PaymentHistoryPage = () => {
+  const { user } = useAuth();
+  const isSuperAdmin = user?.role === 'superadmin';
+
   const [loading, setLoading] = useState(false);
   const [exportLoading, setExportLoading] = useState(false);
+  const [deletingId, setDeletingId] = useState(null);
   const [groups, setGroups] = useState([]);
   const [pagination, setPagination] = useState({ page: 1, totalGroups: 0, totalPages: 0, totalTransactions: 0, totalAmount: 0 });
   const [expandedRowKeys, setExpandedRowKeys] = useState([]);
@@ -46,6 +52,7 @@ const PaymentHistoryPage = () => {
   const [typeFilter, setTypeFilter] = useState('all');
   const [agentFilter, setAgentFilter] = useState('all');
   const [searchText, setSearchText] = useState('');
+  const searchRef   = useRef('');          // always holds latest value — avoids stale closure
   const [currentPage, setCurrentPage] = useState(1);
   const agentList = useSelector((state) => state.data.agentList || []);
 
@@ -60,7 +67,8 @@ const PaymentHistoryPage = () => {
       if (agentFilter !== 'all') params.set('agentId', agentFilter);
       if (dateRange?.[0]) params.set('startDate', dateRange[0].startOf('day').toISOString());
       if (dateRange?.[1]) params.set('endDate', dateRange[1].endOf('day').toISOString());
-      if (searchText.trim()) params.set('search', searchText.trim());
+      // Use ref so debounced calls always get the latest typed value (avoids stale closure)
+      if (searchRef.current.trim()) params.set('search', searchRef.current.trim());
 
       const token = await auth.currentUser?.getIdToken();
       if (!token) { message.error('Not authenticated'); setLoading(false); return; }
@@ -81,7 +89,7 @@ const PaymentHistoryPage = () => {
     } finally {
       setLoading(false);
     }
-  }, [typeFilter, methodFilter, agentFilter, dateRange, searchText]);
+  }, [typeFilter, methodFilter, agentFilter, dateRange]);
 
   useEffect(() => {
     fetchData(currentPage);
@@ -89,11 +97,71 @@ const PaymentHistoryPage = () => {
 
   const handleSearch = (val) => {
     setSearchText(val);
+    searchRef.current = val;               // update ref immediately (no async delay)
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
       setCurrentPage(1);
-      fetchData(1);
+      fetchData(1);                        // fetchData reads searchRef.current — always fresh
     }, 500);
+  };
+
+  // ── Delete a payment group (superadmin only) ────────────────────────────────
+  const handleDelete = (record) => {
+    const isClosing = record.paymentType === 'closingPayment';
+    const label     = isClosing ? 'Closing Payment' : 'Join Fees';
+    const amount    = (record.totalAmount || 0).toLocaleString();
+    const txCount   = (record.transactions || []).length;
+
+    Modal.confirm({
+      title: `Delete ${label} Group?`,
+      icon: <ExclamationCircleOutlined style={{ color: '#dc2626' }} />,
+      content: (
+        <div style={{ marginTop: 8 }}>
+          <p>This will <strong>permanently delete</strong> this payment group and reverse all stats:</p>
+          <ul style={{ marginTop: 8, paddingLeft: 16, color: '#374151' }}>
+            <li>Amount: <strong>₹{amount}</strong></li>
+            <li>Transactions: <strong>{txCount} member(s)</strong></li>
+            <li>Agent: <strong>{record.agent?.name || record.agentId || '—'}</strong></li>
+          </ul>
+          <p style={{ marginTop: 10, color: '#dc2626', fontWeight: 600 }}>
+            This cannot be undone. Member paid/pending amounts will be reversed.
+          </p>
+        </div>
+      ),
+      okText: 'Delete',
+      okType: 'danger',
+      cancelText: 'Cancel',
+      onOk: async () => {
+        setDeletingId(record.id);
+        try {
+          const token  = await auth.currentUser?.getIdToken();
+          const route  = isClosing ? '/api/closing-fees-revert' : '/api/join-fees-revert';
+          const res    = await fetch(route, {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+            body:    JSON.stringify({ paymentGroupId: record.id }),
+          });
+          const data = await res.json();
+          if (data.success) {
+            message.success(data.message || 'Payment group deleted');
+            // Remove from local state immediately — no full refetch needed
+            setGroups(prev => prev.filter(g => g.id !== record.id));
+            setPagination(prev => ({
+              ...prev,
+              totalGroups:        prev.totalGroups - 1,
+              totalTransactions:  prev.totalTransactions - txCount,
+              totalAmount:        prev.totalAmount - (record.totalAmount || 0),
+            }));
+          } else {
+            message.error(data.message || 'Delete failed');
+          }
+        } catch (e) {
+          message.error('Delete failed: ' + e.message);
+        } finally {
+          setDeletingId(null);
+        }
+      },
+    });
   };
 
   const buildExportParams = () => {
@@ -104,7 +172,7 @@ const PaymentHistoryPage = () => {
     if (agentFilter !== 'all') params.set('agentId', agentFilter);
     if (dateRange?.[0]) params.set('startDate', dateRange[0].startOf('day').toISOString());
     if (dateRange?.[1]) params.set('endDate', dateRange[1].endOf('day').toISOString());
-    if (searchText.trim()) params.set('search', searchText.trim());
+    if (searchRef.current.trim()) params.set('search', searchRef.current.trim());
     return params;
   };
 
@@ -114,16 +182,18 @@ const PaymentHistoryPage = () => {
       (g.transactions || []).forEach(tx => {
         list.push({
           key: `${g.id}_${tx.id}`,
-          groupDate: g.paymentDate ? dayjs(g.paymentDate).format('DD/MM/YYYY') : '—',
-          agentName: g.agent?.name || '—',
-          agentPhone: g.agent?.phone1 || '',
-          memberName: tx.memberName || '—',
-          programName: tx.programName || '—',
-          paymentType: g.paymentType === 'closingPayment' ? 'Closing' : 'Join Fees',
-          amount: tx.amount || 0,
-          method: g.paymentMethod || '—',
-          transactionId: tx.transactionId || '—',
-          paymentNote: g.paymentNote || '',
+          groupDate:     g.paymentDate ? dayjs(g.paymentDate).format('DD/MM/YYYY') : '—',
+          agentName:     g.agent?.name || '—',
+          agentPhone:    g.agent?.phone1 || '',
+          memberName:    tx.memberName || '—',
+          regNo:         tx.memberRegNo || tx.registrationNumber || '—',
+          programName:   tx.programName || '—',
+          paymentType:   g.paymentType === 'closingPayment' ? 'Closing' : 'Join Fees',
+          amount:        tx.amount || 0,
+          method:        g.paymentMethod || '—',
+          // tx-level field has it for new records; fall back to group-level for older ones
+          transactionId: tx.transactionId || g.transactionId || '—',
+          paymentNote:   g.paymentNote || '',
         });
       });
     });
@@ -154,8 +224,8 @@ const PaymentHistoryPage = () => {
   const exportCSV = async () => {
     const allTx = await fetchExportData();
     if (!allTx || !allTx.length) { message.warning('No data'); return; }
-    const headers = ['Date', 'Agent Name', 'Agent Phone', 'Member Name', 'Program', 'Payment Type', 'Amount', 'Method', 'Transaction ID'];
-    const rows = allTx.map(r => [r.groupDate, r.agentName, r.agentPhone, r.memberName, r.programName, r.paymentType, r.amount, r.method, r.transactionId]);
+    const headers = ['Date', 'Agent Name', 'Agent Phone', 'Member Name', 'Reg No', 'Yojna / Program', 'Payment Type', 'Amount', 'Method', 'UTR / Cash ID'];
+    const rows = allTx.map(r => [r.groupDate, r.agentName, r.agentPhone, r.memberName, r.regNo, r.programName, r.paymentType, r.amount, r.method, r.transactionId]);
     const csv = [headers.join(','), ...rows.map(r => r.map(v => String(v ?? '').includes(',') ? `"${String(v).replace(/"/g, '""')}"` : v).join(','))].join('\n');
     const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
     const a = document.createElement('a');
@@ -171,8 +241,8 @@ const PaymentHistoryPage = () => {
     if (!allTx || !allTx.length) { message.warning('No data'); return; }
     const data = [...allTx.map(r => ({
       'Date': r.groupDate, 'Agent': r.agentName, 'Phone': r.agentPhone,
-      'Member': r.memberName, 'Program': r.programName, 'Type': r.paymentType,
-      'Amount': r.amount, 'Method': r.method, 'Tx ID': r.transactionId,
+      'Member': r.memberName, 'Reg No': r.regNo, 'Yojna / Program': r.programName,
+      'Type': r.paymentType, 'Amount': r.amount, 'Method': r.method, 'UTR / Cash ID': r.transactionId,
     })), { 'Date': '', 'Agent': 'TOTAL', 'Amount': allTx.reduce((s, r) => s + r.amount, 0) }];
     const ws = XLSX.utils.json_to_sheet(data);
     const wb = XLSX.utils.book_new();
@@ -186,13 +256,15 @@ const PaymentHistoryPage = () => {
     if (!allTx || !allTx.length) { message.warning('No data'); return; }
     const rows = allTx.map((r, i) => `<tr>
       <td class="c">${i + 1}</td>
-      <td>${r.groupDate}</td>
+      <td class="c">${r.groupDate}</td>
       <td>${r.agentName}</td>
       <td>${r.memberName}</td>
-      <td>${r.paymentType}</td>
-      <td class="c">₹${r.amount.toLocaleString()}</td>
+      <td class="c reg">${r.regNo}</td>
+      <td>${r.programName}</td>
+      <td class="c">${r.paymentType}</td>
+      <td class="c amt">₹${r.amount.toLocaleString()}</td>
       <td class="c">${r.method}</td>
-      <td>${r.transactionId}</td>
+      <td class="txid">${r.transactionId}</td>
     </tr>`).join('');
     const t = allTx.reduce((s, r) => s + r.amount, 0);
     const html = `<!DOCTYPE html><html><head>
@@ -206,31 +278,45 @@ const PaymentHistoryPage = () => {
         .page{width:210mm;min-height:297mm;background:#fff;margin:18px auto;padding:8mm;box-shadow:0 6px 28px rgba(0,0,0,.25)}
         h2{text-align:center;color:#1B385A;margin-bottom:4px;font-size:18px}
         .sub{text-align:center;color:#D3292F;font-size:12px;margin-bottom:10px}
-        .filters{font-size:11px;color:#666;margin-bottom:8px;display:flex;gap:16px;flex-wrap:wrap}
-        table{width:100%;border-collapse:collapse;border:1.5px solid #999;font-size:10px}
-        th{padding:6px 4px;font-weight:700;color:#1B385A;text-align:center;border:1px solid #999;background:#f0f0f0}
-        td{padding:5px 4px;color:#111;border:0.8px solid #c0c8d4}
+        table{width:100%;border-collapse:collapse;border:1.5px solid #999;font-size:9px}
+        th{padding:5px 3px;font-weight:700;color:#1B385A;text-align:center;border:1px solid #999;background:#f0f0f0}
+        td{padding:4px 3px;color:#111;border:0.8px solid #c0c8d4}
         td.c{text-align:center}
+        td.reg{font-family:monospace;color:#db2777;font-size:8.5px}
+        td.amt{font-weight:700}
+        td.txid{font-size:8px;color:#555}
         .total-row td{font-weight:700;background:#fff3f0}
         .footer{text-align:center;margin-top:10px;font-size:10px;color:#666;border-top:1.5px solid #D3292F;padding-top:6px}
-        @media print{body{background:#fff}.print-bar{display:none!important}.page{margin:0;box-shadow:none}}
+        @media print{body{background:#fff}.print-bar{display:none!important}.page{margin:0;box-shadow:none;padding:4mm}}
       </style>
     </head><body>
       <div class="print-bar">
         <button class="btn-print" onclick="window.print()">🖨 Print</button>
         <button class="btn-close" onclick="window.close()">✕ Close</button>
-        <span class="print-info">📄 ${allTx.length} records</span>
+        <span style="color:#fff;font-size:13px">📄 ${allTx.length} records</span>
       </div>
       <div class="page">
         <h2>श्री क्षत्रिय घांची मोदी समाज सेवा संस्थान ट्रस्ट</h2>
         <div class="sub">पूर्ण भुगतान इतिहास रिपोर्ट</div>
         <table>
           <thead><tr>
-            <th style="width:25px">#</th><th style="width:65px">Date</th><th>Agent</th><th>Member</th>
-            <th style="width:55px">Type</th><th style="width:65px">Amount</th><th style="width:50px">Method</th><th>Tx ID</th>
+            <th style="width:22px">#</th>
+            <th style="width:58px">Date</th>
+            <th style="width:80px">Agent</th>
+            <th style="width:85px">Member</th>
+            <th style="width:68px">Reg No</th>
+            <th>Yojna / Program</th>
+            <th style="width:48px">Type</th>
+            <th style="width:58px">Amount</th>
+            <th style="width:42px">Method</th>
+            <th style="width:70px">UTR / Cash ID</th>
           </tr></thead>
           <tbody>${rows}
-            <tr class="total-row"><td colspan="5" style="text-align:right">Total (${allTx.length}):</td><td class="c">₹${t.toLocaleString()}</td><td colspan="2"></td></tr>
+            <tr class="total-row">
+              <td colspan="7" style="text-align:right;padding-right:6px">Total (${allTx.length} records):</td>
+              <td class="c">₹${t.toLocaleString()}</td>
+              <td colspan="2"></td>
+            </tr>
           </tbody>
         </table>
         <div class="footer">Generated ${dayjs().format('DD MMM YYYY hh:mm A')}</div>
@@ -249,7 +335,16 @@ const PaymentHistoryPage = () => {
       <div style={{ padding: '8px 16px', background: '#fdf2f8', borderRadius: 8 }}>
         <Table
           columns={[
-            { title: 'Member', dataIndex: 'memberName', key: 'member', width: 180 },
+            { title: 'Member', key: 'member', width: 200,
+              render: (_, tx) => (
+                <div>
+                  <Text strong style={{ display: 'block', fontSize: 13 }}>{tx.memberName || '—'}</Text>
+                  <Text style={{ fontSize: 11, color: C.primary, fontFamily: 'monospace' }}>
+                    {tx.memberRegNo || tx.registrationNumber || '—'}
+                  </Text>
+                </div>
+              ),
+            },
             { title: 'Program', dataIndex: 'programName', key: 'program', width: 150 },
             { title: 'Amount', dataIndex: 'amount', key: 'amount', width: 100, align: 'right',
               render: (v) => <Text strong>₹{(v || 0).toLocaleString()}</Text> },
@@ -295,6 +390,21 @@ const PaymentHistoryPage = () => {
       render: (_, r) => <Badge count={(r.transactions || []).length} style={{ backgroundColor: C.info }} showZero /> },
     { title: 'Note', dataIndex: 'paymentNote', key: 'note', width: 110, ellipsis: true,
       render: (v) => <Text style={{ fontSize: 11, color: C.muted }}>{v || '—'}</Text> },
+    ...(isSuperAdmin ? [{
+      title: 'Action', key: 'action', width: 70, align: 'center', fixed: 'right',
+      render: (_, record) => (
+        <Tooltip title="Delete payment group & reverse stats">
+          <Button
+            size="small"
+            danger
+            icon={<DeleteOutlined />}
+            loading={deletingId === record.id}
+            onClick={() => handleDelete(record)}
+            style={{ borderRadius: 6 }}
+          />
+        </Tooltip>
+      ),
+    }] : []),
   ];
 
   return (
@@ -381,7 +491,7 @@ const PaymentHistoryPage = () => {
               showSizeChanger: false,
             }}
             size="middle"
-            scroll={{ x: 1100 }}
+            scroll={{ x: isSuperAdmin ? 1200 : 1100 }}
             expandable={{
               expandedRowRender,
               expandedRowKeys,

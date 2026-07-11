@@ -55,6 +55,16 @@ const AgentsManagementPage = () => {
   const [walletAmount, setWalletAmount] = useState('');
   const [walletDesc, setWalletDesc] = useState('');
   const [walletProcessing, setWalletProcessing] = useState(false);
+  // Advance payment state
+  const [advanceHistory,        setAdvanceHistory]        = useState([]);
+  const [advanceHistoryLoading, setAdvanceHistoryLoading] = useState(false);
+  const [advanceModalVisible,   setAdvanceModalVisible]   = useState(false);
+  const [advanceAmount,         setAdvanceAmount]         = useState('');
+  const [advanceDesc,           setAdvanceDesc]           = useState('');
+  const [advanceNote,           setAdvanceNote]           = useState('');
+  const [advancePaymentMode,    setAdvancePaymentMode]    = useState('cash');
+  const [advanceUtrId,          setAdvanceUtrId]          = useState('');
+  const [advanceProcessing,     setAdvanceProcessing]     = useState(false);
   const [form] = Form.useForm();
   const [pagination, setPagination] = useState({ current: 1, pageSize: 50, total: 0, showSizeChanger: true, pageSizeOptions: ['10','20','50','100'] });
   const [filters,    setFilters]    = useState({ status: 'all', search: '' });
@@ -245,6 +255,109 @@ const isSuperAdmin = (user) => user?.role === 'superadmin';
     }
   };
 
+  const loadAdvanceHistory = async (agent) => {
+    setAdvanceHistoryLoading(true);
+    try {
+      const token = await auth.currentUser?.getIdToken();
+      const res = await fetch(`/api/agents/advance?agentId=${agent.id}&limit=50`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const result = await res.json();
+      if (result.success) setAdvanceHistory(result.data || []);
+    } catch (e) {
+      console.error('Failed to load advance history:', e);
+    } finally {
+      setAdvanceHistoryLoading(false);
+    }
+  };
+
+  const resetAdvanceModal = () => {
+    setAdvanceModalVisible(false);
+    setAdvanceAmount(''); setAdvanceDesc(''); setAdvanceNote('');
+    setAdvancePaymentMode('cash'); setAdvanceUtrId('');
+  };
+
+  const handleAddAdvance = async () => {
+    const amt = parseFloat(advanceAmount);
+    if (!amt || amt <= 0) { message.error('Enter a valid amount'); return; }
+    if (advancePaymentMode === 'online' && !advanceUtrId.trim()) {
+      message.error('Please enter UTR / Transaction ID for online payment'); return;
+    }
+    setAdvanceProcessing(true);
+    try {
+      const token = await auth.currentUser?.getIdToken();
+      const res = await fetch('/api/agents/advance', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          agentId:     selectedAgent.id,
+          amount:      amt,
+          description: advanceDesc || 'Advance Payment',
+          note:        advanceNote,
+          paymentMode: advancePaymentMode,
+          utrId:       advancePaymentMode === 'online' ? advanceUtrId.trim() : '',
+        }),
+      });
+      const result = await res.json();
+      if (result.success) {
+        message.success(result.message);
+        resetAdvanceModal();
+        setSelectedAgent(prev => ({
+          ...prev,
+          advanceBalance:   (prev.advanceBalance || 0) + amt,
+          totalAdvancePaid: (prev.totalAdvancePaid || 0) + amt,
+        }));
+        await loadAdvanceHistory(selectedAgent);
+        fetchAgents(pagination.current);
+      } else {
+        message.error(result.message || 'Failed to record advance');
+      }
+    } catch (e) {
+      message.error(e.message || 'Error recording advance');
+    } finally {
+      setAdvanceProcessing(false);
+    }
+  };
+
+  const printAdvanceReport = () => {
+    if (!selectedAgent || advanceHistory.length === 0) return;
+    const win = window.open('', '_blank');
+    const rows = advanceHistory.map((tx, i) => `
+      <tr>
+        <td class="c">${i + 1}</td>
+        <td class="nowrap">${tx.createdAt ? formatDate(tx.createdAt) : '-'}</td>
+        <td class="l"><b>${tx.description || 'Advance Payment'}</b>${tx.note ? `<div class="sm">${tx.note}</div>` : ''}</td>
+        <td class="c">${tx.paymentMode === 'online' ? 'Online' : 'Cash'}</td>
+        <td class="mono">${tx.utrId || '-'}</td>
+        <td class="amt green">+₹${(tx.amount || 0).toLocaleString('en-IN')}</td>
+        <td class="amt">₹${(tx.balanceAfter || 0).toLocaleString('en-IN')}</td>
+      </tr>`).join('');
+    const total = advanceHistory.reduce((s, t) => s + (t.amount || 0), 0);
+    win.document.write(`<!DOCTYPE html><html><head>
+<meta charset="utf-8"><title>Advance Report — ${selectedAgent.name}</title>
+<style>
+  @page{size:A4;margin:10mm 8mm 18mm 8mm}
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:'Segoe UI',Arial,sans-serif;background:#fff;color:#1f2937;padding:12px;font-size:13px}
+  .header{text-align:center;margin-bottom:14px;border-bottom:2px solid #1B385A;padding-bottom:10px}
+  .header h1{font-size:20px;color:#1B385A} .header .sub{font-size:11px;color:#6b7280;margin-top:4px}
+  table{width:100%;border-collapse:collapse;font-size:12px}
+  th{background:#1B385A;color:#fff;padding:6px 8px;text-align:left}
+  td{padding:5px 8px;border-bottom:1px solid #e5e7eb}
+  tr:nth-child(even) td{background:#f9fafb}
+  .c{text-align:center}.amt{text-align:right}.green{color:#16a34a;font-weight:600}
+  .sm{font-size:10px;color:#6b7280;margin-top:2px}.mono{font-family:monospace;font-size:11px}
+  .summary{margin-top:10px;text-align:right;font-size:12px;color:#374151}
+</style></head><body>
+<div class="header"><h1>Advance Payment Report</h1>
+<div class="sub">Agent: ${selectedAgent.name} | ${new Date().toLocaleDateString('en-IN')}</div></div>
+<table><thead><tr><th style="width:22px">#</th><th style="width:120px">Date</th><th>Description</th><th style="width:60px">Mode</th><th style="width:130px">UTR / Cash ID</th><th style="width:90px">Amount</th><th style="width:90px">Balance</th></tr></thead>
+<tbody>${rows}</tbody></table>
+<div class="summary">Total Advance Deposited: <b>₹${total.toLocaleString('en-IN')}</b></div>
+<script>setTimeout(function(){window.print()},400)</script></body></html>`);
+    win.document.close();
+  };
+
   const printCommissionReport = () => {
     if (!selectedAgent || commissionHistory.length === 0) return
     const win = window.open('', '_blank')
@@ -252,20 +365,21 @@ const isSuperAdmin = (user) => user?.role === 'superadmin';
       <tr>
         <td class="c">${i + 1}</td>
         <td class="nowrap">${tx.createdAt ? formatDate(tx.createdAt) : '-'}</td>
-        <td class="c">${tx.type === 'credit' ? 'CREDIT' : 'DEBIT'}</td>
+        <td class="c">${tx.type === 'credit' ? 'CREDIT' : tx.type === 'reversal' ? 'REVERSAL' : 'DEBIT'}</td>
         <td class="l">
           <b>${tx.memberName || tx.description || tx.source}</b>
           ${tx.memberFatherName ? `<div class="sm">${tx.memberFatherName}</div>` : ''}
-          ${tx.memberRegNo ? `<div class="sm mono">${tx.memberRegNo}</div>` : ''}
+          ${tx.memberRegNo ? `<div class="sm mono">#${tx.memberRegNo}</div>` : ''}
         </td>
         <td class="c">${tx.commissionRate ? (tx.commissionRate * 100) + '%' : '-'}</td>
         <td class="c">${tx.source === 'joinFees' ? 'Join Fee' : tx.source === 'closingPayment' ? 'Closing' : tx.source === 'withdrawal' ? 'Withdrawal' : tx.source}</td>
-        <td class="amt ${tx.type === 'credit' ? 'green' : 'red'}">${tx.type === 'credit' ? '+' : '-'}₹${tx.amount.toLocaleString('en-IN')}</td>
-        <td class="amt">₹${(tx.balanceAfter || 0).toLocaleString('en-IN')}</td>
+        <td class="amt">${(() => { const b = tx.baseAmount || (tx.commissionRate > 0 ? Math.round(tx.amount / tx.commissionRate) : null); return b != null && (tx.source === 'joinFees' || tx.source === 'closingPayment') ? '₹' + b.toLocaleString('en-IN') : '-'; })()}</td>
+        <td class="amt ${tx.type === 'credit' ? 'green' : 'red'}">${tx.type === 'credit' ? '+' : '-'}₹${(tx.amount || 0).toLocaleString('en-IN')}</td>
+        <td class="amt ${(tx.balanceAfter || 0) < 0 ? 'red' : ''}">${(tx.balanceAfter || 0) < 0 ? '-' : ''}₹${Math.abs(tx.balanceAfter || 0).toLocaleString('en-IN')}</td>
       </tr>`).join('')
 
-    const totalCredits = commissionHistory.filter(t => t.type === 'credit').reduce((s, t) => s + t.amount, 0)
-    const totalDebits = commissionHistory.filter(t => t.type === 'debit').reduce((s, t) => s + t.amount, 0)
+    const totalCredits = commissionHistory.filter(t => t.type === 'credit').reduce((s, t) => s + (t.amount || 0), 0)
+    const totalDebits = commissionHistory.filter(t => t.type !== 'credit').reduce((s, t) => s + (t.amount || 0), 0)
 
     win.document.write(`<!DOCTYPE html><html lang="hi"><head>
 <meta charset="utf-8"><title>Commission Report — ${selectedAgent.name}</title>
@@ -324,7 +438,8 @@ const isSuperAdmin = (user) => user?.role === 'superadmin';
     <th>Member / Father / Reg No</th>
     <th style="width:55px">Rate</th>
     <th style="width:75px">Source</th>
-    <th style="width:78px">Amount</th>
+    <th style="width:78px">Join Fees</th>
+    <th style="width:78px">Commission</th>
     <th style="width:72px">Balance</th>
   </tr></thead>
   <tbody>${rows}</tbody>
@@ -452,13 +567,18 @@ const isSuperAdmin = (user) => user?.role === 'superadmin';
       ),
     },
     {
-      title: 'WALLET', key: 'wallet', width: 160,
+      title: 'WALLET', key: 'wallet', width: 200,
       render: (_, r) => (
         <div className="flex items-center gap-2">
           <WalletOutlined className="text-blue-600" />
           <div>
             <div className="font-bold text-sm">₹{(r.walletBalance || 0).toLocaleString('en-IN')}</div>
             <div className="text-xs text-gray-500">Earned: ₹{(r.totalCommissionEarned || 0).toLocaleString('en-IN')}</div>
+            {(r.advanceBalance || 0) > 0 && (
+              <div className="text-xs text-emerald-600 font-medium mt-0.5">
+                Advance: ₹{(r.advanceBalance || 0).toLocaleString('en-IN')}
+              </div>
+            )}
           </div>
         </div>
       ),
@@ -977,7 +1097,8 @@ const isSuperAdmin = (user) => user?.role === 'superadmin';
                                     <th className="px-3 py-2.5 text-left font-semibold text-gray-600 text-[11px] uppercase tracking-wider">Member Details</th>
                                     <th className="px-3 py-2.5 text-center font-semibold text-gray-600 text-[11px] uppercase tracking-wider">Rate</th>
                                     <th className="px-3 py-2.5 text-center font-semibold text-gray-600 text-[11px] uppercase tracking-wider">Source</th>
-                                    <th className="px-3 py-2.5 text-right font-semibold text-gray-600 text-[11px] uppercase tracking-wider">Amount</th>
+                                    <th className="px-3 py-2.5 text-right font-semibold text-gray-600 text-[11px] uppercase tracking-wider">Join Fees</th>
+                                    <th className="px-3 py-2.5 text-right font-semibold text-gray-600 text-[11px] uppercase tracking-wider">Commission</th>
                                     <th className="px-3 py-2.5 text-right font-semibold text-gray-600 text-[11px] uppercase tracking-wider">Balance</th>
                                   </tr>
                                 </thead>
@@ -992,6 +1113,8 @@ const isSuperAdmin = (user) => user?.role === 'superadmin';
                                       <td className="px-3 py-3 align-top">
                                         {tx.type === 'credit'
                                           ? <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-green-100 text-green-700 text-[11px] font-medium"><PlusCircleOutlined />Credit</span>
+                                          : tx.type === 'reversal'
+                                          ? <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-orange-100 text-orange-700 text-[11px] font-medium"><MinusCircleOutlined />Reversal</span>
                                           : <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-red-100 text-red-700 text-[11px] font-medium"><MinusCircleOutlined />Debit</span>
                                         }
                                       </td>
@@ -1017,12 +1140,135 @@ const isSuperAdmin = (user) => user?.role === 'superadmin';
                                            tx.source === 'withdrawal' ? 'Withdrawal' : tx.source}
                                         </span>
                                       </td>
+                                      <td className="px-3 py-3 text-right align-top whitespace-nowrap">
+                                        {(() => {
+                                          const base = tx.baseAmount || (tx.commissionRate > 0 ? Math.round(tx.amount / tx.commissionRate) : null);
+                                          return base != null && (tx.source === 'joinFees' || tx.source === 'closingPayment')
+                                            ? <span className="font-medium text-gray-700 text-xs">₹{base.toLocaleString('en-IN')}</span>
+                                            : <span className="text-gray-300">-</span>;
+                                        })()}
+                                      </td>
                                       <td className={`px-3 py-3 text-right align-top font-bold text-sm whitespace-nowrap ${tx.type === 'credit' ? 'text-green-600' : 'text-red-600'}`}>
                                         <span className={tx.type === 'credit' ? 'text-green-600' : 'text-red-600'}>
-                                          {tx.type === 'credit' ? '+' : '-'}₹{tx.amount.toLocaleString('en-IN')}
+                                          {tx.type === 'credit' ? '+' : '-'}₹{(tx.amount || 0).toLocaleString('en-IN')}
                                         </span>
                                       </td>
-                                      <td className="px-3 py-3 text-right align-top font-bold text-sm whitespace-nowrap text-gray-800">
+                                      <td className={`px-3 py-3 text-right align-top font-bold text-sm whitespace-nowrap ${(tx.balanceAfter || 0) < 0 ? 'text-red-600' : 'text-gray-800'}`}>
+                                        {(tx.balanceAfter || 0) < 0 ? '-' : ''}₹{Math.abs(tx.balanceAfter || 0).toLocaleString('en-IN')}
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )
+                },
+                {
+                  key: 'advance',
+                  label: <span><PlusCircleOutlined className="mr-1.5 text-emerald-600" />Advance</span>,
+                  children: (
+                    <div className="space-y-4">
+                      {/* Header */}
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <div className="bg-emerald-100 p-2 rounded-lg"><PlusCircleOutlined className="text-emerald-600 text-lg" /></div>
+                          <div>
+                            <div className="font-semibold text-base">Advance Payments</div>
+                            <div className="text-xs text-gray-500">Agent advance deposits to organization</div>
+                          </div>
+                        </div>
+                        <Space>
+                          <Button size="small" icon={<FileTextOutlined />}
+                            onClick={printAdvanceReport} disabled={advanceHistory.length === 0}>
+                            Download PDF
+                          </Button>
+                          <Button type="primary" size="small" icon={<PlusOutlined />}
+                            style={{ background: '#059669' }}
+                            onClick={() => setAdvanceModalVisible(true)}>
+                            Add Advance
+                          </Button>
+                        </Space>
+                      </div>
+
+                      {/* Balance cards */}
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="relative p-4 bg-gradient-to-br from-emerald-50 to-emerald-100/50 rounded-xl border border-emerald-200">
+                          <div className="text-3xl font-bold text-emerald-700">₹{(selectedAgent.advanceBalance || 0).toLocaleString('en-IN')}</div>
+                          <div className="text-xs text-emerald-600/70 font-medium mt-1">Current Advance Balance</div>
+                          <WalletOutlined className="absolute right-3 bottom-3 text-emerald-200 text-2xl" />
+                        </div>
+                        <div className="relative p-4 bg-gradient-to-br from-blue-50 to-blue-100/50 rounded-xl border border-blue-200">
+                          <div className="text-3xl font-bold text-blue-700">₹{(selectedAgent.totalAdvancePaid || 0).toLocaleString('en-IN')}</div>
+                          <div className="text-xs text-blue-600/70 font-medium mt-1">Total Advance Deposited</div>
+                          <DollarOutlined className="absolute right-3 bottom-3 text-blue-200 text-2xl" />
+                        </div>
+                      </div>
+
+                      {/* History table */}
+                      <div>
+                        <div className="flex items-center gap-2 mb-3">
+                          <HistoryOutlined className="text-emerald-600" />
+                          <span className="font-semibold text-sm text-gray-700">Payment History</span>
+                          {!advanceHistoryLoading && advanceHistory.length > 0 && (
+                            <span className="text-xs text-gray-400 ml-auto">{advanceHistory.length} entries</span>
+                          )}
+                        </div>
+                        {advanceHistoryLoading ? (
+                          <div className="flex items-center justify-center py-8 text-gray-400">
+                            <ReloadOutlined className="animate-spin mr-2" /> Loading...
+                          </div>
+                        ) : advanceHistory.length === 0 ? (
+                          <div className="text-center py-10 text-gray-400 border-2 border-dashed border-gray-200 rounded-xl">
+                            <DollarOutlined className="text-3xl mb-2 block text-gray-300" />
+                            <span className="text-sm">No advance payments yet</span>
+                          </div>
+                        ) : (
+                          <div className="border border-gray-200 rounded-xl overflow-hidden shadow-sm">
+                            <div className="max-h-80 overflow-y-auto">
+                              <table className="w-full text-xs">
+                                <thead>
+                                  <tr className="bg-gray-50 border-b border-gray-200">
+                                    <th className="px-3 py-2.5 text-left font-semibold text-gray-600 text-[11px] uppercase tracking-wider">#</th>
+                                    <th className="px-3 py-2.5 text-left font-semibold text-gray-600 text-[11px] uppercase tracking-wider">Date</th>
+                                    <th className="px-3 py-2.5 text-left font-semibold text-gray-600 text-[11px] uppercase tracking-wider">Description / Note</th>
+                                    <th className="px-3 py-2.5 text-center font-semibold text-gray-600 text-[11px] uppercase tracking-wider">Mode</th>
+                                    <th className="px-3 py-2.5 text-left font-semibold text-gray-600 text-[11px] uppercase tracking-wider">UTR / Cash ID</th>
+                                    <th className="px-3 py-2.5 text-right font-semibold text-gray-600 text-[11px] uppercase tracking-wider">Amount</th>
+                                    <th className="px-3 py-2.5 text-right font-semibold text-gray-600 text-[11px] uppercase tracking-wider">Balance</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {advanceHistory.map((tx, i) => (
+                                    <tr key={tx.id} className={`border-t border-gray-100 hover:bg-emerald-50/30 transition-colors ${i % 2 === 0 ? 'bg-white' : 'bg-gray-50/30'}`}>
+                                      <td className="px-3 py-3 text-gray-400 text-[11px]">{i + 1}</td>
+                                      <td className="px-3 py-3 whitespace-nowrap">
+                                        <div className="font-medium text-gray-700 text-xs">{tx.createdAt ? formatDate(tx.createdAt) : '-'}</div>
+                                        <div className="text-gray-400 text-[11px] mt-0.5">{tx.createdAt?._seconds ? dayjs.unix(tx.createdAt._seconds).format('hh:mm A') : ''}</div>
+                                      </td>
+                                      <td className="px-3 py-3">
+                                        <div className="font-medium text-gray-800 text-xs">{tx.description || 'Advance Payment'}</div>
+                                        {tx.note && <div className="text-gray-400 text-[11px] mt-0.5">{tx.note}</div>}
+                                      </td>
+                                      <td className="px-3 py-3 text-center">
+                                        {tx.paymentMode === 'online'
+                                          ? <span className="inline-flex px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 text-[11px] font-medium">Online</span>
+                                          : <span className="inline-flex px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 text-[11px] font-medium">Cash</span>
+                                        }
+                                      </td>
+                                      <td className="px-3 py-3">
+                                        {tx.utrId
+                                          ? <span className="font-mono text-[11px] text-gray-700 bg-gray-100 px-1.5 py-0.5 rounded select-all">{tx.utrId}</span>
+                                          : <span className="text-gray-300 text-[11px]">-</span>
+                                        }
+                                      </td>
+                                      <td className="px-3 py-3 text-right font-bold text-sm text-emerald-600 whitespace-nowrap">
+                                        +₹{(tx.amount || 0).toLocaleString('en-IN')}
+                                      </td>
+                                      <td className="px-3 py-3 text-right font-semibold text-sm text-gray-800 whitespace-nowrap">
                                         ₹{(tx.balanceAfter || 0).toLocaleString('en-IN')}
                                       </td>
                                     </tr>
@@ -1037,9 +1283,97 @@ const isSuperAdmin = (user) => user?.role === 'superadmin';
                   )
                 }
               ]}
+              onChange={(key) => {
+                if (key === 'advance' && selectedAgent && advanceHistory.length === 0 && !advanceHistoryLoading) {
+                  loadAdvanceHistory(selectedAgent);
+                }
+              }}
             />
           )}
         </Drawer>
+
+        {/* Add Advance Payment Modal */}
+        <Modal
+          title={<><PlusCircleOutlined className="mr-2 text-emerald-600" />Add Advance Payment — {selectedAgent?.name}</>}
+          open={advanceModalVisible}
+          onCancel={resetAdvanceModal}
+          onOk={handleAddAdvance}
+          confirmLoading={advanceProcessing}
+          okText="Record Advance"
+          okButtonProps={{ style: { background: '#059669' } }}
+        >
+          <div className="space-y-4 py-2">
+            <div className="bg-emerald-50 p-3 rounded-lg text-center">
+              <div className="text-sm text-gray-600">Current Advance Balance</div>
+              <div className="text-2xl font-bold text-emerald-700">₹{(selectedAgent?.advanceBalance || 0).toLocaleString('en-IN')}</div>
+            </div>
+
+            {/* Payment Mode */}
+            <div>
+              <label className="block text-sm font-medium mb-2">Payment Mode <span className="text-red-500">*</span></label>
+              <div className="flex gap-3">
+                {[{ value: 'cash', label: '💵 Cash' }, { value: 'online', label: '🏦 Online' }].map(opt => (
+                  <button key={opt.value} type="button"
+                    onClick={() => { setAdvancePaymentMode(opt.value); setAdvanceUtrId(''); }}
+                    className={`flex-1 py-2.5 rounded-lg border-2 text-sm font-medium transition-all ${
+                      advancePaymentMode === opt.value
+                        ? 'border-emerald-500 bg-emerald-50 text-emerald-700'
+                        : 'border-gray-200 bg-white text-gray-600 hover:border-gray-300'
+                    }`}>
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* UTR ID — only for online */}
+            {advancePaymentMode === 'online' && (
+              <div>
+                <label className="block text-sm font-medium mb-1">UTR / Transaction ID <span className="text-red-500">*</span></label>
+                <Input
+                  placeholder="Enter UTR or transaction reference"
+                  value={advanceUtrId}
+                  onChange={e => setAdvanceUtrId(e.target.value)}
+                  style={{ fontFamily: 'monospace' }}
+                />
+              </div>
+            )}
+
+            {/* Amount */}
+            <div>
+              <label className="block text-sm font-medium mb-1">Amount (₹) <span className="text-red-500">*</span></label>
+              <Input
+                type="number"
+                prefix="₹"
+                placeholder="Enter advance amount"
+                value={advanceAmount}
+                onChange={e => setAdvanceAmount(e.target.value)}
+                size="large"
+              />
+            </div>
+
+            {/* Description */}
+            <div>
+              <label className="block text-sm font-medium mb-1">Description</label>
+              <Input
+                placeholder="e.g. Advance Payment — July 2026"
+                value={advanceDesc}
+                onChange={e => setAdvanceDesc(e.target.value)}
+              />
+            </div>
+
+            {/* Note */}
+            <div>
+              <label className="block text-sm font-medium mb-1">Note (optional)</label>
+              <Input.TextArea
+                placeholder="Any additional notes..."
+                value={advanceNote}
+                onChange={e => setAdvanceNote(e.target.value)}
+                rows={2}
+              />
+            </div>
+          </div>
+        </Modal>
 
         {/* Wallet Pay Agent Modal */}
         <Modal

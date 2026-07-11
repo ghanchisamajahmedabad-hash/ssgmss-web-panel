@@ -8,6 +8,16 @@ const db = admin.firestore();
 const INC = admin.firestore.FieldValue.increment;
 const STS = admin.firestore.FieldValue.serverTimestamp;
 
+// Auto-generate a cash reference ID so cash payments are searchable
+const generateCashId = () => {
+  const d   = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  const date = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}`;
+  const time = `${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+  const rand = Math.random().toString(36).substring(2, 6).toUpperCase();
+  return `CSH-${date}-${time}-${rand}`;
+};
+
 // ─── helpers ──────────────────────────────────────────────────────────────────
 const chunkArr = (arr, n) =>
   Array.from({ length: Math.ceil(arr.length / n) }, (_, i) =>
@@ -47,7 +57,12 @@ export async function POST(req) {
     const timestamp = STS();
     const now = new Date().toISOString();
 
-    // ── Duplicate UTR / transaction ID check ──────────────────────────────────
+    // ── Resolve final transaction ID (auto-generate for cash) ─────────────────
+    const finalTxId = (transactionId && transactionId.trim())
+      ? transactionId.trim()
+      : paymentMethod === 'cash' ? generateCashId() : '';
+
+    // ── Duplicate UTR / transaction ID check (online only) ───────────────────
     if (transactionId && transactionId.trim() !== '') {
       const utrSnap = await db.collection('paymentGroups')
         .where('transactionId', '==', transactionId.trim())
@@ -78,7 +93,7 @@ export async function POST(req) {
     // ── Payment group ──────────────────────────────────────────────────────
     const paymentGroupRef = db.collection('paymentGroups').doc();
     batch.set(paymentGroupRef, {
-      agentId, totalAmount: numTotalAmount, paymentMethod, transactionId,
+      agentId, totalAmount: numTotalAmount, paymentMethod, transactionId: finalTxId,
       paymentDate: new Date(paymentDate), createdBy: authResult.user.uid,
       paymentNote, fileUrl: fileUrl || '', paymentType: 'closingPayment',
       createdAt: timestamp,
@@ -113,14 +128,14 @@ export async function POST(req) {
         lastPaymentMethod:   paymentMethod,
         lastPaymentGroupId:  paymentGroupRef.id,
         lastPaymentNote:     paymentNote     || null,
-        lastTransactionId:   transactionId   || null,
-        lastFileUrl:         fileUrl         || null,
+        lastTransactionId:   finalTxId || null,
+        lastFileUrl:         fileUrl   || null,
         lastPaidBy:          authResult.user.uid,
         lastPaidByName:      authResult.user.displayName || null,
         lastUpdatedAt:       timestamp,
         paymentHistory: admin.firestore.FieldValue.arrayUnion({
           amount: coverAmount, paymentDate: paymentDate || now, paymentMethod,
-          paymentGroupId: paymentGroupRef.id, transactionId: transactionId || null,
+          paymentGroupId: paymentGroupRef.id, transactionId: finalTxId || null,
           fileUrl: fileUrl || null, note: paymentNote || null,
           paidBy: authResult.user.uid, paidAt: now,
         }),
@@ -273,7 +288,7 @@ export async function POST(req) {
         programId: pId, programName,
         amount: deduction, requestedAmount,
         paymentMode:     paymentMethod,
-        transactionId:   transactionId || '',
+        transactionId:   finalTxId,
         transactionDate: paymentDate,
         status:          'completed',
         createdBy:       authResult.user.uid,

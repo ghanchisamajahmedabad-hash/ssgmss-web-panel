@@ -183,7 +183,7 @@ const DocumentUploads = ({
     } else if (type === 'guardian') {
       setGuardianFileList([])
       setGuardianDoc(null)
-      message.success('Guardian document removed!')
+      message.success('Nominee / Varisdar document removed!')
     }
   }
 
@@ -313,10 +313,10 @@ const DocumentUploads = ({
             </Form.Item>
           </Col>
 
-          {/* Guardian Document */}
+          {/* Nominee / Varisdar Document */}
           <Col xs={24} md={8}>
-            <Form.Item 
-              label="Guardian Document"
+            <Form.Item
+              label="Nominee / Varisdar Document"
               extra="Upload image or PDF (Max: 5MB)"
             >
               <div className="space-y-3">
@@ -324,7 +324,7 @@ const DocumentUploads = ({
                   fileList={guardianFileList}
                   onChange={handleGuardianChange}
                   onPreview={handlePreview}
-                  type="Guardian Document"
+                  type="Nominee / Varisdar Document"
                 />
               </div>
             </Form.Item>

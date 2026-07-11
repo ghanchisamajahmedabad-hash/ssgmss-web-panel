@@ -29,7 +29,92 @@ const getMemberInfo = async (memberId) => {
         totalClosingCount: d.totalClosingCount || 0,
         paidClosingCount: d.paidClosingCount || 0,
         pendingClosingCount: d.pendingClosingCount || 0,
+        // member identity (for commission reversal records)
+        displayName: d.displayName || d.fullName || '',
+        fatherName: d.fatherName || '',
+        registrationNumber: d.registrationNumber || '',
     };
+};
+
+// ─── Reverse join-fee commissions when a member is deleted ────────────────────
+// Queries all 'credit' commission records tied to this member (by sourceId).
+// For each agent, sums their total commission and deducts it — allowing negative.
+const reverseJoinFeeCommissions = async (memberId, memberInfo) => {
+    try {
+        const snap = await db.collection('commissionTransactions')
+            .where('sourceId', '==', memberId)
+            .where('source', '==', 'joinFees')
+            .where('type', '==', 'credit')
+            .get();
+
+        if (snap.empty) {
+            console.log(`No join fee commissions to reverse for member ${memberId}`);
+            return;
+        }
+
+        // Group commission amounts by agentId
+        const agentMap = {};
+        snap.docs.forEach(doc => {
+            const tx = doc.data();
+            if (!agentMap[tx.agentId]) {
+                agentMap[tx.agentId] = {
+                    totalAmount: 0,
+                    agentName: tx.agentName || '',
+                    commissionRate: tx.commissionRate || 0,
+                    commissionRatePercent: tx.commissionRatePercent || 0,
+                };
+            }
+            agentMap[tx.agentId].totalAmount += tx.amount || 0;
+        });
+
+        // Reverse per agent (allow negative wallet)
+        for (const [agentId, data] of Object.entries(agentMap)) {
+            if (data.totalAmount <= 0) continue;
+
+            const agentRef  = db.collection('agents').doc(agentId);
+            const agentSnap = await agentRef.get();
+            if (!agentSnap.exists) continue;
+
+            const currentWallet  = agentSnap.data().walletBalance || 0;
+            const reversalAmount = Math.round(data.totalAmount * 100) / 100;
+            const batch          = db.batch();
+
+            // Deduct from wallet — negative balance is allowed
+            batch.update(agentRef, {
+                walletBalance:         INC(-reversalAmount),
+                totalCommissionEarned: INC(-reversalAmount),
+                updated_at:            STS(),
+            });
+
+            // Write reversal transaction record
+            const txRef = db.collection('commissionTransactions').doc();
+            batch.set(txRef, {
+                agentId,
+                agentName:            data.agentName,
+                type:                 'reversal',
+                amount:               reversalAmount,
+                source:               'joinFees',
+                sourceId:             memberId,
+                memberName:           memberInfo.displayName || '',
+                memberFatherName:     memberInfo.fatherName  || '',
+                memberRegNo:          memberInfo.registrationNumber || '',
+                programId:            memberInfo.programId   || '',
+                programName:          memberInfo.programName || '',
+                commissionRate:       data.commissionRate,
+                commissionRatePercent: data.commissionRatePercent,
+                description:          `Commission Reversed — Member Deleted (${memberInfo.displayName || memberId})`,
+                balanceBefore:        currentWallet,
+                balanceAfter:         currentWallet - reversalAmount,
+                createdAt:            STS(),
+            });
+
+            await batch.commit();
+            console.log(`✅ Commission reversed ₹${reversalAmount} from agent ${agentId} for deleted member ${memberId}`);
+        }
+    } catch (e) {
+        // Non-blocking — log but don't fail the delete
+        console.error('❌ reverseJoinFeeCommissions error:', e);
+    }
 };
 
 // ─── DECREMENT (delete → trash) ───────────────────────────────────────────────
@@ -219,6 +304,9 @@ export async function POST(req) {
 
         // Decrement all counters
         await decrementStats(info);
+
+        // Reverse join-fee commissions for this member (wallet may go negative)
+        await reverseJoinFeeCommissions(memberId, info);
 
         return NextResponse.json({ success: true, message: 'Member deleted and counters updated' });
     } catch (e) {

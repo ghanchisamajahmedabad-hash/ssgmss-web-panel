@@ -171,6 +171,11 @@ export const fetchMembersPaginated = async (filters = {}) => {
       members = members.filter(m => m.paymentPercentage > 0 && m.paymentPercentage < 100);
     }
 
+    // Client-side filter for gender
+    if (filters.gender && filters.gender !== "all") {
+      members = members.filter(m => (m.gender || '').toLowerCase() === filters.gender);
+    }
+
     // Client-side filter for closing payment status
     if (filters.closingPaymentStatus === "closedPaid") {
       members = members.filter(m => (m.closing_paymentPercentage || 0) === 100 || ((m.closing_totalAmount || 0) > 0 && (m.closing_pendingAmount || 0) === 0));

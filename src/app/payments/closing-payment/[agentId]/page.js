@@ -27,6 +27,7 @@ import TransactionDetailDrawer from '../../join-fees/components/TransactionDetai
 import ClosingPaymentConfirmationDrawer from '../components/PaymentConfirmationDrawer';
 import ClosingPaymentHistoryDrawer from '../components/PaymentHistoryDrawer';
 import RasidGroupClosingDrawer from '../components/RasidComponent/RasidGroupClosingDrawer';
+import AgentAdvancePanel from '../../join-fees/components/AgentAdvancePanel';
 import { uploadFile } from '@/utils/uploadUtils/common';
 
 const { Title, Text } = Typography;
@@ -724,6 +725,9 @@ const ClosingMemberPaymentPage = () => {
     </Button>
   </Flex>
 </Card>
+
+        {/* ── Advance Payment Panel ─────────────────────────────────────────────── */}
+        <AgentAdvancePanel agentId={agentId} />
 
         {/* ── 3. Filters & Controls (Compact Row) ──────────────────────────────────── */}
         <Card size="small" style={{ marginBottom: 12, borderRadius: 12 }} bodyStyle={{ padding: '12px' }}>

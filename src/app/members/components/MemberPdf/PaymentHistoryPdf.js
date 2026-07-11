@@ -113,7 +113,7 @@ const styles = StyleSheet.create({
   cellType:   { width: 64, borderRightWidth: 0.5, borderRightColor: '#ddd', paddingHorizontal: 3, paddingVertical: 4, alignItems: 'center', justifyContent: 'center' },
   cellAmount: { width: 62, borderRightWidth: 0.5, borderRightColor: '#ddd', paddingHorizontal: 3, paddingVertical: 4, alignItems: 'center', justifyContent: 'center' },
   cellMode:   { width: 56, borderRightWidth: 0.5, borderRightColor: '#ddd', paddingHorizontal: 3, paddingVertical: 4, alignItems: 'center', justifyContent: 'center' },
-  cellTxn:    { flex: 1, borderRightWidth: 0.5, borderRightColor: '#ddd', paddingHorizontal: 4, paddingVertical: 4, justifyContent: 'center' },
+  cellTxn:    { flex: 1, borderRightWidth: 0.5, borderRightColor: '#ddd', paddingHorizontal: 4, paddingVertical: 4, justifyContent: 'center', minWidth: 0 },
   cellStatus: { width: 56, paddingHorizontal: 3, paddingVertical: 4, alignItems: 'center', justifyContent: 'center' },
 
   headerCellText: { fontSize: 8, fontWeight: 'bold', color: '#ffffff', textAlign: 'center' },
@@ -249,7 +249,7 @@ const PaymentHistoryPdf = ({ member, transactions = [], closingTransactions = []
               <View style={styles.cellType}><Text style={styles.headerCellText}>प्रकार</Text></View>
               <View style={styles.cellAmount}><Text style={styles.headerCellText}>राशि</Text></View>
               <View style={styles.cellMode}><Text style={styles.headerCellText}>मोड</Text></View>
-              <View style={styles.cellTxn}><Text style={[styles.headerCellText, { textAlign: 'center' }]}>लेन-देन ID</Text></View>
+              <View style={styles.cellTxn}><Text style={[styles.headerCellText, { textAlign: 'center' }]}>UTR / Cash ID</Text></View>
               <View style={styles.cellStatus}><Text style={styles.headerCellText}>स्थिति</Text></View>
             </View>
 
@@ -266,7 +266,7 @@ const PaymentHistoryPdf = ({ member, transactions = [], closingTransactions = []
                 <View style={styles.cellType}><Text style={styles.cellTextCenter}>{t.txnType === 'join_fee' ? 'जॉइन फीस' : 'क्लोज़िंग'}</Text></View>
                 <View style={styles.cellAmount}><Text style={styles.cellTextCenter}>₹{(t.amount || t.amountPaid || 0).toLocaleString()}</Text></View>
                 <View style={styles.cellMode}><Text style={styles.cellTextCenter}>{t.paymentMode || '—'}</Text></View>
-                <View style={styles.cellTxn}><Text style={styles.cellTextLeft}>{t.transactionId || '—'}</Text></View>
+                <View style={styles.cellTxn}><Text style={[styles.cellTextLeft, { fontSize: 7 }]}>{t.transactionId || '—'}</Text></View>
                 <View style={styles.cellStatus}>
                   <Text style={[styles.cellTextCenter, {
                     color: t.status === 'completed' ? '#16a34a' : '#ea580c',

@@ -404,11 +404,11 @@ const LoginPage = () => {
                   {/* Logos and Header */}
                   <div className="text-center">
                     <div className="mb-2 sm:mb-3">
-                      <p className="text-[10px] sm:text-xs font-medium mb-1 sm:mb-2 leading-relaxed">|| श्री गणेशाय नमः || || श्री क्षत्रिदेवाय नमः ||<br className="sm:hidden" /> || श्री सांवलाजी महाराज नमः ||</p>
+                      <p className="text-[10px] sm:text-xs font-medium mb-1 sm:mb-2 leading-relaxed">|| श्री गणेशाय नमः || ॥  श्री शनिदेवाय नमः ॥ <br className="sm:hidden" /> || श्री सांवलाजी महाराज नमः ||</p>
                     </div>
                     
                     <h1 className="text-sm sm:text-lg lg:text-xl font-bold mb-1 sm:mb-2 leading-tight px-2">श्री क्षत्रिय घांची मोदी समाज सेवा संस्थान ट्रस्ट</h1>
-                    <p className="text-xs sm:text-base lg:text-lg font-semibold mb-1">अहमदाबード, गुजरात</p>
+                    <p className="text-xs sm:text-base lg:text-lg font-semibold mb-1">अहमदाबーगुजरात</p>
                     <div className="flex flex-wrap justify-center items-center gap-2 text-[10px] sm:text-xs mt-2">
                       <span className="bg-white/20 px-2 sm:px-3 py-0.5 sm:py-1 rounded-full backdrop-blur-sm">SINCE: 2024</span>
                       <span className="bg-white/20 px-2 sm:px-3 py-0.5 sm:py-1 rounded-full backdrop-blur-sm">Reg. No: A/5231</span>
@@ -422,10 +422,8 @@ const LoginPage = () => {
                       हेड ऑफिस
                     </h3>
                     <div className="space-y-0.5 sm:space-y-1 text-[10px] sm:text-xs lg:text-sm leading-relaxed">
-                      <p>68, नंदवन शॉपिंग सेंटर</p>
-                      <p>गुजरात हाउसिंग बोर्ड बी. एस. स्कूल के पास</p>
-                      <p>चांदखेड़ा, साबरमती</p>
-                      <p className="font-semibold pt-1">अहमदाबाद - 382424 (O)</p>
+        68, वृंदावन शॉपिंग सेंटर, गुजरात हाउसिंग बोर्ड बी. एस. स्कूल के पास,
+                  चांदखेडा, साबरमती, अहमदाबाद-382424
                     </div>
                   </div>
 
