@@ -195,11 +195,18 @@ const DashboardHomePage = () => {
   const fetchMembersStats = async () => {
     try {
       const membersRef = collection(db, 'members');
-      
+
+      // Helper: only active (accepted) non-deleted members
+      const isActive = (doc) => {
+        const d = doc.data();
+        return d.active_flag === true && d.delete_flag !== true;
+      };
+
       const [activeSnap, inactiveSnap, closingSnap, todaySnap, weekSnap, monthSnap] = await Promise.all([
         getDocs(query(membersRef, where('status', '==', 'active'), where('delete_flag', '==', false))),
         getDocs(query(membersRef, where('status', '==', 'inactive'), where('delete_flag', '==', false))),
         getDocs(query(membersRef, where('member_closed', '==', true), where('delete_flag', '==', false))),
+        // Time-based queries: fetch then filter client-side to exclude pending members
         getDocs(query(membersRef, where('joinYear', '==', dayjs().year()), where('joinMonth', '==', dayjs().month() + 1))),
         getDocs(query(membersRef, where('joinYearMonth', '>=', dayjs().subtract(7, 'day').format('YYYY-MM')))),
         getDocs(query(membersRef, where('joinYearMonth', '>=', dayjs().subtract(30, 'day').format('YYYY-MM'))))
@@ -210,9 +217,10 @@ const DashboardHomePage = () => {
         activeMembers: activeSnap.size,
         inactiveMembers: inactiveSnap.size,
         closingMembers: closingSnap.size,
-        todayNewMembers: todaySnap.size,
-        thisWeekNewMembers: weekSnap.size,
-        thisMonthNewMembers: monthSnap.size
+        // Only count accepted (active_flag=true) non-deleted members for time-based stats
+        todayNewMembers:      todaySnap.docs.filter(isActive).length,
+        thisWeekNewMembers:   weekSnap.docs.filter(isActive).length,
+        thisMonthNewMembers:  monthSnap.docs.filter(isActive).length,
       };
     } catch (error) {
       console.error('Error fetching members stats:', error);
@@ -331,19 +339,13 @@ const fetchProgramDetailsStats = async () => {
   const fetchRecentMembers = async () => {
     try {
       const membersRef = collection(db, 'members');
-      const q = query(
-        membersRef,
-        where('delete_flag', '==', false),
-        orderBy('createdAt', 'desc'),
-        limit(5)
-      );
-      
+      // Fetch more than needed so client-side filter to active-only still gives 5
+      const q = query(membersRef, orderBy('createdAt', 'desc'), limit(30));
       const snapshot = await getDocs(q);
-      return snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data(),
-        key: doc.id
-      }));
+      return snapshot.docs
+        .map(doc => ({ id: doc.id, ...doc.data(), key: doc.id }))
+        .filter(d => d.active_flag === true && d.delete_flag !== true)
+        .slice(0, 5);
     } catch (error) {
       console.error('Error fetching recent members:', error);
       return [];
