@@ -121,10 +121,8 @@ function SetPinFlow({ pinLength, onSuccess, onCancel }) {
     <div>
       <Steps size="small" current={step} style={{ marginBottom: 24 }}
         items={[{ title: 'Enter PIN' }, { title: 'Confirm PIN' }]} />
-      {step === 0
-        ? <PinEntryStep label="Enter your new PIN" hint={`Choose a ${pinLength}-digit PIN`} length={pinLength} onComplete={handleFirst} />
-        : <PinEntryStep label="Confirm your PIN" hint="Re-enter the same PIN" length={pinLength} onComplete={handleConfirm} shaking={shaking} />
-      }
+      {step === 0 && <PinEntryStep key="set-0" label="Enter your new PIN"  hint={`Choose a ${pinLength}-digit PIN`} length={pinLength} onComplete={handleFirst} />}
+      {step === 1 && <PinEntryStep key="set-1" label="Confirm your PIN"    hint="Re-enter the same PIN"           length={pinLength} onComplete={handleConfirm} shaking={shaking} />}
       <div style={{ textAlign: 'center', marginTop: 16 }}>
         <Button size="small" onClick={onCancel}>Cancel</Button>
       </div>
@@ -167,9 +165,9 @@ function ChangePinFlow({ pinLength, onSuccess, onCancel }) {
     <div>
       <Steps size="small" current={step} style={{ marginBottom: 24 }}
         items={[{ title: 'Current PIN' }, { title: 'New PIN' }, { title: 'Confirm' }]} />
-      {step === 0 && <PinEntryStep label="Enter your current PIN" length={pinLength} onComplete={handleCurrent} shaking={shaking} />}
-      {step === 1 && <PinEntryStep label="Enter your new PIN"     hint="Choose a new PIN" length={pinLength} onComplete={handleFirst} />}
-      {step === 2 && <PinEntryStep label="Confirm your new PIN"   length={pinLength} onComplete={handleConfirm} shaking={shaking} />}
+      {step === 0 && <PinEntryStep key="chg-0" label="Enter your current PIN" length={pinLength} onComplete={handleCurrent} shaking={shaking} />}
+      {step === 1 && <PinEntryStep key="chg-1" label="Enter your new PIN"     hint="Choose a new PIN" length={pinLength} onComplete={handleFirst} />}
+      {step === 2 && <PinEntryStep key="chg-2" label="Confirm your new PIN"   length={pinLength} onComplete={handleConfirm} shaking={shaking} />}
       <div style={{ textAlign: 'center', marginTop: 16 }}>
         <Button size="small" onClick={onCancel}>Cancel</Button>
       </div>
