@@ -127,7 +127,7 @@ const isSuperAdmin = (user) => user?.role === 'superadmin';
     } catch (e) { message.error('Failed to load master data'); }
   };
 
-  const handleTableChange  = (pg) => { setPagination(pg); fetchAgents(pg.current, {}, pg.pageSize); };
+  const handleTableChange  = (pg) => { setPagination(prev => ({ ...prev, ...pg })); fetchAgents(pg.current, {}, pg.pageSize); };
   const handleSearch       = (v)  => { setFilters(p => ({...p, search: v})); fetchAgents(1, { search: v }); };
   const handleStatusFilter = (s)  => { setFilters(p => ({...p, status: s})); fetchAgents(1, { status: s }); };
   const handleRefresh      = ()   => { fetchAgents(pagination.current); message.success('Refreshed'); };

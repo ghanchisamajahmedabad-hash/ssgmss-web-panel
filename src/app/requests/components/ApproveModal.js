@@ -199,8 +199,9 @@ const ApproveModal = ({ open, setOpen, selectedMember, setSelectedMember, fetchA
       await updateDoc(doc(db, 'members', selectedMember.id), memberUpdate)
 
       // ── Record transaction if payment was made ─────────────────────────────
+      let approvalPaymentGroupId = ''
       if (joinFeesDone && finalPaid > 0) {
-        await recordJoinFeeTransaction(
+        const txResult = await recordJoinFeeTransaction(
           {
             memberId:           selectedMember.id,
             displayName:        selectedMember.displayName,
@@ -223,6 +224,7 @@ const ApproveModal = ({ open, setOpen, selectedMember, setSelectedMember, fetchA
             notes:           'Join fee payment during approval',
           }
         )
+        approvalPaymentGroupId = txResult?.groupId || ''
       }
 
       // ── Create / update auth account + credit commission (server-side) ──────
@@ -235,7 +237,8 @@ const ApproveModal = ({ open, setOpen, selectedMember, setSelectedMember, fetchA
             memberRegNo: finalRegNumber || '',
             programId: programDetail.programId,
             programName: programDetail.programName,
-            description: `Join Fee Commission (25%) - Member Approval`
+            description: `Join Fee Commission (25%) - Member Approval`,
+            paymentGroupId: approvalPaymentGroupId
           }
         : null
       await memberAccoiuntCreate({ ...selectedMember, ...memberUpdate, id: selectedMember.id }, commissionPayload)

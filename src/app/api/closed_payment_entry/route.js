@@ -196,6 +196,7 @@ export async function POST(req) {
     let totalPaymentAmount = 0;
     let totalPaymentCount = 0;
     const agentStats = {};
+    const agentClosedCounts = {};      // agentId → number of THEIR members closed this run
     const paymentUpdatedIds = [];      // members getting a NEW payment entry this run
     const paymentPerMember = {};
     const closedIds = [];              // members being closed (marked) this run
@@ -281,6 +282,9 @@ export async function POST(req) {
             });
 
             closedIds.push(memberId);
+            if (m.agentId) {
+              agentClosedCounts[m.agentId] = (agentClosedCounts[m.agentId] || 0) + 1;
+            }
           }
         }
       }
@@ -512,13 +516,27 @@ export async function POST(req) {
     }
 
     // ── 6. Agent / Program / Org stats ───────────────────────────────────
-    for (const [agentId, s] of Object.entries(agentStats)) {
+    // Mirror ALL the fields that the reversal/delete paths decrement
+    // (programStats pending/counts + closedCount) so add & remove stay symmetric.
+    const allAgentIds = new Set([
+      ...Object.keys(agentStats),
+      ...Object.keys(agentClosedCounts),
+    ]);
+    for (const agentId of allAgentIds) {
+      const s = agentStats[agentId] || { amount: 0, count: 0 };
+      const closedN = agentClosedCounts[agentId] || 0;
       mb.update(db.collection("agents").doc(agentId), {
         closing_pendingAmount:  INC(s.amount),
         closing_totalAmount:    INC(s.amount),
         totalClosingCount:      INC(s.count),
         pendingClosingCount:    INC(s.count),
-        [`programStats.${programId}.totalClosingAmount`]: INC(s.amount),
+        closedCount:            INC(closedN),
+        [`programStats.${programId}.totalClosingAmount`]:        INC(s.amount),
+        [`programStats.${programId}.totalClosingPendingAmount`]: INC(s.amount),
+        [`programStats.${programId}.totalClosingCount`]:         INC(s.count),
+        [`programStats.${programId}.pendingClosingCount`]:       INC(s.count),
+        [`programStats.${programId}.closedCount`]:               INC(closedN),
+        [`programStats.${programId}.lastUpdated`]:               ts,
         updated_at: ts,
       });
     }
@@ -528,6 +546,7 @@ export async function POST(req) {
       totalClosingAmount:        INC(totalPaymentAmount),
       totalClosingCount:         INC(totalPaymentCount),
       pendingClosingCount:       INC(totalPaymentCount),
+      closedCount:               INC(closedIds.length),
       updated_at:                ts,
     };
     mb.set(db.collection("programs").doc(programId),              globalStats, { merge: true });
@@ -606,6 +625,7 @@ export async function DELETE(req) {
     const ts = STS();
     const mb = new MultiBatch();
     const agentStats = {};
+    const agentUnClosedCounts = {};   // agentId → number of THEIR members un-closed
     let totalRevAmount = 0;
     let totalRevCount  = 0;
 
@@ -628,6 +648,11 @@ export async function DELETE(req) {
           entryIdx !== -1
             ? closedStatus.filter((_, i) => i !== entryIdx)
             : closedStatus;
+
+        // Track per-agent un-closed count (mirrors POST's closedCount INC)
+        if (entryIdx !== -1 && m.agentId) {
+          agentUnClosedCounts[m.agentId] = (agentUnClosedCounts[m.agentId] || 0) + 1;
+        }
 
         const stillClosed  = updatedStatus.length > 0;
         const latestEntry  = stillClosed
@@ -748,9 +773,13 @@ export async function DELETE(req) {
     mb.delete(db.collection("groupClosings").doc(closingGroupId));
 
     // ── Step 4: Agent stats reversal (clamp to 0) ─────────────────────────
-    if (Object.keys(agentStats).length) {
+    const allRevAgentIds = new Set([
+      ...Object.keys(agentStats),
+      ...Object.keys(agentUnClosedCounts),
+    ]);
+    if (allRevAgentIds.size) {
       const agentSnaps = await Promise.all(
-        Object.keys(agentStats).map((aid) =>
+        [...allRevAgentIds].map((aid) =>
           db.collection("agents").doc(aid).get()
         )
       );
@@ -759,8 +788,11 @@ export async function DELETE(req) {
         if (snap.exists) agentDataMap[snap.id] = snap.data();
       });
 
-      for (const [agentId, s] of Object.entries(agentStats)) {
-        const a  = agentDataMap[agentId] || {};
+      for (const agentId of allRevAgentIds) {
+        if (!agentDataMap[agentId]) continue;
+        const s  = agentStats[agentId] || { amount: 0, count: 0 };
+        const unClosedN = agentUnClosedCounts[agentId] || 0;
+        const a  = agentDataMap[agentId];
         const ps = (a.programStats || {})[programId] || {};
 
         mb.update(db.collection("agents").doc(agentId), {
@@ -768,13 +800,13 @@ export async function DELETE(req) {
           closing_totalAmount:   Math.max(0, Number(a.closing_totalAmount   || 0) - s.amount),
           totalClosingCount:     Math.max(0, Number(a.totalClosingCount     || 0) - s.count),
           pendingClosingCount:   Math.max(0, Number(a.pendingClosingCount   || 0) - s.count),
-          closedCount:           Math.max(0, Number(a.closedCount           || 0) - s.memberCount),
+          closedCount:           Math.max(0, Number(a.closedCount           || 0) - unClosedN),
           updated_at:            ts,
           [`programStats.${programId}.totalClosingAmount`]:        Math.max(0, Number(ps.totalClosingAmount        || 0) - s.amount),
           [`programStats.${programId}.totalClosingPendingAmount`]: Math.max(0, Number(ps.totalClosingPendingAmount || 0) - s.amount),
           [`programStats.${programId}.totalClosingCount`]:         Math.max(0, Number(ps.totalClosingCount         || 0) - s.count),
           [`programStats.${programId}.pendingClosingCount`]:       Math.max(0, Number(ps.pendingClosingCount       || 0) - s.count),
-          [`programStats.${programId}.closedCount`]:               Math.max(0, Number(ps.closedCount               || 0) - s.memberCount),
+          [`programStats.${programId}.closedCount`]:               Math.max(0, Number(ps.closedCount               || 0) - unClosedN),
           [`programStats.${programId}.lastUpdated`]:               ts,
         });
       }

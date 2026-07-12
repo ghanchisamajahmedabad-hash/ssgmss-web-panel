@@ -283,7 +283,9 @@ export const recordJoinFeeTransaction = async (memberData, paymentData) => {
       search_keyword: keyword,
     });
 
-    return transactionRef.id;
+    // Return both ids — groupId lets callers tag commissions with the payment
+    // group so a future revert can reverse the exact commission.
+    return { txId: transactionRef.id, groupId: groupRef.id, id: transactionRef.id };
   } catch (error) {
     console.error('Error recording transaction:', error);
     throw error;
@@ -554,8 +556,9 @@ export const handleSubmit = async (values, context, message) => {
     const memberId = memberRef.id
     
     // ✅ Record join fee transaction with single program info
+    let joinFeePaymentGroupId = ''
     if (joinFeesDone && actualPaidAmount > 0) {
-      await recordJoinFeeTransaction({
+      const txResult = await recordJoinFeeTransaction({
         memberId: memberId,
         displayName: values.name,
         registrationNumber,
@@ -576,7 +579,7 @@ export const handleSubmit = async (values, context, message) => {
         newBalance: pendingAmount,
         notes: 'Initial join fee payment'
       })
-
+      joinFeePaymentGroupId = txResult?.groupId || ''
     }
     
     // ✅ Create account + credit commission (server-side)
@@ -589,7 +592,8 @@ export const handleSubmit = async (values, context, message) => {
           memberRegNo: registrationNumber || '',
           programId: selectedProgramId,
           programName: selectedProgramDetail.programName,
-          description: 'Join Fee Commission (25%) - New Member'
+          description: 'Join Fee Commission (25%) - New Member',
+          paymentGroupId: joinFeePaymentGroupId
         }
       : null
     await memberAccoiuntCreate({ ...memberData, id: memberId }, commissionPayload)
@@ -657,7 +661,13 @@ export const addAdditionalPayment = async (memberId, paymentData, currentUser) =
     }
     
     const memberData = memberSnap.data()
-    
+
+    // Guard: no payments for soft-deleted (trashed) members — their amounts
+    // are excluded from aggregates, paying now would mismatch on restore.
+    if (memberData.delete_flag === true) {
+      throw new Error('This member is deleted (in trash). Restore the member before adding payments.')
+    }
+
     const currentPaidAmount   = memberData.paidAmount || 0
     const currentPendingAmount = memberData.pendingAmount || 0
     const additionalAmount    = parseFloat(paymentData.amount || 0)
@@ -672,7 +682,7 @@ export const addAdditionalPayment = async (memberId, paymentData, currentUser) =
       newPaymentPercentage > 0    ? 'partial' : 'pending'
 
     // ✅ Record transaction with single program info
-    const transactionId = await recordJoinFeeTransaction({
+    const txResult = await recordJoinFeeTransaction({
       memberId: memberId,
       displayName: memberData.displayName,
       registrationNumber: memberData.registrationNumber,
@@ -720,10 +730,37 @@ export const addAdditionalPayment = async (memberId, paymentData, currentUser) =
     } catch (e) {
       console.warn('Failed to sync counters:', e);
     }
-    
+
+    // Credit agent commission for this additional join-fee payment
+    // (same as payments made via the join-fees payment screen)
+    if (memberData.agentId && additionalAmount > 0) {
+      try {
+        const token = await auth.currentUser?.getIdToken();
+        await fetch('/api/commission', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+          body: JSON.stringify({
+            action: 'credit',
+            agentId: memberData.agentId,
+            amount: additionalAmount,
+            source: 'joinFees',
+            sourceId: memberId,
+            memberName: memberData.displayName || '',
+            memberFatherName: memberData.fatherName || '',
+            memberRegNo: memberData.registrationNumber || '',
+            programId: memberData.programId || '',
+            programName: memberData.programName || '',
+            paymentGroupId: txResult?.groupId || '',
+          }),
+        });
+      } catch (e) {
+        console.warn('Failed to credit commission for additional payment:', e);
+      }
+    }
+
     return {
       success: true,
-      transactionId: transactionId,
+      transactionId: txResult?.txId || txResult,
       newBalance: newPendingAmount,
       paymentPercentage: newPaymentPercentage
     }

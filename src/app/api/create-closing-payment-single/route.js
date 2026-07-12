@@ -322,8 +322,11 @@ export async function POST(req) {
         closing_totalAmount:   INC(agentTotals.amount),
         totalClosingCount:     INC(agentTotals.count),
         pendingClosingCount:   INC(agentTotals.count),
-        [`programStats.${programId}.totalClosingAmount`]: INC(agentTotals.amount),
+        [`programStats.${programId}.totalClosingAmount`]:        INC(agentTotals.amount),
         [`programStats.${programId}.totalClosingPendingAmount`]: INC(agentTotals.amount),
+        [`programStats.${programId}.totalClosingCount`]:         INC(agentTotals.count),
+        [`programStats.${programId}.pendingClosingCount`]:       INC(agentTotals.count),
+        [`programStats.${programId}.lastUpdated`]:               ts,
         updated_at: ts,
       });
     }

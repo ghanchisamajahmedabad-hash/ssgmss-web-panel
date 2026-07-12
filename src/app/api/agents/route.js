@@ -72,24 +72,38 @@ export async function GET(req) {
     let q = db.collection("agents").where("delete_flag", "==", false);
     if (status && status !== "all") q = q.where("status", "==", status);
 
-    const countSnap = await q.get();
-    const offset    = (page - 1) * limit;
-    const agentsSnap = await q.orderBy("created_at", "desc").limit(limit).offset(offset).get();
-
-    let agents = agentsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+    const offset = (page - 1) * limit;
+    let agents;
+    let total;
 
     if (search?.trim()) {
+      // Search is in-memory, so it must run across ALL matching agents
+      // BEFORE pagination — otherwise it only searches the current page.
+      const allSnap = await q.orderBy("created_at", "desc").get();
       const s = search.toLowerCase();
-      agents = agents.filter(a =>
-        a.name?.toLowerCase().includes(s) || a.email?.toLowerCase().includes(s) ||
-        a.phone1?.includes(search) || a.aadharNo?.includes(search) ||
-        a.city?.toLowerCase().includes(s) || a.state?.toLowerCase().includes(s)
-      );
+      const filtered = allSnap.docs
+        .map(d => ({ id: d.id, ...d.data() }))
+        .filter(a =>
+          a.name?.toLowerCase().includes(s) || a.email?.toLowerCase().includes(s) ||
+          a.phone1?.includes(search) || a.aadharNo?.includes(search) ||
+          a.city?.toLowerCase().includes(s) || a.state?.toLowerCase().includes(s)
+        );
+      total  = filtered.length;
+      agents = filtered.slice(offset, offset + limit);
+    } else {
+      // total = FULL matching count (was previously agents.length — the size
+      // of the current page — which broke pagination at 50 rows).
+      const countSnap = await q.count().get();
+      total = countSnap.data().count;
+
+      const agentsSnap = await q.orderBy("created_at", "desc").limit(limit).offset(offset).get();
+      agents = agentsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
     }
 
+    const totalPages = Math.max(1, Math.ceil(total / limit));
     return NextResponse.json({
       success: true, data: agents,
-      pagination: { page, limit, total: agents.length, totalPages: Math.ceil(agents.length / limit), hasNextPage: page < Math.ceil(agents.length / limit), hasPrevPage: page > 1 }
+      pagination: { page, limit, total, totalPages, hasNextPage: page < totalPages, hasPrevPage: page > 1 }
     });
   } catch (e) {
     console.error("GET agents error:", e);

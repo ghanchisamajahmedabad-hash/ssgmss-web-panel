@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import admin from "../db/firebaseAdmin";
 import { checkRole, verifyToken } from "../../../../middleware/authMiddleware";
+import { reverseCommissionForPayment } from "../commission/route";
 
 const db = admin.firestore();
 const INC = admin.firestore.FieldValue.increment;
@@ -210,7 +211,8 @@ export async function POST(req) {
         agentUpdate[`programStats.${programId}.pendingClosingCount`]       = Number(ps.pendingClosingCount || 0) + delta.count;
         agentUpdate[`programStats.${programId}.lastUpdated`]               = ts;
       }
-      mb.set(agentRef, agentUpdate, { merge: true });
+      // update() (not set+merge) — dot-notation only works with update()
+      if (agentSnap.exists) mb.update(agentRef, agentUpdate);
     }
 
     // ── 8. Reverse org stats ──────────────────────────────────────────────
@@ -234,9 +236,26 @@ export async function POST(req) {
 
     await mb.commit();
 
+    // ── 11. Reverse commissions credited for this payment group ───────────
+    let commissionReversed = 0;
+    const exact = await reverseCommissionForPayment({
+      paymentGroupId, reason: 'payment_reverted', createdBy: auth.user.uid,
+    });
+    commissionReversed += exact.reversedAmount || 0;
+    if (!exact.count) {
+      for (const fee of feesDocs) {
+        if (!fee.memberId || !fee.amount) continue;
+        const r = await reverseCommissionForPayment({
+          memberId: fee.memberId, source: 'closingPayment', amount: Number(fee.amount),
+          reason: 'payment_reverted', createdBy: auth.user.uid,
+        });
+        commissionReversed += r.reversedAmount || 0;
+      }
+    }
+
     return NextResponse.json({
       success: true,
-      message: `Closing payment group reverted. ₹${grandTotal} reversed across ${memberIds.length} member(s).`,
+      message: `Closing payment group reverted. ₹${grandTotal} reversed across ${memberIds.length} member(s).${commissionReversed > 0 ? ` Commission ₹${commissionReversed} reversed from agent wallet.` : ''}`,
       summary: {
         paymentGroupId,
         membersReverted: memberIds.length,

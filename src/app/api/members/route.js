@@ -275,6 +275,7 @@ export async function POST(req) {
           programName: commissionData.programName || '',
           description: commissionData.description || 'Join Fee Commission (25%) - New Member',
           createdBy: authResult.user.uid,
+          paymentGroupId: commissionData.paymentGroupId || '',
         });
       } catch (comErr) {
         console.error('Commission credit failed:', comErr);

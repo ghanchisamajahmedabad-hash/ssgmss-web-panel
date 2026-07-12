@@ -487,6 +487,33 @@ const EditMember = ({ open, setOpen, programs, agents, currentUser, memberId, on
         } catch (e) {
           console.warn('Failed to sync counters:', e);
         }
+
+        // Credit agent commission for extra payment added via edit
+        // (keeps commission consistent with payments made via payment screens)
+        if (paymentDiff > 0 && agentIdVal) {
+          try {
+            const token = await auth.currentUser?.getIdToken();
+            await fetch('/api/commission', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+              body: JSON.stringify({
+                action: 'credit',
+                agentId: agentIdVal,
+                amount: paymentDiff,
+                source: 'joinFees',
+                sourceId: memberId,
+                memberName: memberData?.displayName || values.name || '',
+                memberFatherName: memberData?.fatherName || '',
+                memberRegNo: memberData?.registrationNumber || '',
+                programId: programIdVal || '',
+                programName: programDetail?.programName || memberData?.programName || '',
+                description: 'Join Fee Commission - Payment via Member Edit',
+              }),
+            });
+          } catch (e) {
+            console.warn('Failed to credit commission for edit payment:', e);
+          }
+        }
       }
 
       message.success('Member updated successfully!')

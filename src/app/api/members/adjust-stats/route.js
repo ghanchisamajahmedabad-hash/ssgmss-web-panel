@@ -21,8 +21,17 @@ export async function POST(req) {
 
     const ts = admin.firestore.FieldValue.serverTimestamp();
 
+    // Agent doc existence check — dot-notation field paths only work with
+    // update() (set+merge writes literal "a.b.c" fields), and update() throws
+    // on missing docs.
+    let agentExists = false;
+    if (agentId) {
+      const agentSnap = await db.collection('agents').doc(agentId).get();
+      agentExists = agentSnap.exists;
+    }
+
     if (type === 'joinFees' || !type) {
-      if (agentId) {
+      if (agentId && agentExists) {
         // Update both top-level agent fields AND programStats.{pid} so that
         // processAgentStats (which prefers programStats) shows correct numbers.
         const agentUpdate = {
@@ -35,7 +44,7 @@ export async function POST(req) {
           agentUpdate[`programStats.${programId}.totalJoinFeesPending`] = INC(-delta);
           agentUpdate[`programStats.${programId}.lastUpdated`]          = ts;
         }
-        batch.set(db.collection('agents').doc(agentId), agentUpdate, { merge: true });
+        batch.update(db.collection('agents').doc(agentId), agentUpdate);
       }
       if (programId) {
         batch.set(db.collection('programs').doc(programId), {
@@ -52,7 +61,7 @@ export async function POST(req) {
     }
 
     if (type === 'closingPayment') {
-      if (agentId) {
+      if (agentId && agentExists) {
         // Same: update both top-level and programStats closing fields.
         const agentUpdate = {
           closing_paidAmount:    INC(delta),
@@ -64,7 +73,7 @@ export async function POST(req) {
           agentUpdate[`programStats.${programId}.totalClosingPendingAmount`] = INC(-delta);
           agentUpdate[`programStats.${programId}.lastUpdated`]               = ts;
         }
-        batch.set(db.collection('agents').doc(agentId), agentUpdate, { merge: true });
+        batch.update(db.collection('agents').doc(agentId), agentUpdate);
       }
       if (programId) {
         batch.set(db.collection('programs').doc(programId), {

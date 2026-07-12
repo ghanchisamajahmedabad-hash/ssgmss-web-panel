@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import admin from "../db/firebaseAdmin";
 import { checkRole, verifyToken } from "../../../../middleware/authMiddleware";
+import { reverseCommissionForPayment } from "../commission/route";
 
 const db = admin.firestore();
 const INC = admin.firestore.FieldValue.increment;
@@ -143,12 +144,23 @@ export async function POST(req) {
         agentUpdate[`programStats.${programId}.totalJoinFeesPending`] = Number(ps.totalJoinFeesPending || 0) + amount;
         agentUpdate[`programStats.${programId}.lastUpdated`]          = STS();
       }
-      await agentRef.set(agentUpdate, { merge: true });
+      // update() (not set+merge) — dot-notation only works with update()
+      if (agentSnap.exists) await agentRef.update(agentUpdate);
     }
+
+    // ── 12. Reverse the commission credited for this single payment ────────
+    const commissionResult = await reverseCommissionForPayment({
+      paymentGroupId: groupId || null,
+      memberId,
+      source: 'joinFees',
+      amount,
+      reason: 'payment_reverted',
+      createdBy: auth.user.uid,
+    });
 
     return NextResponse.json({
       success: true,
-      message: `₹${amount} payment reversed for member. ${remainingCount <= 0 ? 'Payment group deleted (no remaining transactions).' : `${remainingCount} transaction(s) remain in the group.`}`,
+      message: `₹${amount} payment reversed for member.${(commissionResult?.reversedAmount || 0) > 0 ? ` Commission ₹${commissionResult.reversedAmount} reversed from agent wallet.` : ''} ${remainingCount <= 0 ? 'Payment group deleted (no remaining transactions).' : `${remainingCount} transaction(s) remain in the group.`}`,
       groupDeleted: remainingCount <= 0,
       groupId,
     });

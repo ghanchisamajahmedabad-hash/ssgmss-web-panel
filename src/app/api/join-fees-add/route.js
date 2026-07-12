@@ -109,6 +109,14 @@ export async function POST(req) {
 
       const memberData = memberDoc.data();
 
+      // Guard: never accept payments for soft-deleted (trashed) members —
+      // their amounts were already removed from agent/program/org aggregates,
+      // so paying them would double-count on restore.
+      if (memberData.delete_flag === true) {
+        console.warn(`Member ${memberId} is deleted (in trash) — skipping payment`);
+        continue;
+      }
+
       // ── Single-program fields live flat on the member doc ─────────────────
       const programId      = memberData.programId      || '';
       const programName    = memberData.programName    || '';
@@ -205,7 +213,18 @@ export async function POST(req) {
     });
   }
 
+    // ── Guard: nothing was actually applied — don't write a phantom group ────
+    if (actualTotalPaid <= 0) {
+      return NextResponse.json({
+        success: false,
+        message: "No payment applied — all selected members were skipped (fully paid, deleted, or not found).",
+      }, { status: 400 });
+    }
+
     // ── Agent totals — use dot-notation INC per programId (atomic, no race) ──
+    // NOTE: must use update(), NOT set({merge:true}) — the Admin SDK only
+    // interprets dot-notation field paths in update(); set() would create
+    // literal top-level fields named "programStats.x.y" (stats mismatch bug).
     const agentUpdate = {
       totalJoinFeesPaid:    admin.firestore.FieldValue.increment(actualTotalPaid),
       totalJoinFeesPending: admin.firestore.FieldValue.increment(-actualTotalPaid),
@@ -216,7 +235,14 @@ export async function POST(req) {
       agentUpdate[`programStats.${pid}.totalJoinFeesPending`] = admin.firestore.FieldValue.increment(delta.pending);
       agentUpdate[`programStats.${pid}.lastUpdated`]          = admin.firestore.FieldValue.serverTimestamp();
     }
-    batch.set(agentRef, agentUpdate, { merge: true });
+    batch.update(agentRef, agentUpdate);
+
+    // ── Keep the payment group's amount equal to what was ACTUALLY applied ───
+    batch.update(paymentGroupRef, {
+      totalAmount:      actualTotalPaid,
+      requestedAmount:  numTotalAmount,
+      actualTotalPaid,
+    });
 
     // ── Org totals ────────────────────────────────────────────────────────────
     const orgRef = db.collection('organizationStats').doc('current');
@@ -243,6 +269,7 @@ export async function POST(req) {
         programId: c.programId,
         programName: c.programName,
         createdBy: authResult.user.uid,
+        paymentGroupId: paymentGroupRef.id,
       })
     );
     await Promise.allSettled(commissionPromises);

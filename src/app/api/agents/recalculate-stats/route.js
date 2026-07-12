@@ -56,6 +56,7 @@ export async function POST(req) {
         const programTotals = {}; // { [programId]: { ... } }
         let totalJoinFees = 0, totalJoinFeesPaid = 0, totalJoinFeesPending = 0;
         let closingTotal = 0, closingPaid = 0, closingPending = 0;
+        let totalClosingCount = 0, paidClosingCount = 0, pendingClosingCount = 0, closedCount = 0;
         let memberCount = 0;
 
         membersSnap.forEach(doc => {
@@ -74,6 +75,10 @@ export async function POST(req) {
               totalClosingAmount:       0,
               totalClosingPaidAmount:   0,
               totalClosingPendingAmount:0,
+              totalClosingCount:        0,
+              paidClosingCount:         0,
+              pendingClosingCount:      0,
+              closedCount:              0,
             };
           }
 
@@ -83,6 +88,10 @@ export async function POST(req) {
           const cTotal  = Number(m.closing_totalAmount   || 0);
           const cPaid   = Number(m.closing_paidAmount    || 0);
           const cPend   = Number(m.closing_pendingAmount || 0);
+          const cCntT   = Number(m.totalClosingCount     || 0);
+          const cCntP   = Number(m.paidClosingCount      || 0);
+          const cCntPd  = Number(m.pendingClosingCount   || 0);
+          const closed  = m.member_closed === true ? 1 : 0;
 
           programTotals[pid].memberCount              += 1;
           programTotals[pid].totalJoinFees            += jf;
@@ -91,6 +100,10 @@ export async function POST(req) {
           programTotals[pid].totalClosingAmount       += cTotal;
           programTotals[pid].totalClosingPaidAmount   += cPaid;
           programTotals[pid].totalClosingPendingAmount+= cPend;
+          programTotals[pid].totalClosingCount        += cCntT;
+          programTotals[pid].paidClosingCount         += cCntP;
+          programTotals[pid].pendingClosingCount      += cCntPd;
+          programTotals[pid].closedCount              += closed;
 
           totalJoinFees        += jf;
           totalJoinFeesPaid    += jfPaid;
@@ -98,6 +111,10 @@ export async function POST(req) {
           closingTotal         += cTotal;
           closingPaid          += cPaid;
           closingPending       += cPend;
+          totalClosingCount    += cCntT;
+          paidClosingCount     += cCntP;
+          pendingClosingCount  += cCntPd;
+          closedCount          += closed;
           memberCount          += 1;
         });
 
@@ -110,29 +127,56 @@ export async function POST(req) {
           closing_totalAmount:    closingTotal,
           closing_paidAmount:     closingPaid,
           closing_pendingAmount:  closingPending,
+          totalClosingCount,
+          paidClosingCount,
+          pendingClosingCount,
+          closedCount,
           stats_recalculated_at:  STS(),
           updated_at:             STS(),
         };
 
-        // Rebuild entire programStats map
-        const programStatsUpdate = {};
+        // Rebuild entire programStats map as a REAL nested object.
+        // IMPORTANT: set({merge:true}) does NOT interpret dot-notation keys —
+        // it creates literal top-level fields named "programStats.x.y".
+        // Building a nested map and replacing programStats wholesale both
+        // fixes that and clears stale program entries.
+        const programStatsMap = {};
         for (const [pid, stats] of Object.entries(programTotals)) {
           if (pid === '__none__') continue;
-          programStatsUpdate[`programStats.${pid}.programName`]               = stats.programName;
-          programStatsUpdate[`programStats.${pid}.memberCount`]               = stats.memberCount;
-          programStatsUpdate[`programStats.${pid}.totalJoinFees`]             = stats.totalJoinFees;
-          programStatsUpdate[`programStats.${pid}.totalJoinFeesPaid`]         = stats.totalJoinFeesPaid;
-          programStatsUpdate[`programStats.${pid}.totalJoinFeesPending`]      = stats.totalJoinFeesPending;
-          programStatsUpdate[`programStats.${pid}.totalClosingAmount`]        = stats.totalClosingAmount;
-          programStatsUpdate[`programStats.${pid}.totalClosingPaidAmount`]    = stats.totalClosingPaidAmount;
-          programStatsUpdate[`programStats.${pid}.totalClosingPendingAmount`] = stats.totalClosingPendingAmount;
-          programStatsUpdate[`programStats.${pid}.lastUpdated`]               = STS();
+          programStatsMap[pid] = {
+            programName:               stats.programName,
+            memberCount:               stats.memberCount,
+            totalJoinFees:             stats.totalJoinFees,
+            totalJoinFeesPaid:         stats.totalJoinFeesPaid,
+            totalJoinFeesPending:      stats.totalJoinFeesPending,
+            totalClosingAmount:        stats.totalClosingAmount,
+            totalClosingPaidAmount:    stats.totalClosingPaidAmount,
+            totalClosingPendingAmount: stats.totalClosingPendingAmount,
+            totalClosingCount:         stats.totalClosingCount,
+            paidClosingCount:          stats.paidClosingCount,
+            pendingClosingCount:       stats.pendingClosingCount,
+            closedCount:               stats.closedCount,
+            lastUpdated:               STS(),
+          };
         }
 
-        await db.collection('agents').doc(agent.id).set(
-          { ...agentUpdate, ...programStatsUpdate },
-          { merge: true }
-        );
+        const agentRef = db.collection('agents').doc(agent.id);
+
+        // Clean up junk literal dotted fields written by the old set+merge bug
+        // (top-level fields whose NAME contains a dot, e.g. "programStats.x.y")
+        const junkKeys = Object.keys(agent).filter(k => k.includes('.'));
+        if (junkKeys.length) {
+          const deleteArgs = [];
+          junkKeys.forEach(k => {
+            deleteArgs.push(new admin.firestore.FieldPath(k), admin.firestore.FieldValue.delete());
+          });
+          const [firstField, firstValue, ...rest] = deleteArgs;
+          await agentRef.update(firstField, firstValue, ...rest);
+        }
+
+        // update() replaces the whole programStats map (clears stale program
+        // entries), unlike set+merge which would leave old entries behind.
+        await agentRef.update({ ...agentUpdate, programStats: programStatsMap });
 
         results.push({
           agentId:      agent.id,

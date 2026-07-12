@@ -35,6 +35,7 @@ export const creditCommissionStandalone = async ({
   agentId, amount, source, sourceId,
   memberName, memberFatherName, memberRegNo,
   programId, programName, description, createdBy,
+  paymentGroupId,
 }) => {
   try {
     // ── 1. Fetch agent & check opt-in ─────────────────────────────────────────
@@ -91,6 +92,7 @@ export const creditCommissionStandalone = async ({
       baseAmount:       amount,              // original join fee / closing payment amount
       source,
       sourceId:         sourceId         || "",
+      paymentGroupId:   paymentGroupId   || "",   // links commission to its payment group for precise reversal
       memberName:       memberName       || "",
       memberFatherName: memberFatherName || "",
       memberRegNo:      memberRegNo      || "",
@@ -110,6 +112,124 @@ export const creditCommissionStandalone = async ({
   } catch (e) {
     console.error("creditCommissionStandalone error:", e);
     return null;
+  }
+};
+
+// ─── reverseCommissionForPayment ──────────────────────────────────────────────
+// Reverses commission that was credited for a specific payment.
+// Used when a payment group / single payment transaction is reverted so the
+// agent's wallet stays consistent with actual payments.
+//
+// Matching strategy:
+//   1. Exact: commissionTransactions where paymentGroupId == X (and sourceId ==
+//      memberId if provided), type == 'credit', not already reversed.
+//   2. Legacy fallback (old credits without paymentGroupId): match by
+//      sourceId + source + baseAmount, newest first, single tx.
+//
+// Every reversed credit tx is marked { reversed: true } so it can never be
+// reversed twice (idempotent), and a 'reversal' tx is written per agent.
+export const reverseCommissionForPayment = async ({
+  paymentGroupId, memberId, source, amount, reason, createdBy,
+}) => {
+  try {
+    let creditDocs = [];
+
+    if (paymentGroupId) {
+      let q = db.collection("commissionTransactions")
+        .where("paymentGroupId", "==", paymentGroupId)
+        .where("type", "==", "credit");
+      if (memberId) q = q.where("sourceId", "==", memberId);
+      const snap = await q.get();
+      creditDocs = snap.docs.filter(d => d.data().reversed !== true);
+    }
+
+    // Legacy fallback — old credit txs were written without paymentGroupId
+    if (!creditDocs.length && memberId && source) {
+      const snap = await db.collection("commissionTransactions")
+        .where("sourceId", "==", memberId)
+        .where("source", "==", source)
+        .where("type", "==", "credit")
+        .get();
+      const candidates = snap.docs
+        .filter(d => {
+          const t = d.data();
+          if (t.reversed === true) return false;
+          if (t.paymentGroupId) return false; // tagged txs are handled by exact match only
+          if (amount && Number(t.baseAmount || 0) !== Number(amount)) return false;
+          return true;
+        })
+        .sort((a, b) =>
+          (b.data().createdAt?.toMillis?.() || 0) - (a.data().createdAt?.toMillis?.() || 0));
+      if (candidates.length) creditDocs = [candidates[0]];
+    }
+
+    if (!creditDocs.length) return { reversedAmount: 0, count: 0 };
+
+    // Group per agent
+    const perAgent = {};
+    creditDocs.forEach(d => {
+      const t = d.data();
+      if (!perAgent[t.agentId]) perAgent[t.agentId] = { total: 0, refs: [], sample: t };
+      perAgent[t.agentId].total += Number(t.amount || 0);
+      perAgent[t.agentId].refs.push(d.ref);
+    });
+
+    let totalReversed = 0;
+    for (const [agId, g] of Object.entries(perAgent)) {
+      const reversalAmount = Math.round(g.total * 100) / 100;
+      if (reversalAmount <= 0) continue;
+
+      const agentRef  = db.collection("agents").doc(agId);
+      const agentSnap = await agentRef.get();
+      if (!agentSnap.exists) continue;
+
+      const currentWallet = agentSnap.data().walletBalance || 0;
+      const batch = db.batch();
+
+      // Deduct wallet — negative balance is allowed for reversals
+      batch.update(agentRef, {
+        walletBalance:         INC(-reversalAmount),
+        totalCommissionEarned: INC(-reversalAmount),
+        updated_at:            STS(),
+      });
+
+      // Mark original credits reversed (idempotency)
+      g.refs.forEach(ref => batch.update(ref, { reversed: true, reversedAt: STS() }));
+
+      const txRef = db.collection("commissionTransactions").doc();
+      batch.set(txRef, {
+        agentId:          agId,
+        agentName:        g.sample.agentName || "",
+        type:             "reversal",
+        amount:           reversalAmount,
+        source:           g.sample.source   || source || "",
+        sourceId:         memberId || g.sample.sourceId || "",
+        paymentGroupId:   paymentGroupId || g.sample.paymentGroupId || "",
+        memberName:       g.sample.memberName       || "",
+        memberFatherName: g.sample.memberFatherName || "",
+        memberRegNo:      g.sample.memberRegNo      || "",
+        programId:        g.sample.programId        || "",
+        programName:      g.sample.programName      || "",
+        commissionRate:        g.sample.commissionRate        || 0,
+        commissionRatePercent: g.sample.commissionRatePercent || 0,
+        reversalReason:   reason || "payment_reverted",
+        description:      reason === "member_deleted"
+          ? `Commission Reversed — Member Deleted (${g.sample.memberName || memberId || ""})`
+          : `Commission Reversed — Payment Reverted (${g.sample.memberName || memberId || ""})`,
+        balanceBefore:    currentWallet,
+        balanceAfter:     currentWallet - reversalAmount,
+        createdBy:        createdBy || "",
+        createdAt:        STS(),
+      });
+
+      await batch.commit();
+      totalReversed += reversalAmount;
+    }
+
+    return { reversedAmount: totalReversed, count: creditDocs.length };
+  } catch (e) {
+    console.error("reverseCommissionForPayment error:", e);
+    return { reversedAmount: 0, count: 0, error: e.message };
   }
 };
 
@@ -259,13 +379,13 @@ export async function POST(req) {
     const { action } = body;
 
     if (action === "credit") {
-      const { agentId, amount, source, sourceId, memberName, memberFatherName, memberRegNo, programId, programName, description } = body;
+      const { agentId, amount, source, sourceId, memberName, memberFatherName, memberRegNo, programId, programName, description, paymentGroupId } = body;
       if (!agentId || !amount || !source)
         return NextResponse.json({ success: false, message: "agentId, amount, source required" }, { status: 400 });
 
       const result = await creditCommissionStandalone({
         agentId, amount, source, sourceId, memberName, memberFatherName, memberRegNo,
-        programId, programName, description, createdBy: authResult.user.uid,
+        programId, programName, description, createdBy: authResult.user.uid, paymentGroupId,
       });
       if (!result)
         return NextResponse.json({ success: false, message: "Commission not applicable (disabled for agent, 0 rate, or 0 amount)" });
@@ -309,3 +429,4 @@ export async function POST(req) {
 // Keep COMMISSION_RATES export for any legacy callers (they now just get the defaults)
 export const COMMISSION_RATES = { joinFees: DEFAULT_RATES.joinFeesRate / 100, closingPayment: DEFAULT_RATES.closingPaymentRate / 100 };
 export { getCommissionRates };
+// consistency-fix: commissions are tagged with paymentGroupId and reversals are idempotent

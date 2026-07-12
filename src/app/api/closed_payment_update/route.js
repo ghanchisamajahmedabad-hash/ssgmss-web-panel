@@ -155,6 +155,13 @@ export async function POST(req) {
       if (!memberDoc.exists) continue;
 
       const memberData     = memberDoc.data();
+
+      // Guard: never accept payments for soft-deleted (trashed) members
+      if (memberData.delete_flag === true) {
+        console.warn(`[closingPayment] Member ${memberId} is deleted (in trash) — skipping`);
+        continue;
+      }
+
       const pId            = memberData.programId   || '';
       const programName    = memberData.programName || '';
       const closingPending = Number(memberData.closing_pendingAmount || 0);
@@ -302,7 +309,18 @@ export async function POST(req) {
       });
     }
 
+    // ── Guard: nothing was actually applied — don't write a phantom group ────
+    if (grandTotalPaid <= 0) {
+      return NextResponse.json({
+        success: false,
+        message: 'No payment applied — all selected members were skipped (nothing pending, deleted, or not found).',
+      }, { status: 400 });
+    }
+
     // ── Agent main doc — use dot-notation INC per programId (atomic, no race) ──
+    // NOTE: must use update(), NOT set({merge:true}) — the Admin SDK only
+    // interprets dot-notation field paths in update(); set() would create
+    // literal top-level fields named "programStats.x.y" (stats mismatch bug).
     const agentUpdate = {
       closing_paidAmount:    INC(grandTotalPaid),
       closing_pendingAmount: INC(-grandTotalPaid),
@@ -317,13 +335,15 @@ export async function POST(req) {
       agentUpdate[`programStats.${pid}.pendingClosingCount`]       = INC(delta.pendingCount);
       agentUpdate[`programStats.${pid}.lastUpdated`]               = timestamp;
     }
-    batch.set(agentRef, agentUpdate, { merge: true });
+    batch.update(agentRef, agentUpdate);
 
-    // ── Finalize payment group ─────────────────────────────────────────────
+    // ── Finalize payment group — keep totalAmount equal to actual applied ────
     batch.update(paymentGroupRef, {
       status:          'completed',
       paidAt:          timestamp,
       memberAllocations,
+      totalAmount:     grandTotalPaid,
+      requestedAmount: numTotalAmount,
       actualTotalPaid: grandTotalPaid,
     });
 
@@ -353,6 +373,7 @@ export async function POST(req) {
         programId: c.programId,
         programName: c.programName,
         createdBy: authResult.user.uid,
+        paymentGroupId: paymentGroupRef.id,
       })
     );
     await Promise.allSettled(commissionPromises);
