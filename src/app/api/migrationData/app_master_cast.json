@@ -1,0 +1,41 @@
+[
+{"type":"header","version":"5.2.1","comment":"Export to JSON plugin for PHPMyAdmin"},
+{"type":"database","name":"amd-db"},
+{"type":"table","name":"app_master_cast","database":"amd-db","data":
+[
+{"id":"1","title":"घाँची","status":"1","created_at":"2025-06-25 11:44:07","updated_at":"2025-06-25 17:14:07","created_by":"0"},
+{"id":"2","title":"माली","status":"2","created_at":"2025-10-08 22:10:35","updated_at":"2025-10-09 03:40:35","created_by":"0"},
+{"id":"3","title":"सोनी","status":"2","created_at":"2025-10-08 22:10:39","updated_at":"2025-10-09 03:40:39","created_by":"0"},
+{"id":"4","title":"पुरोहित","status":"2","created_at":"2025-10-08 23:00:56","updated_at":"2025-10-09 04:30:56","created_by":"0"},
+{"id":"5","title":"प्रजापत","status":"2","created_at":"2025-10-08 23:01:02","updated_at":"2025-10-09 04:31:02","created_by":"1"},
+{"id":"6","title":"सुथार","status":"2","created_at":"2025-10-10 15:31:37","updated_at":"2025-10-10 21:01:37","created_by":"1"},
+{"id":"7","title":"चौधरी","status":"2","created_at":"2025-10-10 15:31:53","updated_at":"2025-10-10 21:01:53","created_by":"1"},
+{"id":"8","title":"गो स्वामी","status":"2","created_at":"2025-10-10 15:31:57","updated_at":"2025-10-10 21:01:57","created_by":"1"},
+{"id":"9","title":"देवासी","status":"2","created_at":"2025-10-10 15:32:01","updated_at":"2025-10-10 21:02:01","created_by":"1"},
+{"id":"10","title":"दर्जी","status":"2","created_at":"2025-10-10 15:31:44","updated_at":"2025-10-10 21:01:44","created_by":"1"},
+{"id":"11","title":"जैन","status":"2","created_at":"2025-10-10 15:32:06","updated_at":"2025-10-10 21:02:06","created_by":"1"},
+{"id":"12","title":"सैन","status":"2","created_at":"2025-10-10 15:32:10","updated_at":"2025-10-10 21:02:10","created_by":"1"},
+{"id":"13","title":"कोली","status":"2","created_at":"2025-10-10 15:33:46","updated_at":"2025-10-10 21:03:46","created_by":"6"},
+{"id":"14","title":"महेश्वरी","status":"2","created_at":"2025-10-10 15:32:15","updated_at":"2025-10-10 21:02:15","created_by":"6"},
+{"id":"15","title":"लोहार","status":"2","created_at":"2025-10-10 15:33:39","updated_at":"2025-10-10 21:03:39","created_by":"1"},
+{"id":"16","title":"ब्राह्मण","status":"2","created_at":"2025-10-10 15:33:32","updated_at":"2025-10-10 21:03:32","created_by":"6"},
+{"id":"17","title":"जाडेजा","status":"2","created_at":"2025-10-10 15:33:24","updated_at":"2025-10-10 21:03:24","created_by":"6"},
+{"id":"18","title":"दरबार","status":"2","created_at":"2025-10-10 15:33:19","updated_at":"2025-10-10 21:03:19","created_by":"6"},
+{"id":"19","title":"Jain","status":"2","created_at":"2025-10-10 15:33:14","updated_at":"2025-10-10 21:03:14","created_by":"1"},
+{"id":"20","title":"भाट","status":"2","created_at":"2025-10-10 15:33:06","updated_at":"2025-10-10 21:03:06","created_by":"1"},
+{"id":"21","title":"Meghwal","status":"2","created_at":"2025-10-10 15:33:01","updated_at":"2025-10-10 21:03:01","created_by":"1"},
+{"id":"22","title":"Vaishnav","status":"2","created_at":"2025-10-10 15:32:55","updated_at":"2025-10-10 21:02:55","created_by":"1"},
+{"id":"23","title":"Sasi","status":"2","created_at":"2025-10-10 15:32:50","updated_at":"2025-10-10 21:02:50","created_by":"6"},
+{"id":"24","title":"Kharawal","status":"2","created_at":"2025-10-10 15:32:46","updated_at":"2025-10-10 21:02:46","created_by":"6"},
+{"id":"25","title":"Rana rajput","status":"2","created_at":"2025-10-10 15:32:39","updated_at":"2025-10-10 21:02:39","created_by":"1"},
+{"id":"26","title":"Goswami","status":"2","created_at":"2025-10-10 15:32:31","updated_at":"2025-10-10 21:02:31","created_by":"1"},
+{"id":"27","title":"Gawariya","status":"2","created_at":"2025-10-10 15:32:27","updated_at":"2025-10-10 21:02:27","created_by":"1"},
+{"id":"28","title":"Rao","status":"2","created_at":"2025-10-10 15:32:23","updated_at":"2025-10-10 21:02:23","created_by":"1"},
+{"id":"29","title":"Lakhara","status":"2","created_at":"2025-10-10 15:31:48","updated_at":"2025-10-10 21:01:48","created_by":"1"},
+{"id":"30","title":"Bheel","status":"2","created_at":"2025-10-10 15:32:19","updated_at":"2025-10-10 21:02:19","created_by":"1"},
+{"id":"31","title":"ठाकोर","status":"2","created_at":"2025-10-10 15:31:30","updated_at":"2025-10-10 21:01:30","created_by":"1"},
+{"id":"32","title":"राजपूत","status":"2","created_at":"2025-10-08 22:11:15","updated_at":"2025-10-09 03:41:15","created_by":"26"},
+{"id":"33","title":"नागर","status":"2","created_at":"2025-10-08 22:11:10","updated_at":"2025-10-09 03:41:10","created_by":"1"}
+]
+}
+]

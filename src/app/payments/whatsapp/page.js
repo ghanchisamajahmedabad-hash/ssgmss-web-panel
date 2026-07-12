@@ -3,13 +3,13 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import {
   Card, Table, Button, Select, Tag, Space, Typography, Divider,
   message, Avatar, Statistic, Row, Col, Input, Modal, Alert,
-  Checkbox, Tooltip, Badge, Collapse, Empty, Spin, Grid, Progress,
+  Checkbox, Tooltip, Badge, Collapse, Empty, Spin, Grid, Form,
 } from 'antd'
 import {
   WhatsAppOutlined, UserOutlined, TeamOutlined,
   DollarOutlined, FilterOutlined, SendOutlined,
   CheckCircleOutlined, CloseCircleOutlined, ReloadOutlined,
-  EyeOutlined, WarningOutlined, GlobalOutlined,
+  EyeOutlined, WarningOutlined, GlobalOutlined, MessageOutlined,
 } from '@ant-design/icons'
 import { useSelector } from 'react-redux'
 import { auth } from '../../../../lib/firbase-client'
@@ -50,6 +50,13 @@ export default function WhatsAppPage() {
   const [sendResult, setSendResult] = useState(null)
   const [templateModal, setTemplateModal] = useState(false)
   const [editableTemplate, setEditableTemplate] = useState(DEFAULT_TEMPLATE)
+
+  // ── Custom send modal state ───────────────────────────────────────────────
+  const [customModal, setCustomModal] = useState(false)
+  const [customSending, setCustomSending] = useState(false)
+  const [customPhone, setCustomPhone] = useState('')
+  const [customMessage, setCustomMessage] = useState('')
+  const [customResult, setCustomResult] = useState(null) // { success, message }
 
   // ── Fetch data ────────────────────────────────────────────────────────────
   const fetchData = useCallback(async (page = 1) => {
@@ -175,7 +182,10 @@ export default function WhatsAppPage() {
           setSendResult(data.results || [])
           setShowPreview(true)
         } else {
-          message.success(`Sent: ${data.sent}, Skipped (no phone): ${data.skipped}`)
+          const parts = [`✅ Sent: ${data.sent}`]
+          if (data.skipped > 0) parts.push(`⏭ Skipped (no phone): ${data.skipped}`)
+          if (data.failed > 0) parts.push(`❌ Failed: ${data.failed}`)
+          message.success(parts.join(' | '), 5)
           fetchData(1)
         }
       } else {
@@ -187,6 +197,50 @@ export default function WhatsAppPage() {
     } finally {
       setSending(false)
       setSendProgress(null)
+    }
+  }
+
+  // ── Custom send ───────────────────────────────────────────────────────────
+  const openCustomModal = () => {
+    setCustomPhone('')
+    setCustomMessage('')
+    setCustomResult(null)
+    setCustomModal(true)
+  }
+
+  const handleCustomSend = async () => {
+    const phone = customPhone.trim()
+    const msg   = customMessage.trim()
+
+    if (!phone) { message.warning('Please enter a phone number'); return }
+    if (!msg)   { message.warning('Please enter a message'); return }
+
+    const digits = phone.replace(/\D/g, '')
+    if (digits.length !== 10 && !(digits.length === 12 && digits.startsWith('91'))) {
+      message.warning('Enter a valid 10-digit phone number')
+      return
+    }
+
+    setCustomSending(true)
+    setCustomResult(null)
+    try {
+      const res = await fetch('/api/whatsapp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone, message: msg }),
+      })
+      const data = await res.json()
+      if (data.success) {
+        setCustomResult({ success: true, message: 'Message sent successfully!' })
+        message.success('WhatsApp message sent!')
+      } else {
+        setCustomResult({ success: false, message: data.message || 'Failed to send' })
+      }
+    } catch (e) {
+      console.error(e)
+      setCustomResult({ success: false, message: 'Network error. Please try again.' })
+    } finally {
+      setCustomSending(false)
     }
   }
 
@@ -245,6 +299,9 @@ export default function WhatsAppPage() {
           WhatsApp Reminders
         </Title>
         <Space wrap>
+          <Button size="small" icon={<MessageOutlined />} onClick={openCustomModal} style={{ color: '#25D366', borderColor: '#25D366' }}>
+            Custom Message
+          </Button>
           <Button size="small" icon={<EyeOutlined />} onClick={() => setTemplateModal(true)}>Template</Button>
           <Button size="small" icon={<ReloadOutlined />} onClick={() => fetchData(pagination.page)} loading={loading}>Refresh</Button>
         </Space>
@@ -457,6 +514,100 @@ export default function WhatsAppPage() {
             .replace(/{amount}/g, '5,000')
             .replace(/{pendingCount}/g, '3')
             .replace(/{program}/g, 'बाल विकास योजना')}
+        </div>
+      </Modal>
+
+      {/* ── Custom Send Modal ─────────────────────────────────────────── */}
+      <Modal
+        title={
+          <Space>
+            <WhatsAppOutlined style={{ color: '#25D366' }} />
+            Send Custom WhatsApp Message
+          </Space>
+        }
+        open={customModal}
+        onCancel={() => setCustomModal(false)}
+        footer={null}
+        width={480}
+        destroyOnClose
+      >
+        <div style={{ marginBottom: 14 }}>
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            Type any phone number and message to send directly via WhatsApp.
+          </Text>
+        </div>
+
+        {/* Phone */}
+        <div style={{ marginBottom: 12 }}>
+          <Text strong style={{ display: 'block', marginBottom: 4 }}>Phone Number</Text>
+          <Input
+            prefix={<span style={{ color: '#888', fontSize: 12 }}>+91</span>}
+            placeholder="10-digit mobile number"
+            value={customPhone}
+            onChange={e => { setCustomPhone(e.target.value); setCustomResult(null) }}
+            maxLength={15}
+            size="large"
+            type="tel"
+            onPressEnter={() => document.getElementById('custom-msg-textarea')?.focus()}
+          />
+        </div>
+
+        {/* Message */}
+        <div style={{ marginBottom: 12 }}>
+          <Text strong style={{ display: 'block', marginBottom: 4 }}>Message</Text>
+          <TextArea
+            id="custom-msg-textarea"
+            placeholder="Type your message here..."
+            value={customMessage}
+            onChange={e => { setCustomMessage(e.target.value); setCustomResult(null) }}
+            rows={6}
+            showCount
+            maxLength={1000}
+          />
+        </div>
+
+        {/* Live preview bubble */}
+        {customMessage && (
+          <div style={{ marginBottom: 12 }}>
+            <Text type="secondary" style={{ fontSize: 11, display: 'block', marginBottom: 4 }}>Preview</Text>
+            <div style={{
+              padding: '10px 14px',
+              background: '#dcf8c6',
+              borderRadius: 10,
+              whiteSpace: 'pre-wrap',
+              fontSize: 13,
+              maxHeight: 140,
+              overflow: 'auto',
+              border: '1px solid #b7eb8f',
+            }}>
+              {customMessage}
+            </div>
+          </div>
+        )}
+
+        {/* Result banner */}
+        {customResult && (
+          <Alert
+            type={customResult.success ? 'success' : 'error'}
+            message={customResult.message}
+            style={{ marginBottom: 12 }}
+            showIcon
+          />
+        )}
+
+        {/* Actions */}
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          <Button onClick={() => setCustomModal(false)}>Cancel</Button>
+          <Button
+            type="primary"
+            icon={<SendOutlined />}
+            loading={customSending}
+            onClick={handleCustomSend}
+            style={{ background: '#25D366', borderColor: '#25D366' }}
+            disabled={!customPhone.trim() || !customMessage.trim()}
+          >
+            Send Message
+          </Button>
         </div>
       </Modal>
     </div>

@@ -114,6 +114,7 @@ export async function POST(req) {
       sendEmail = false, status = "active",
       commissionJoinFeesEnabled = true,   // default: join fees commission ON
       commissionClosingEnabled  = true,   // default: closing commission ON
+      legacyUserId = '',                  // old system agent ID (migration only)
     } = body;
 
     if (!name || !email || !phone1 || !aadharNo)
@@ -162,7 +163,8 @@ export async function POST(req) {
       commissionClosingEnabled:  commissionClosingEnabled  !== false,
       walletBalance: 0, totalCommissionEarned: 0, totalCommissionWithdrawn: 0,
       created_at: STS(), updated_at: STS(),
-      createdBy: authResult.user.uid, lastPasswordReset: new Date().toISOString()
+      createdBy: authResult.user.uid, lastPasswordReset: new Date().toISOString(),
+      ...(legacyUserId ? { legacyUserId: String(legacyUserId).trim() } : {}),
     };
     await agentRef.set(agentData);
 

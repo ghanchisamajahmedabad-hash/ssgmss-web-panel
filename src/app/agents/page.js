@@ -949,6 +949,19 @@ const isSuperAdmin = (user) => user?.role === 'superadmin';
 
               </Row>
             </Card>
+            {/* Migration field */}
+            <div className="flex items-center gap-3 px-3 py-2 rounded-lg bg-gray-50 border border-dashed border-gray-200">
+              <div className="text-xs text-gray-400 shrink-0">🔧 Migration</div>
+              <Form.Item name="legacyUserId" className="mb-0 flex-1" style={{ marginBottom: 0 }}>
+                <Input
+                  placeholder="Old system agent ID (optional)"
+                  size="small"
+                  style={{ fontSize: 12 }}
+                  allowClear
+                />
+              </Form.Item>
+            </div>
+
             <div className="flex justify-end gap-3 pt-4 border-t">
               <Button onClick={resetForm} disabled={loading} size="large">Cancel</Button>
               <Button type="primary" htmlType="submit" loading={loading} icon={<SaveOutlined />} size="large" className="bg-blue-600">

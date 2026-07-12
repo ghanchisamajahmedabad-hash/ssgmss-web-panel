@@ -4,7 +4,74 @@ import { checkRole, verifyToken } from "../../../../../middleware/authMiddleware
 
 const db = admin.firestore();
 
-// ── Message template builder ──────────────────────────────────────────────
+// ── Gupshup credentials ───────────────────────────────────────────────────────
+const GUPSHUP_URL     = 'https://api.gupshup.io/wa/api/v1/msg'
+const GUPSHUP_OPT_IN  = 'https://api.gupshup.io/wa/api/v1/app/opt/in'
+const GUPSHUP_API_KEY = process.env.WHATSAPP_API_KEY
+const GUPSHUP_SOURCE  = process.env.SOURCE_NO_WHATSAPP
+const GUPSHUP_SRC_NAME = process.env.SRC_NAME_WHATSAPP
+
+function formatPhone(raw) {
+  if (!raw) return null
+  const digits = String(raw).replace(/\D/g, '')
+  if (digits.startsWith('91') && digits.length === 12) return digits
+  if (digits.length === 10) return '91' + digits
+  return null
+}
+
+async function optInPhone(destination) {
+  try {
+    const res = await fetch(`${GUPSHUP_OPT_IN}/${GUPSHUP_SRC_NAME}`, {
+      method: 'POST',
+      headers: {
+        apikey: GUPSHUP_API_KEY,
+        'content-type': 'application/x-www-form-urlencoded',
+      },
+      body: new URLSearchParams({ user: destination }).toString(),
+    })
+    const text = await res.text()
+    console.log(`Gupshup opt-in ${destination}: ${res.status} - ${text}`)
+  } catch (err) {
+    console.warn(`Opt-in failed for ${destination}:`, err.message)
+  }
+}
+
+async function sendGupshupMessage(phone, text) {
+  const destination = formatPhone(phone)
+  if (!destination) return { ok: false, reason: 'Invalid phone number' }
+  if (!GUPSHUP_API_KEY || !GUPSHUP_SOURCE || !GUPSHUP_SRC_NAME)
+    return { ok: false, reason: 'WhatsApp credentials not configured' }
+
+  const payload = new URLSearchParams({
+    channel:        'whatsapp',
+    source:         GUPSHUP_SOURCE,
+    destination,
+    'src.name':     GUPSHUP_SRC_NAME,
+    message:        JSON.stringify({ type: 'text', text }),
+    disablePreview: 'false',
+    encode:         'false',
+  })
+
+  try {
+    const res = await fetch(GUPSHUP_URL, {
+      method: 'POST',
+      headers: {
+        apikey:         GUPSHUP_API_KEY,
+        accept:         'application/json',
+        'content-type': 'application/x-www-form-urlencoded',
+      },
+      body: payload.toString(),
+    })
+    console.log(`Gupshup response for ${destination}: ${res.status} ${res.statusText}`)
+    const responseText = await res.text()
+    if (!res.ok) return { ok: false, reason: `Gupshup error ${res.status}: ${responseText}` }
+    return { ok: true }
+  } catch (err) {
+    return { ok: false, reason: err.message }
+  }
+}
+
+// ── Message template builder ──────────────────────────────────────────────────
 function buildMessage(member, template) {
   return template
     .replace(/{name}/g, member.displayName || '')
@@ -39,7 +106,7 @@ export async function POST(req) {
       return NextResponse.json({ success: false, message: 'No members selected' }, { status: 400 });
     }
 
-    // ── Firestore in-query limit is 30, so chunk member lookups ──────────
+    // ── Fetch members from Firestore (max 30 per in-query) ─────────────────
     const CHUNK = 30;
     const members = [];
     for (let i = 0; i < memberIds.length; i += CHUNK) {
@@ -66,64 +133,84 @@ export async function POST(req) {
       return NextResponse.json({ success: false, message: 'No members found' }, { status: 404 });
     }
 
-    // ── Build results ────────────────────────────────────────────────────
-    const results = members.map(member => {
-      const message = buildMessage(member, messageTemplate);
-      const hasPhone = !!member.phone;
+    // ── Preview mode: build messages without sending ────────────────────────
+    if (testMode) {
+      const results = members.map(member => {
+        const hasPhone = !!member.phone
+        const builtMessage = buildMessage(member, messageTemplate)
+        return {
+          memberId: member.id,
+          memberName: member.displayName,
+          phone: member.phone,
+          message: builtMessage,
+          status: hasPhone ? 'sent' : 'skipped',
+          reason: hasPhone ? undefined : 'No phone number',
+        }
+      })
+      return NextResponse.json({
+        success: true,
+        message: `Preview ready: ${members.length} members`,
+        total: members.length,
+        sent: results.filter(r => r.status === 'sent').length,
+        skipped: results.filter(r => r.status === 'skipped').length,
+        results,
+      })
+    }
 
-      // ── TODO: Replace with actual WhatsApp API call ────────────────────
-      // The phone is a 10-digit number; prepend 91 for India.
-      // const to = `91${member.phone}`;
-      //
-      // Twilio:   POST https://api.twilio.com/2010-04-01/Accounts/{SID}/Messages.json
-      //   Body: { To: `whatsapp:${to}`, From: `whatsapp:${from}`, Body: message }
-      //
-      // WABA:     POST https://graph.facebook.com/v18.0/{phone-number-id}/messages
-      //   Body: { messaging_product: 'whatsapp', to, type: 'template',
-      //           template: { name: 'payment_reminder', language: { code: 'hi' },
-      //             components: [{ type: 'body', parameters: [
-      //               { type: 'text', text: member.displayName },
-      //               { type: 'text', text: String(member.pendingClosingCount) },
-      //               { type: 'text', text: String(member.closing_pendingAmount) },
-      //             ]}]}}
+    // ── Real send: call Gupshup for each member with a phone ───────────────
+    const results = []
+    for (const member of members) {
+      if (!member.phone) {
+        results.push({
+          memberId: member.id,
+          memberName: member.displayName,
+          phone: '',
+          status: 'skipped',
+          reason: 'No phone number',
+        })
+        continue
+      }
 
-      console.log(`[WhatsApp] To: ${member.phone} (${member.displayName}) | Pending: ${member.pendingClosingCount} count, ₹${member.closing_pendingAmount}`);
+      const text = buildMessage(member, messageTemplate)
+      // Opt-in the number before sending so Gupshup delivers it
+      const destination = formatPhone(member.phone)
+      if (destination) await optInPhone(destination)
+      const { ok, reason } = await sendGupshupMessage(member.phone, text)
 
-      return {
+      console.log(`[WhatsApp] ${ok ? '✅' : '❌'} ${member.displayName} (${member.phone})${reason ? ' — ' + reason : ''}`)
+
+      results.push({
         memberId: member.id,
         memberName: member.displayName,
         phone: member.phone,
-        message: testMode ? message : undefined,
-        status: hasPhone ? 'sent' : 'skipped',
-        reason: hasPhone ? undefined : 'No phone number',
-      };
-    });
-
-    const sent = results.filter(r => r.status === 'sent').length;
-    const skipped = results.filter(r => r.status === 'skipped').length;
-
-    // ── Log to Firestore ─────────────────────────────────────────────────
-    if (!testMode) {
-      await db.collection('whatsappLogs').add({
-        sentAt: admin.firestore.FieldValue.serverTimestamp(),
-        sentBy: authResult.user.uid,
-        totalMembers: members.length,
-        sent,
-        skipped,
-        memberIds,
-        template: messageTemplate,
-      });
+        status: ok ? 'sent' : 'failed',
+        reason: ok ? undefined : reason,
+      })
     }
+
+    const sent    = results.filter(r => r.status === 'sent').length
+    const skipped = results.filter(r => r.status === 'skipped').length
+    const failed  = results.filter(r => r.status === 'failed').length
+
+    // ── Log to Firestore ─────────────────────────────────────────────────────
+    await db.collection('whatsappLogs').add({
+      sentAt: admin.firestore.FieldValue.serverTimestamp(),
+      sentBy: authResult.user.uid,
+      totalMembers: members.length,
+      sent,
+      skipped,
+      failed,
+      memberIds,
+      template: messageTemplate,
+    });
 
     return NextResponse.json({
       success: true,
-      message: testMode
-        ? `Preview ready: ${members.length} members`
-        : `Messages processed: ${sent} sent, ${skipped} skipped (no phone)`,
+      message: `Messages processed: ${sent} sent, ${skipped} skipped (no phone)${failed > 0 ? `, ${failed} failed` : ''}`,
       total: members.length,
       sent,
       skipped,
-      results: testMode ? results : undefined,
+      failed,
     });
 
   } catch (error) {

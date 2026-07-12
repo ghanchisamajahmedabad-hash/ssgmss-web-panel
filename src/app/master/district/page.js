@@ -462,6 +462,10 @@ const DistrictManagementPage = () => {
             </Select>
           </Form.Item>
 
+          <Form.Item name="legacyId" label={<span className="text-xs text-gray-400">🔧 Old System ID <span className="font-normal">(migration only)</span></span>}>
+            <Input placeholder="e.g., 5" size="small" allowClear />
+          </Form.Item>
+
           <div className="flex justify-end gap-3 pt-4 border-t">
             <Button
               onClick={() => {
