@@ -488,18 +488,30 @@ const handleDeleteMember = (member) => {
       },
     },
     {
-      title: 'Join Fees', key: 'payment', width: 140,
+      title: 'Join Fees', key: 'payment', width: 165,
       sorter: searchMode === 'paginated',
       render: (_, r) => {
-        const pct   = r.paymentPercentage || 0
+        const pct     = r.paymentPercentage || 0
+        const total   = r.joinFees       || 0
+        const paid    = r.paidAmount     || 0
+        const pending = r.pendingAmount  || 0
+        const fixed   = r.fixedJoinFees  || 0
         const color = pct === 100 ? 'green' : pct > 0 ? 'orange' : 'red'
         const icon  = pct === 100 ? <CheckCircleOutlined /> : <ClockCircleOutlined />
         return (
           <div>
             <div className="flex items-center gap-1 text-sm">
               {icon}<span style={{ color, fontWeight: 'bold' }}>{pct}%</span>
+              <span className="text-[10px] text-gray-500">of ₹{total.toLocaleString()}</span>
             </div>
-            <div className="text-xs">₹{r.paidAmount || 0}/₹{r.joinFees || 0}</div>
+            <div className="text-[10px]">
+              <span title="Paid" style={{ color: '#52c41a', fontWeight: 600 }}>Paid ₹{paid.toLocaleString()}</span>
+              <span className="text-gray-300 mx-0.5">•</span>
+              <span title="Pending" style={{ color: pending > 0 ? '#ff4d4f' : '#52c41a', fontWeight: 600 }}>Pend ₹{pending.toLocaleString()}</span>
+            </div>
+            {fixed > 0 && (
+              <div className="text-[9px] text-gray-500">Fixed Fees: ₹{fixed.toLocaleString()}</div>
+            )}
           </div>
         )
       },
