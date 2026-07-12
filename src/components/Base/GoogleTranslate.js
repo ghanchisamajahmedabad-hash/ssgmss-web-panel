@@ -11,6 +11,38 @@ const LANGUAGES = [
   { code: "gu", label: "ગુજરાતી", flag: "🇮🇳" },
 ];
 
+// The googtrans cookie may exist for several domain variants (no domain,
+// "host", ".host", and the parent domain like ".example.com" — Google sets the
+// dotted variant on deployed sites). To reliably change language we must
+// write/delete the cookie for EVERY variant, otherwise a stale copy survives
+// and the page keeps translating to the old language after reload.
+const cookieDomainVariants = () => {
+  const host = window.location.hostname;
+  const variants = [null, host, `.${host}`];
+  const parts = host.split(".");
+  if (parts.length > 2) variants.push("." + parts.slice(-2).join("."));
+  return variants;
+};
+
+const setGoogTransCookie = (value) => {
+  cookieDomainVariants().forEach((d) => {
+    const domain = d ? `; domain=${d}` : "";
+    if (value === null) {
+      document.cookie = `googtrans=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/${domain}`;
+    } else {
+      document.cookie = `googtrans=${value}; path=/${domain}`;
+    }
+  });
+};
+
+const readGoogTransLang = () => {
+  const m = document.cookie.match(/(?:^|;\s*)googtrans=([^;]*)/);
+  if (!m || !m[1]) return null;
+  // cookie format: /en/hi  →  target language is the last segment
+  const code = decodeURIComponent(m[1]).split("/").pop();
+  return code || null;
+};
+
 const GoogleTranslate = () => {
   const [active, setActive] = useState(LANGUAGES[0]);
   const initialized = useRef(false);
@@ -18,6 +50,12 @@ const GoogleTranslate = () => {
   useEffect(() => {
     if (initialized.current) return;
     initialized.current = true;
+
+    // Show the language the page is ACTUALLY in (from the cookie) — before,
+    // the button always showed "English" after a reload even in Hindi mode.
+    const currentCode = readGoogTransLang();
+    const current = LANGUAGES.find((l) => l.code === currentCode);
+    if (current) setActive(current);
 
     if (!document.getElementById("google-translate-script")) {
       const s = document.createElement("script");
@@ -45,16 +83,25 @@ const GoogleTranslate = () => {
     setActive(lang);
 
     if (lang.code === "en") {
-      document.cookie = "googtrans=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
-      document.cookie = `googtrans=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/; domain=${window.location.hostname}`;
+      // Delete the cookie on ALL domain variants, then force /en/en so any
+      // variant that somehow survives still means "no translation".
+      setGoogTransCookie(null);
+      setGoogTransCookie("/en/en");
       window.location.reload();
       return;
     }
+
+    // Write the target language on all variants so it survives reloads
+    setGoogTransCookie(null);
+    setGoogTransCookie(`/en/${lang.code}`);
 
     const sel = document.querySelector(".goog-te-combo");
     if (sel) {
       sel.value = lang.code;
       sel.dispatchEvent(new Event("change"));
+    } else {
+      // Widget not ready yet — the cookie is set, a reload applies it
+      window.location.reload();
     }
   };
 
