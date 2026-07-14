@@ -163,6 +163,7 @@ const buildMenuItems = (user, pendingCount, collapsed) => {
           ],
         },
         { key: '/settings/commission', label: 'Commission', module: 'settings' },
+        { key: '/settings/migration', label: 'Media Migration', module: 'settings' },
       ],
     },
     {

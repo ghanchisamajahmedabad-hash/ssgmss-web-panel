@@ -479,6 +479,9 @@ const MemberDetailDrawer = ({ member, visible, onClose, programList, agentList, 
                 <div className="font-bold text-lg">{member?.displayName} {member?.fatherName}</div>
                 <div className="text-sm text-gray-500 flex items-center gap-2 flex-wrap">
                   <BarcodeOutlined /> {member?.registrationNumber}
+                  {member?.legacyApplicationNo && (
+                    <Tag color="orange" style={{fontSize:10, margin:0}}>Old No: {member.legacyApplicationNo}</Tag>
+                  )}
                   {member?.ageGroupName && <Tag color="blue" style={{fontSize:10, margin:0}}>{member.ageGroupName}</Tag>}
                 </div>
               </div>
@@ -592,6 +595,14 @@ const MemberDetailDrawer = ({ member, visible, onClose, programList, agentList, 
                       <div className="text-sm text-gray-500">Aadhaar</div>
                       <div className="font-semibold flex items-center gap-2"><IdcardOutlined className="text-green-600" />{member?.aadhaarNo || 'Not Provided'}</div>
                     </Col>
+                    {member?.legacyApplicationNo && (
+                      <Col span={24}>
+                        <div className="text-sm text-gray-500">Old Application No (Old System)</div>
+                        <div className="font-semibold flex items-center gap-2">
+                          <BarcodeOutlined className="text-orange-500" />{member.legacyApplicationNo}
+                        </div>
+                      </Col>
+                    )}
                   </Row>
                 </Card>
               </Col>

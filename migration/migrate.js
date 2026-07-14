@@ -8,11 +8,16 @@
  *   node --env-file=../.env.local migration/migrate.js --dry-run # preview only (no writes)
  *
  *   Individual phases:
- *   node --env-file=../.env.local migration/migrate.js --phase=master    # states/districts/cities/castes/relations
- *   node --env-file=../.env.local migration/migrate.js --phase=programs  # yojana programs
- *   node --env-file=../.env.local migration/migrate.js --phase=agents    # agents & users
- *   node --env-file=../.env.local migration/migrate.js --phase=members   # members (auto-loads maps from Firestore)
- *   node --env-file=../.env.local migration/migrate.js --phase=stats     # recompute all stats
+ *   node --env-file=.env migration/migrate.js --phase=master     # all master data at once
+ *   node --env-file=.env migration/migrate.js --phase=states     # states only
+ *   node --env-file=.env migration/migrate.js --phase=districts  # districts (links to existing states)
+ *   node --env-file=.env migration/migrate.js --phase=cities     # cities (links to existing states+districts)
+ *   node --env-file=.env migration/migrate.js --phase=castes     # castes only
+ *   node --env-file=.env migration/migrate.js --phase=relations  # relations only
+ *   node --env-file=.env migration/migrate.js --phase=programs   # yojana programs
+ *   node --env-file=.env migration/migrate.js --phase=agents     # agents & users
+ *   node --env-file=.env migration/migrate.js --phase=members    # members (auto-loads maps from Firestore)
+ *   node --env-file=.env migration/migrate.js --phase=stats      # recompute all stats
  *
  * ─────────────────────────────────────────────────────────────────────────────
  */
@@ -513,116 +518,126 @@ async function computeStats() {
   console.log(`  ✅ Organization stats: ${orgTotal} members, ₹${orgFees} fees`);
 }
 
-// ─── PHASE 0 — Master data (states, districts, cities, castes, relations) ─────
-async function migrateMaster() {
-  console.log('\n🗂️  PHASE 0 — Master Data');
+// ─── Helper: load state/district Firestore ID maps from existing docs ─────────
+async function loadStateMap() {
+  const snap = await db.collection('states').get();
+  const map = {};
+  for (const d of snap.docs) { if (d.data().legacyId) map[d.data().legacyId] = d.id; }
+  console.log(`  → ${Object.keys(map).length} states loaded from Firestore`);
+  return map;
+}
+async function loadDistrictMap() {
+  const snap = await db.collection('districts').get();
+  const map = {};
+  for (const d of snap.docs) { if (d.data().legacyId) map[d.data().legacyId] = d.id; }
+  console.log(`  → ${Object.keys(map).length} districts loaded from Firestore`);
+  return map;
+}
 
-  // ── States ──────────────────────────────────────────────────────────────────
-  console.log('\n  → States');
-  const stateOldToNew = {}; // old id → new Firestore doc ID (for district/city linking)
-  const stateOps = [];
+// ─── Individual master phases ─────────────────────────────────────────────────
+
+async function migrateStates() {
+  console.log('\n🗺️  States');
+  const ops = [];
   for (const s of STATES) {
     const ref = db.collection('states').doc();
-    stateOldToNew[s.id] = ref.id;
-    stateOps.push({ ref, data: {
-      name:       str(s.title),
-      hindiName:  str(s.title), // old data has no Hindi — fill manually later if needed
-      status:     'active',
-      legacyId:   str(s.id),
+    ops.push({ ref, data: {
+      name: str(s.title), hindiName: str(s.title),
+      status: 'active', legacyId: str(s.id),
       created_at: STS(), updated_at: STS(),
     }});
-    console.log(`    ${s.id} → "${s.title}"`);
+    console.log(`  ${s.id} → "${s.title}"`);
   }
-  await commitBatches(stateOps);
-  console.log(`  ✅ ${stateOps.length} states`);
+  await commitBatches(ops);
+  console.log(`  ✅ ${ops.length} states written`);
+}
 
-  // ── Districts ────────────────────────────────────────────────────────────────
-  console.log('\n  → Districts');
-  const districtOldToNew = {};
-  const districtOps = [];
+async function migrateDistricts() {
+  console.log('\n🏙️  Districts');
+  console.log('  Loading states from Firestore to link…');
+  const stateOldToNew = await loadStateMap();
+  const ops = [];
   for (const d of DISTRICTS) {
-    const ref          = db.collection('districts').doc();
-    const fsStateId    = stateOldToNew[d.state_id] || '';
-    const stateName    = stateMap[d.state_id] || '';
-    districtOldToNew[d.id] = ref.id;
-    districtOps.push({ ref, data: {
-      name:           str(d.title),
-      hindiName:      str(d.title),
-      stateId:        fsStateId,
-      stateName:      stateName,
-      stateHindiName: stateName,
-      status:         'active',
-      legacyId:       str(d.id),
-      created_at:     STS(), updated_at: STS(),
+    const ref = db.collection('districts').doc();
+    const fsStateId = stateOldToNew[d.state_id] || '';
+    const stateName = stateMap[d.state_id] || '';
+    ops.push({ ref, data: {
+      name: str(d.title), hindiName: str(d.title),
+      stateId: fsStateId, stateName, stateHindiName: stateName,
+      status: 'active', legacyId: str(d.id),
+      created_at: STS(), updated_at: STS(),
     }});
-    console.log(`    ${d.id} → "${d.title}" (state: ${stateName})`);
+    console.log(`  ${d.id} → "${d.title}"  (state: ${stateName || '⚠ not linked'})`);
   }
-  await commitBatches(districtOps);
-  console.log(`  ✅ ${districtOps.length} districts`);
+  await commitBatches(ops);
+  console.log(`  ✅ ${ops.length} districts written`);
+}
 
-  // ── Cities ───────────────────────────────────────────────────────────────────
-  console.log('\n  → Cities');
-  const cityOps = [];
+async function migrateCities() {
+  console.log('\n🌆  Cities');
+  console.log('  Loading states + districts from Firestore to link…');
+  const stateOldToNew    = await loadStateMap();
+  const districtOldToNew = await loadDistrictMap();
+  const ops = [];
   for (const c of CITIES) {
-    const ref            = db.collection('cities').doc();
-    const fsDistrictId   = districtOldToNew[c.district_id] || '';
-    const districtName   = districtMap[c.district_id] || '';
-    const fsStateId      = stateOldToNew[c.state_id] || '';
-    const stateName      = stateMap[c.state_id] || '';
-    cityOps.push({ ref, data: {
-      name:              str(c.title),
-      hindiName:         str(c.title),
-      districtId:        fsDistrictId,
-      districtName:      districtName,
-      districtHindiName: districtName,
-      stateId:           fsStateId,
-      stateName:         stateName,
-      stateHindiName:    stateName,
-      status:            'active',
-      legacyId:          str(c.id),
-      created_at:        STS(), updated_at: STS(),
+    const ref = db.collection('cities').doc();
+    const fsDistrictId = districtOldToNew[c.district_id] || '';
+    const districtName = districtMap[c.district_id] || '';
+    const fsStateId    = stateOldToNew[c.state_id] || '';
+    const stateName    = stateMap[c.state_id] || '';
+    ops.push({ ref, data: {
+      name: str(c.title), hindiName: str(c.title),
+      districtId: fsDistrictId, districtName, districtHindiName: districtName,
+      stateId: fsStateId, stateName, stateHindiName: stateName,
+      status: 'active', legacyId: str(c.id),
+      created_at: STS(), updated_at: STS(),
     }});
   }
-  await commitBatches(cityOps);
-  console.log(`  ✅ ${cityOps.length} cities`);
+  await commitBatches(ops);
+  console.log(`  ✅ ${ops.length} cities written`);
+}
 
-  // ── Castes ───────────────────────────────────────────────────────────────────
-  console.log('\n  → Castes');
-  const casteOps = [];
+async function migrateCastes() {
+  console.log('\n🏷️  Castes');
+  const ops = [];
   for (const c of CASTS) {
     const ref = db.collection('castes').doc();
-    casteOps.push({ ref, data: {
-      name:       str(c.title),
-      hindiName:  str(c.title),
-      description:'',
-      status:     'active',
-      legacyId:   str(c.id),
+    ops.push({ ref, data: {
+      name: str(c.title), hindiName: str(c.title), description: '',
+      status: 'active', legacyId: str(c.id),
       created_at: STS(), updated_at: STS(),
     }});
-    console.log(`    ${c.id} → "${c.title}"`);
+    console.log(`  ${c.id} → "${c.title}"`);
   }
-  await commitBatches(casteOps);
-  console.log(`  ✅ ${casteOps.length} castes`);
+  await commitBatches(ops);
+  console.log(`  ✅ ${ops.length} castes written`);
+}
 
-  // ── Relations ────────────────────────────────────────────────────────────────
-  console.log('\n  → Relations');
-  const relationOps = [];
+async function migrateRelations() {
+  console.log('\n🤝  Relations');
+  const ops = [];
   for (const r of RELATIONS) {
     const ref = db.collection('relations').doc();
-    relationOps.push({ ref, data: {
-      name:       str(r.title),
-      hindiName:  str(r.title),
-      status:     'active',
-      legacyId:   str(r.id),
+    ops.push({ ref, data: {
+      name: str(r.title), hindiName: str(r.title),
+      status: 'active', legacyId: str(r.id),
       created_at: STS(), updated_at: STS(),
     }});
-    console.log(`    ${r.id} → "${r.title}"`);
+    console.log(`  ${r.id} → "${r.title}"`);
   }
-  await commitBatches(relationOps);
-  console.log(`  ✅ ${relationOps.length} relations`);
+  await commitBatches(ops);
+  console.log(`  ✅ ${ops.length} relations written`);
+}
 
-  console.log('\n  🏁 Master data migration complete');
-  console.log('  ⚠️  Hindi names were copied from English — update them manually in Master pages if needed.');
+// master = all 5 together
+async function migrateMaster() {
+  console.log('\n🗂️  PHASE 0 — All Master Data');
+  await migrateStates();
+  await migrateDistricts();
+  await migrateCities();
+  await migrateCastes();
+  await migrateRelations();
+  console.log('\n  🏁 Master data complete — Hindi names copied from English, update manually if needed.');
 }
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
@@ -631,11 +646,16 @@ async function main() {
   try {
     const runPhase = (name) => phaseArg === 'all' || phaseArg === name;
 
-    if (runPhase('master'))   await migrateMaster();
-    if (runPhase('programs')) await migratePrograms();
-    if (runPhase('agents'))   await migrateAgents();
-    if (runPhase('members'))  await migrateMembers();
-    if (runPhase('stats'))    await computeStats();
+    if (runPhase('master'))    await migrateMaster();   // all 5 master collections
+    if (runPhase('states'))    await migrateStates();
+    if (runPhase('districts')) await migrateDistricts();
+    if (runPhase('cities'))    await migrateCities();
+    if (runPhase('castes'))    await migrateCastes();
+    if (runPhase('relations')) await migrateRelations();
+    if (runPhase('programs'))  await migratePrograms();
+    if (runPhase('agents'))    await migrateAgents();
+    if (runPhase('members'))   await migrateMembers();
+    if (runPhase('stats'))     await computeStats();
 
     const elapsed = ((Date.now() - start) / 1000).toFixed(1);
     console.log(`\n${'='.repeat(60)}`);
