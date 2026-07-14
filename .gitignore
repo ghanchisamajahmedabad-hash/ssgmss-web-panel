@@ -19,6 +19,7 @@
 
 # production
 /build
+src/app/api/migrationData/
 
 # misc
 .DS_Store

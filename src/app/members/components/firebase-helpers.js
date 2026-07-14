@@ -237,7 +237,8 @@ export const fetchAllMembersForSearch = async (searchTerm, agentId = null) => {
         const text = [
           member.displayName, member.registrationNumber, member.phone,
           member.phoneAlt, member.aadhaarNo, member.village, member.city,
-          member.fatherName, member.surname, member.programName  // ← programName now searchable
+          member.fatherName, member.surname, member.programName,  // ← programName now searchable
+          member.legacyApplicationNo                              // ← old system application no
         ].join(" ").toLowerCase();
         return keywords.every(k => text.includes(k));
       });
