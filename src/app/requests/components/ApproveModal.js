@@ -151,11 +151,22 @@ const ApproveModal = ({ open, setOpen, selectedMember, setSelectedMember, fetchA
         ageGroupName:       programDetail.ageGroupName,
       })
 
+      // Keep the join date from the request (may have been edited) —
+      // fall back to today only if the request has none.
+      const finalJoinDate = selectedMember.dateJoin
+        ? dayjs(selectedMember.dateJoin, 'DD-MM-YYYY')
+        : dayjs()
+
       // ── Update member doc — all program fields embedded flat ──────────────
       const memberUpdate = {
         status:        'active',
         active_flag:   true,
-        dateJoin:      dayjs().format('DD-MM-YYYY'),
+        dateJoin:      finalJoinDate.format('DD-MM-YYYY'),
+        // fields derived from the join date (used in filters/stats)
+        programJoinDate: finalJoinDate.format('DD-MM-YYYY'),
+        joinYear:      finalJoinDate.year(),
+        joinMonth:     finalJoinDate.month() + 1,
+        joinYearMonth: finalJoinDate.format('YYYY-MM'),
         isPendingApproval: false,
         registrationNumber: finalRegNumber,
         search_registrationNumber: finalRegNumber,

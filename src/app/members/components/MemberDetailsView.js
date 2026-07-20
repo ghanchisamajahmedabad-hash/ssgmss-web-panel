@@ -39,9 +39,20 @@ dayjs.extend(relativeTime)
 
 const { Title, Text } = Typography
 
-const MemberDetailDrawer = ({ member, visible, onClose, programList, agentList, onPaymentSuccess }) => {
+const MemberDetailDrawer = ({ member: memberProp, visible, onClose, programList, agentList, onPaymentSuccess }) => {
   const { user } = useAuth()
   const [paymentForm] = Form.useForm()
+
+  // ── Relative-member navigation: view another member inside the same drawer ──
+  const [overrideMember, setOverrideMember] = useState(null)
+  const member = overrideMember || memberProp
+
+  // Reset the override whenever the drawer opens for a (new) member
+  useEffect(() => { setOverrideMember(null) }, [memberProp, visible])
+
+  // ── Relative members (same phone number) ────────────────────────────────────
+  const [relativeMembers, setRelativeMembers] = useState([])
+  const [relativesLoading, setRelativesLoading] = useState(false)
 
   const [transactions,        setTransactions]        = useState([])
   const [closingTransactions, setClosingTransactions] = useState([])
@@ -162,8 +173,36 @@ const MemberDetailDrawer = ({ member, visible, onClose, programList, agentList, 
       fetchClosingTransactions()
       fetchClosingEntries()
       fetchProgramData()
+      fetchRelativeMembers()
     }
   }, [member, visible])
+
+  // ── Find other members sharing a phone number (relatives) ──────────────────
+  const fetchRelativeMembers = async () => {
+    const phones = [member?.phone, member?.phoneAlt].map(p => (p || '').trim()).filter(p => p.length >= 6)
+    if (!phones.length) { setRelativeMembers([]); return }
+    setRelativesLoading(true)
+    try {
+      const found = {}
+      for (const p of phones) {
+        const [snap1, snap2] = await Promise.all([
+          getDocs(query(collection(db, 'members'), where('phone', '==', p))),
+          getDocs(query(collection(db, 'members'), where('phoneAlt', '==', p))),
+        ])
+        ;[...snap1.docs, ...snap2.docs].forEach(d => {
+          if (d.id !== member.id) found[d.id] = { id: d.id, ...d.data() }
+        })
+      }
+      setRelativeMembers(
+        Object.values(found).filter(m => m.delete_flag !== true)
+      )
+    } catch (e) {
+      console.error('Error fetching relative members:', e)
+      setRelativeMembers([])
+    } finally {
+      setRelativesLoading(false)
+    }
+  }
 
   // ── Fetch program details from programs collection ─────────────────────────
   const fetchProgramData = async () => {
@@ -474,6 +513,11 @@ const MemberDetailDrawer = ({ member, visible, onClose, programList, agentList, 
         title={
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
+              {overrideMember && (
+                <Tooltip title="Back to previous member">
+                  <Button size="small" onClick={() => setOverrideMember(null)}>←</Button>
+                </Tooltip>
+              )}
               <Avatar src={member?.photoURL} size={44} icon={<UserOutlined />} className="border-2 border-blue-500" />
               <div>
                 <div className="font-bold text-lg">{member?.displayName} {member?.fatherName}</div>
@@ -555,6 +599,7 @@ const MemberDetailDrawer = ({ member, visible, onClose, programList, agentList, 
           { key: 'transactions', label: <span><CreditCardOutlined /> Transactions ({transactions.length + closingTransactions.length})</span> },
           { key: 'closing', label: <span><MoneyCollectOutlined /> Closing</span> },
           { key: 'documents',    label: <span><FileTextOutlined /> Documents ({documents.filter(d=>d.url).length}/{documents.length})</span> },
+          { key: 'relatives',    label: <span><TeamOutlined /> Relatives ({relativeMembers.length})</span> },
         ]} />
 
         {/* ── Overview ────────────────────────────────────────────────────── */}
@@ -717,11 +762,12 @@ const MemberDetailDrawer = ({ member, visible, onClose, programList, agentList, 
               {member?.programId && (
                 <div className="mt-4 pt-4 border-t">
                   <span className="font-semibold text-sm mb-3 block"><DollarOutlined className="mr-1" />Financial Summary — Join Fees</span>
-                  <div className="grid grid-cols-3 gap-3">
+                  <div className="grid grid-cols-4 gap-3">
                     {[
-                      { label: 'Total Fees',   value: member.joinFees    || 0, color: '#1890ff' },
-                      { label: 'Paid',         value: member.paidAmount  || 0, color: '#52c41a' },
-                      { label: 'Pending',      value: member.pendingAmount || 0, color: (member.pendingAmount||0) > 0 ? '#ff4d4f' : '#52c41a' },
+                      { label: 'Total Fees',      value: member.joinFees      || 0, color: '#1890ff' },
+                      { label: 'Fixed Join Fees', value: member.fixedJoinFees || 0, color: '#722ed1' },
+                      { label: 'Paid',            value: member.paidAmount    || 0, color: '#52c41a' },
+                      { label: 'Pending',         value: member.pendingAmount || 0, color: (member.pendingAmount||0) > 0 ? '#ff4d4f' : '#52c41a' },
                     ].map((item, i) => (
                       <div key={i} className="text-center bg-gray-50 rounded-lg p-3">
                         <div className="text-lg font-bold" style={{ color: item.color }}>₹{item.value.toLocaleString()}</div>
@@ -734,6 +780,77 @@ const MemberDetailDrawer = ({ member, visible, onClose, programList, agentList, 
               )}
 
 
+            </Card>
+          </div>
+        )}
+
+        {/* ── Relatives Tab (members sharing a phone number) ────────────────── */}
+        {activeTab === 'relatives' && (
+          <div className="mt-4">
+            <Card
+              size="small"
+              title={<span className="text-sm"><TeamOutlined className="text-purple-600 mr-2" />Relative Members (same phone number)</span>}
+              loading={relativesLoading}
+            >
+              {relativeMembers.length === 0 ? (
+                <Empty description="No other members found with this phone number" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+              ) : (
+                <Table
+                  dataSource={relativeMembers}
+                  rowKey="id"
+                  size="small"
+                  pagination={false}
+                  columns={[
+                    {
+                      title: 'Member', key: 'name', width: 220,
+                      render: (_, r) => (
+                        <div className="flex items-center gap-2">
+                          <Avatar src={r.photoURL} size={32} icon={<UserOutlined />} />
+                          <div>
+                            <div className="font-semibold text-sm">{r.displayName} {r.fatherName}</div>
+                            <div className="text-xs text-gray-500"><BarcodeOutlined /> {r.registrationNumber || '—'}</div>
+                          </div>
+                        </div>
+                      ),
+                    },
+                    {
+                      title: 'Yojna', dataIndex: 'programName', width: 140,
+                      render: (v) => v ? <Tag color="pink" style={{ fontSize: 10 }}>{v}</Tag> : '—',
+                    },
+                    { title: 'Phone', dataIndex: 'phone', width: 110 },
+                    {
+                      title: 'Join Fees', key: 'fees', width: 120,
+                      render: (_, r) => (
+                        <span className="text-xs">
+                          <span style={{ color: '#52c41a' }}>₹{(r.paidAmount || 0).toLocaleString()}</span>
+                          <span className="text-gray-400"> / ₹{(r.joinFees || 0).toLocaleString()}</span>
+                        </span>
+                      ),
+                    },
+                    {
+                      title: 'Status', key: 'status', width: 90,
+                      render: (_, r) => (
+                        <Tag color={r.active_flag ? 'green' : 'red'} style={{ fontSize: 10 }}>
+                          {r.active_flag ? 'Active' : 'Inactive'}
+                        </Tag>
+                      ),
+                    },
+                    {
+                      title: 'Action', key: 'action', width: 100,
+                      render: (_, r) => (
+                        <Button
+                          size="small"
+                          type="primary"
+                          icon={<EyeOutlined />}
+                          onClick={() => setOverrideMember(r)}
+                        >
+                          View
+                        </Button>
+                      ),
+                    },
+                  ]}
+                />
+              )}
             </Card>
           </div>
         )}

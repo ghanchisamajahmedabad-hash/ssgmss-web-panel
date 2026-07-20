@@ -387,6 +387,11 @@ const EditMember = ({ open, setOpen, programs, agents, currentUser, memberId, on
         phone:        values.phone,
         phoneAlt:     values.phoneAlt || '',
         dateJoin:     joinDate.format('DD-MM-YYYY'),
+        // Everything derived from the join date must change WITH it:
+        programJoinDate: joinDate.format('DD-MM-YYYY'),
+        joinYear:      joinDate.year(),
+        joinMonth:     joinDate.month() + 1,
+        joinYearMonth: joinDate.format('YYYY-MM'),
         dobDate:      dobDate?.format('DD-MM-YYYY') || '',
         age,
 
