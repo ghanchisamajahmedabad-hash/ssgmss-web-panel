@@ -81,8 +81,13 @@ const router=useRouter()
         ...doc.data()
       }));
       
-      // Sort by creation date
-      programsData.sort((a, b) => b.created_at?.toDate() - a.created_at?.toDate());
+      // Sort by orderNo (ascending), fallback to creation date
+      programsData.sort((a, b) => {
+        const aOrder = a.orderNo ?? 9999;
+        const bOrder = b.orderNo ?? 9999;
+        if (aOrder !== bOrder) return aOrder - bOrder;
+        return (b.created_at?.toDate() || 0) - (a.created_at?.toDate() || 0);
+      });
       setPrograms(programsData);
     } catch (error) {
       console.error('Error fetching programs:', error);
@@ -120,6 +125,7 @@ const router=useRouter()
       hindiName: program.hindiName,
       description: program.description,
       regNoPrefix: program.regNoPrefix || 'MEM',
+      orderNo: program.orderNo ?? null,
     });
   };
 
@@ -261,6 +267,16 @@ const router=useRouter()
 
   // Main table columns
   const columns = [
+    {
+      title: '#',
+      dataIndex: 'orderNo',
+      key: 'orderNo',
+      width: 60,
+      align: 'center',
+      render: (val) => val != null
+        ? <Tag color="purple" style={{ fontWeight: 700, minWidth: 28, textAlign: 'center' }}>{val}</Tag>
+        : <span className="text-gray-300">—</span>,
+    },
     {
       title: 'Program Name',
       dataIndex: 'name',
@@ -581,7 +597,7 @@ const router=useRouter()
             >
               <Card title="Basic Information" className="shadow-sm">
                 <Row gutter={16}>
-                  <Col span={10}>
+                  <Col span={9}>
                     <Form.Item
                       name="name"
                       label="Program Name (English)"
@@ -590,7 +606,7 @@ const router=useRouter()
                       <Input placeholder="Program name in English" />
                     </Form.Item>
                   </Col>
-                  <Col span={10}>
+                  <Col span={9}>
                     <Form.Item
                       name="hindiName"
                       label="Program Name (Hindi)"
@@ -599,7 +615,7 @@ const router=useRouter()
                       <Input placeholder="Program name in Hindi" />
                     </Form.Item>
                   </Col>
-                  <Col span={4}>
+                  <Col span={3}>
                     <Form.Item
                       name="regNoPrefix"
                       label="Reg. Prefix"
@@ -620,6 +636,20 @@ const router=useRouter()
                         maxLength={8}
                         className="uppercase font-mono"
                         onChange={e => form.setFieldValue('regNoPrefix', e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''))}
+                      />
+                    </Form.Item>
+                  </Col>
+                  <Col span={3}>
+                    <Form.Item
+                      name="orderNo"
+                      label="Order No"
+                      tooltip="Display order in table (1 = first)"
+                    >
+                      <InputNumber
+                        placeholder="1"
+                        min={1}
+                        className="w-full"
+                        style={{ width: '100%' }}
                       />
                     </Form.Item>
                   </Col>

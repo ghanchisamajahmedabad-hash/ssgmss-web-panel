@@ -82,9 +82,13 @@ export async function POST(req) {
             };
           }
 
-          const jf      = Number(m.joinFees       || 0);
-          const jfPaid  = Number(m.paidAmount      || 0);
-          const jfPend  = Number(m.pendingAmount    || 0);
+          // Migrated members: count them but NEVER add their join fee amounts
+          // (migration intentionally only bumped memberCount, not amounts)
+          const isMigrated = m.migratedData === true;
+
+          const jf      = isMigrated ? 0 : Number(m.joinFees       || 0);
+          const jfPaid  = isMigrated ? 0 : Number(m.paidAmount      || 0);
+          const jfPend  = isMigrated ? 0 : Number(m.pendingAmount    || 0);
           const cTotal  = Number(m.closing_totalAmount   || 0);
           const cPaid   = Number(m.closing_paidAmount    || 0);
           const cPend   = Number(m.closing_pendingAmount || 0);
