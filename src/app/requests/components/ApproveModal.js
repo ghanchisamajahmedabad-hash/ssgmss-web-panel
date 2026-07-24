@@ -68,7 +68,9 @@ const ApproveModal = ({ open, setOpen, selectedMember, setSelectedMember, fetchA
       programName:     program.name,
       ageGroupId:      ageGroup?.id,
       ageGroupName:    ageGroup?.ageGroupName,
-      joinFees:        period?.joinFees       || program.joinFees || 0,
+      // Use period.joinFees if the period was found; never fall back to
+      // program.joinFees — that top-level field may not exist or may be stale.
+      joinFees:        period ? (Number(period.joinFees) || 0) : 0,
       fixedJoinFees:   period?.fixedJoinFees  || 0,
       payAmount:       period?.payAmount      || 0,
       periodStartDate: period?.startDate,
@@ -115,15 +117,17 @@ const ApproveModal = ({ open, setOpen, selectedMember, setSelectedMember, fetchA
     try {
       setLoading(true)
 
-      const actualPaidAmount = parseFloat(paidAmount || 0)
+      // Clamp paid amount to [0, joinFees] to prevent negative or over-cap values
+      const actualPaidAmount = Math.min(Math.max(0, parseFloat(paidAmount || 0)), joinFees)
 
-      if (joinFeesDone && actualPaidAmount > joinFees) {
-        message.error(`Paid amount (₹${actualPaidAmount}) cannot exceed join fees (₹${joinFees})`)
+      if (joinFeesDone && parseFloat(paidAmount || 0) > joinFees) {
+        message.error(`Paid amount (₹${parseFloat(paidAmount || 0)}) cannot exceed join fees (₹${joinFees})`)
         setLoading(false)
         return
       }
 
       const finalPaid       = joinFeesDone ? actualPaidAmount : 0
+      // pendingAmount is always non-negative and never exceeds joinFees
       const finalPending    = Math.max(0, joinFees - finalPaid)
       const paymentPct      = joinFees > 0 ? Math.round((finalPaid / joinFees) * 100) : 0
       const paymentStatus   = paymentPct === 100 ? 'paid' : paymentPct > 0 ? 'partial' : 'pending'

@@ -411,15 +411,16 @@ export const handleSubmit = async (values, context, message) => {
     
     // ✅ Single program fees
     const totalJoinFees = selectedProgramDetail.joinFees || 0
-    const actualPaidAmount = parseFloat(paidAmount || 0)
-    
-    if (actualPaidAmount > totalJoinFees) {
-      message.error(`Paid amount (₹${actualPaidAmount}) cannot exceed total join fees (₹${totalJoinFees})`)
+    // Clamp paid amount to [0, totalJoinFees] so pendingAmount is always in range
+    const actualPaidAmount = Math.min(Math.max(0, parseFloat(paidAmount || 0)), totalJoinFees)
+
+    if (parseFloat(paidAmount || 0) > totalJoinFees) {
+      message.error(`Paid amount (₹${parseFloat(paidAmount || 0)}) cannot exceed total join fees (₹${totalJoinFees})`)
       setLoading(false)
       return false
     }
-    
-    // ✅ Calculate payment for single program
+
+    // ✅ Calculate payment for single program (always non-negative, never > joinFees)
     const pendingAmount = Math.max(0, totalJoinFees - actualPaidAmount)
     const paymentPercentage = totalJoinFees > 0
       ? Math.round((actualPaidAmount / totalJoinFees) * 100)

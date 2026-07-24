@@ -21,7 +21,8 @@ const getMemberInfo = async (memberId) => {
         agentId: d.agentId || null,
         joinFees: d.joinFees || 0,
         paidAmount: d.paidAmount || 0,
-        pendingAmount: d.pendingAmount || 0,
+        // Recompute from joinFees - paidAmount so bad stored values don't skew stats
+        pendingAmount: Math.max(0, (d.joinFees || 0) - (d.paidAmount || 0)),
         // closing fields
         closing_totalAmount: d.closing_totalAmount || 0,
         closing_paidAmount: d.closing_paidAmount || 0,

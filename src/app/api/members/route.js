@@ -26,7 +26,10 @@ const getMemberData = async (memberId) => {
     const programName = d.programName || '';
     const joinFees    = d.joinFees    || 0;
     const paidAmount  = d.paidAmount  || 0;
-    const pending     = d.pendingAmount || 0;
+    // Recompute pendingAmount from joinFees - paidAmount (never trust the stored
+    // value — agent apps or legacy imports may have written it incorrectly, e.g.
+    // as joinFees + fixedJoinFees).  This guarantees agent stats are always sane.
+    const pending     = Math.max(0, joinFees - paidAmount);
 
     return {
       programId,
@@ -258,6 +261,32 @@ export async function POST(req) {
     // Update counts (reads from member doc directly)
     if (!isOnlyAccountCreate && memberId) {
       await handleMemberCountUpdate(operation, memberId, agentId);
+    }
+
+    // Self-heal: if the member doc's stored pendingAmount doesn't match
+    // joinFees - paidAmount, fix it now.  This corrects bad data written by
+    // agent apps or legacy imports (e.g. pendingAmount = joinFees + fixedJoinFees).
+    if (operation === 'add' && memberId) {
+      try {
+        const snap = await db.collection('members').doc(memberId).get();
+        if (snap.exists) {
+          const d = snap.data();
+          const jf = Number(d.joinFees || 0);
+          const pa = Number(d.paidAmount || 0);
+          const correct = Math.max(0, jf - pa);
+          const stored  = Number(d.pendingAmount || 0);
+          if (stored !== correct) {
+            console.warn(`⚠️ pendingAmount mismatch for ${memberId}: stored=${stored} correct=${correct} — fixing`);
+            await db.collection('members').doc(memberId).update({
+              pendingAmount:     correct,
+              hasPendingPayments: correct > 0,
+              updated_at: admin.firestore.FieldValue.serverTimestamp(),
+            });
+          }
+        }
+      } catch (healErr) {
+        console.error('Self-heal pendingAmount failed:', healErr);
+      }
     }
 
     // Credit commission if join fees were paid and agent is set

@@ -198,6 +198,7 @@ export async function POST(req) {
       status:           'completed',
       createdBy:        authResult.user.uid,
       paymentNote,
+      fileUrl:          fileUrl || '',      // screenshot / receipt URL
       groupId:          paymentGroupRef.id,
       agentId:          agentId || '',
       createdAt:        admin.firestore.FieldValue.serverTimestamp(),

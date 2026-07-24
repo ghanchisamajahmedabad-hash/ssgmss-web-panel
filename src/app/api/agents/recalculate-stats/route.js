@@ -86,9 +86,12 @@ export async function POST(req) {
           // (migration intentionally only bumped memberCount, not amounts)
           const isMigrated = m.migratedData === true;
 
-          const jf      = isMigrated ? 0 : Number(m.joinFees       || 0);
-          const jfPaid  = isMigrated ? 0 : Number(m.paidAmount      || 0);
-          const jfPend  = isMigrated ? 0 : Number(m.pendingAmount    || 0);
+          const jf      = isMigrated ? 0 : Number(m.joinFees  || 0);
+          const jfPaid  = isMigrated ? 0 : Number(m.paidAmount || 0);
+          // Recompute pendingAmount from joinFees - paidAmount so bad stored
+          // values (e.g. joinFees + fixedJoinFees written by agent apps) don't
+          // corrupt the rebuilt stats.
+          const jfPend  = isMigrated ? 0 : Math.max(0, jf - jfPaid);
           const cTotal  = Number(m.closing_totalAmount   || 0);
           const cPaid   = Number(m.closing_paidAmount    || 0);
           const cPend   = Number(m.closing_pendingAmount || 0);

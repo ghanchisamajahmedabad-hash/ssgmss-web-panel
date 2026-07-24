@@ -96,6 +96,11 @@ const Page = () => {
   const [allMembersExportLoading, setAllMembersExportLoading] = useState(false)
   const [selectedRowKeys, setSelectedRowKeys] = useState([])
   const [isCertDownloading, setIsCertDownloading] = useState(false)
+  // Agent transfer
+  const [transferOpen,    setTransferOpen]    = useState(false)
+  const [transferAgentId, setTransferAgentId] = useState(null)
+  const [transferLoading, setTransferLoading] = useState(false)
+  const [transferResult,  setTransferResult]  = useState(null)  // null = not done yet
   const [pdfMeta, setPdfMeta] = useState(null) // { data, filters, programList }
   const currentUser = auth.currentUser
 
@@ -362,6 +367,37 @@ const isSuperAdmin = (user) => user?.role === 'superadmin';
   }
 
   const handleEditMember = (member) => { setEditMemberId(member.id); setOpenEditMember(true) }
+
+  // ── Transfer selected members to another agent ──────────────────────────────
+  const handleTransferAgents = async () => {
+    if (!transferAgentId) { message.warning('Please select the target agent'); return }
+    if (!selectedRowKeys.length) { message.warning('Please select members to transfer'); return }
+    setTransferLoading(true)
+    try {
+      const token = await auth.currentUser?.getIdToken()
+      const res = await fetch('/api/members/transfer-agent', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ memberIds: selectedRowKeys, toAgentId: transferAgentId }),
+      })
+      const data = await res.json()
+      if (!data.success) throw new Error(data.message || 'Transfer failed')
+      setTransferResult(data)   // show result panel inside the drawer
+      setSelectedRowKeys([])
+      searchMode === 'search' && filters.search ? searchMembers(filters.search) : fetchMembers(pagination.current, false)
+    } catch (e) {
+      message.error('Transfer failed: ' + e.message)
+    } finally {
+      setTransferLoading(false)
+    }
+  }
+
+  const closeTransferDrawer = () => {
+    if (transferLoading) return
+    setTransferOpen(false)
+    setTransferAgentId(null)
+    setTransferResult(null)
+  }
 const callDeleteMemberApi = async (memberId, currentUserId, token) => {
   const res = await fetch('/api/members/delete-restore', {
     method: 'POST',
@@ -1031,6 +1067,16 @@ ${filterHtml}
             )
             }
            
+            <Tooltip title={selectedRowKeys.length ? `Transfer ${selectedRowKeys.length} selected member(s) to another agent` : 'Select members first'}>
+              <Button
+                icon={<UserSwitchOutlined />}
+                disabled={selectedRowKeys.length === 0}
+                onClick={() => { setTransferResult(null); setTransferOpen(true) }}
+              >
+                Transfer Agent{selectedRowKeys.length ? ` (${selectedRowKeys.length})` : ''}
+              </Button>
+            </Tooltip>
+
             <Tooltip title="Refresh">
               <Button icon={<ReloadOutlined />} loading={loading || searchLoading}
                 onClick={() => searchMode === 'search' && filters.search ? searchMembers(filters.search) : fetchMembers(pagination.current, false)}>
@@ -1063,6 +1109,180 @@ ${filterHtml}
           sticky size="small" rowClassName="text-xs"
         />
       </Card>
+
+      {/* ── Agent Transfer Drawer ─────────────────────────────────────────── */}
+      <Drawer
+        title={
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <UserSwitchOutlined style={{ color: '#db2777', fontSize: 20 }} />
+            <div>
+              <div style={{ fontWeight: 700, fontSize: 15 }}>Transfer Members</div>
+              <div style={{ fontSize: 11, color: '#888', fontWeight: 400 }}>Move selected members to a different agent</div>
+            </div>
+          </div>
+        }
+        placement="right"
+        width={560}
+        open={transferOpen}
+        onClose={closeTransferDrawer}
+        extra={
+          !transferResult ? (
+            <div style={{ display: 'flex', gap: 8 }}>
+              <Button onClick={closeTransferDrawer} disabled={transferLoading}>Cancel</Button>
+              <Button
+                type="primary"
+                icon={<UserSwitchOutlined />}
+                loading={transferLoading}
+                disabled={!transferAgentId}
+                onClick={handleTransferAgents}
+                style={{ background: '#db2777', borderColor: '#db2777' }}
+              >
+                Transfer {selectedRowKeys.length} Member{selectedRowKeys.length !== 1 ? 's' : ''}
+              </Button>
+            </div>
+          ) : (
+            <Button type="primary" onClick={closeTransferDrawer} style={{ background: '#db2777', borderColor: '#db2777' }}>Done</Button>
+          )
+        }
+        destroyOnClose
+      >
+        {transferResult ? (
+          /* ── Result panel ── */
+          <div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 20 }}>
+              {[
+                { label: 'Transferred', value: transferResult.summary?.transferred,  color: '#16a34a', bg: '#f0fdf4', border: '#bbf7d0' },
+                { label: 'Skipped',     value: (transferResult.results||[]).filter(r=>r.status==='skipped').length, color: '#d97706', bg: '#fffbeb', border: '#fde68a' },
+                { label: 'Errors',      value: (transferResult.results||[]).filter(r=>r.status==='error').length,   color: '#dc2626', bg: '#fef2f2', border: '#fecaca' },
+              ].map(s => (
+                <div key={s.label} style={{ background: s.bg, border: `1px solid ${s.border}`, borderRadius: 10, padding: '10px 14px', textAlign: 'center' }}>
+                  <div style={{ fontSize: 26, fontWeight: 800, color: s.color }}>{s.value ?? 0}</div>
+                  <div style={{ fontSize: 11, color: '#888' }}>{s.label}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{ fontSize: 12, fontWeight: 600, color: '#374151', marginBottom: 8 }}>Result per member</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {(transferResult.results || []).map((r, i) => {
+                const isOk   = r.status === 'transferred'
+                const isSkip = r.status === 'skipped'
+                return (
+                  <div key={i} style={{
+                    display: 'flex', alignItems: 'center', gap: 12,
+                    background: isOk ? '#f0fdf4' : isSkip ? '#fffbeb' : '#fef2f2',
+                    border: `1px solid ${isOk ? '#bbf7d0' : isSkip ? '#fde68a' : '#fecaca'}`,
+                    borderRadius: 8, padding: '8px 12px',
+                  }}>
+                    <Avatar size={32} icon={<UserOutlined />} style={{ background: isOk ? '#16a34a' : isSkip ? '#d97706' : '#dc2626', flexShrink: 0 }} />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontWeight: 600, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {r.name || r.memberId}
+                      </div>
+                      {r.regNo   && <div style={{ fontSize: 11, color: '#888' }}>{r.regNo}</div>}
+                      {isOk      && <div style={{ fontSize: 11, color: '#16a34a' }}>✓ {r.from} → {r.to}</div>}
+                      {isSkip    && <div style={{ fontSize: 11, color: '#d97706' }}>⊘ {r.reason}</div>}
+                      {r.status === 'error' && <div style={{ fontSize: 11, color: '#dc2626' }}>✗ {r.error}</div>}
+                    </div>
+                    <Tag color={isOk ? 'success' : isSkip ? 'warning' : 'error'} style={{ margin: 0, flexShrink: 0 }}>
+                      {isOk ? 'Done' : isSkip ? 'Skipped' : 'Error'}
+                    </Tag>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        ) : (
+          /* ── Selection panel ── */
+          <div>
+            {/* Target agent selector */}
+            <div style={{ marginBottom: 20 }}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: '#374151', marginBottom: 6 }}>Select target agent</div>
+              <Select
+                style={{ width: '100%' }}
+                placeholder="Search agent by name or phone..."
+                showSearch
+                allowClear
+                optionFilterProp="label"
+                value={transferAgentId}
+                onChange={setTransferAgentId}
+                disabled={transferLoading}
+                size="large"
+                options={agentList
+                  ?.filter(a => a.delete_flag !== true)
+                  .map(a => ({
+                    value: a.id,
+                    label: `${a.name} — ${a.phone1 || 'No phone'}${a.village ? ' · ' + a.village : ''}`,
+                  }))}
+              />
+              {transferAgentId && (() => {
+                const ag = agentList?.find(a => a.id === transferAgentId)
+                if (!ag) return null
+                return (
+                  <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 12, background: '#fce7f3', border: '1px solid #f9a8d4', borderRadius: 10, padding: '10px 14px' }}>
+                    <Avatar src={ag.photoUrl} icon={<UserOutlined />} size={42} style={{ background: '#db2777', flexShrink: 0 }} />
+                    <div>
+                      <div style={{ fontWeight: 700, fontSize: 14 }}>{ag.name}</div>
+                      <div style={{ fontSize: 12, color: '#888' }}>{ag.phone1}{ag.village ? ' · ' + ag.village : ''}</div>
+                      {ag.memberCount != null && (
+                        <div style={{ fontSize: 11, color: '#db2777', marginTop: 2 }}>
+                          Currently {ag.memberCount?.toLocaleString()} member{ag.memberCount !== 1 ? 's' : ''}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )
+              })()}
+            </div>
+
+            {/* Info note */}
+            <div style={{ background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 8, padding: '10px 14px', fontSize: 12, color: '#1e40af', marginBottom: 18 }}>
+              <b>What gets transferred:</b> member counts, join fees totals, closing amounts &amp; counts,
+              and payment records are re-tagged to the new agent.
+              <div style={{ color: '#6b7280', marginTop: 4 }}>
+                Commission already earned stays with the original agent.
+              </div>
+            </div>
+
+            {/* Members preview */}
+            <div style={{ fontSize: 12, fontWeight: 600, color: '#374151', marginBottom: 8 }}>
+              {selectedRowKeys.length} member{selectedRowKeys.length !== 1 ? 's' : ''} selected
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 400, overflowY: 'auto', paddingRight: 4 }}>
+              {selectedRowKeys.map(id => {
+                const allKnown = [...(members || []), ...(searchResults || [])]
+                const m = allKnown.find(x => x.id === id)
+                const curAgent = m?.agentId ? (agentList?.find(a => a.id === m.agentId || a.uid === m.agentId)) : null
+                const toAgent  = transferAgentId ? agentList?.find(a => a.id === transferAgentId) : null
+                return (
+                  <div key={id} style={{
+                    display: 'flex', alignItems: 'center', gap: 10,
+                    background: '#fafafa', border: '1px solid #e5e7eb',
+                    borderRadius: 8, padding: '8px 12px',
+                  }}>
+                    <Avatar src={m?.photoURL} icon={<UserOutlined />} size={32}
+                      style={{ background: '#db2777', flexShrink: 0 }} />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontWeight: 600, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {m?.displayName || id}
+                      </div>
+                      <div style={{ fontSize: 11, color: '#888' }}>
+                        {m?.registrationNumber || ''}
+                        {m?.programName ? ' · ' + m.programName : ''}
+                      </div>
+                    </div>
+                    <div style={{ flexShrink: 0, textAlign: 'right' }}>
+                      <div style={{ fontSize: 11, color: '#6b7280' }}>{curAgent?.name || m?.addedByName || 'No agent'}</div>
+                      {toAgent && (
+                        <div style={{ fontSize: 11, color: '#db2777', fontWeight: 600 }}>→ {toAgent.name}</div>
+                      )}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
+      </Drawer>
 
       {/* Filter Modal */}
       <Modal

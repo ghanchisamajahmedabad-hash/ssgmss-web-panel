@@ -356,12 +356,10 @@ const MemberPaymentPage = () => {
       return !m?.isDeleted && amt > 0 && amt <= m.pendingAmount;
     });
     if (!valid.length) { message.warning('No valid payment amounts entered.'); return; }
-    if (paymentMethod === 'online' && !transactionId) { message.warning('Enter Transaction ID'); return; }
-    const total = valid.reduce((s, id) => s + (parseFloat(memberPayments[id]) || 0), 0);
-    if (paymentMethod === 'advance') {
-      if (advanceBalance <= 0) { message.error('No advance balance available'); return; }
-      if (total > advanceBalance) { message.error(`Advance balance ₹${advanceBalance.toLocaleString()} is less than total ₹${total.toLocaleString()}`); return; }
-    }
+    // Reset payment method to cash each time so user consciously picks in the drawer
+    setPaymentMethod('cash');
+    setTransactionId('');
+    setUploadedFile(null);
     setProcessingPayments(valid.map(id => {
       const m = membersMap[id];
       return { memberId: id, memberName: m.displayName, registrationNumber: m.registrationNumber, programId: m.programId, amount: parseFloat(memberPayments[id]) };
@@ -787,45 +785,18 @@ const MemberPaymentPage = () => {
               </Button>
             </Flex>
 
-            <Flex gap={8} align="center">
-              <Radio.Group value={paymentMethod} onChange={e => setPaymentMethod(e.target.value)} size="small" buttonStyle="solid">
-                <Radio.Button value="cash">Cash</Radio.Button>
-                <Radio.Button value="online">Online</Radio.Button>
-                {advanceBalance > 0 && (
-                  <Radio.Button value="advance" style={{ color: paymentMethod === 'advance' ? undefined : '#059669' }}>
-                    Advance ₹{advanceBalance.toLocaleString()}
-                  </Radio.Button>
-                )}
-              </Radio.Group>
-              {paymentMethod === 'online' ? (
-                <Input
-                  placeholder="Transaction ID"
-                  value={transactionId}
-                  onChange={e => setTransactionId(e.target.value)}
-                  style={{ width: 160 }}
-                  size="small"
-                />
-              ) : paymentMethod === 'advance' ? (
-                <div style={{ background: '#f0fdf4', border: '1px solid #a7f3d0', borderRadius: 6, padding: '2px 10px' }}>
-                  <Text style={{ fontSize: 11, color: '#065f46' }}>Available:</Text>
-                  <Text strong style={{ fontSize: 13, color: '#059669', marginLeft: 4 }}>₹{advanceBalance.toLocaleString()}</Text>
-                  {totalPaymentAmount > advanceBalance && (
-                    <Text style={{ fontSize: 11, color: '#dc2626', marginLeft: 6 }}>⚠ Insufficient</Text>
-                  )}
-                </div>
-              ) : (
-                <div>
-                  <Text style={{ fontSize: 11, color: C.textMuted }}>To Pay:</Text>
-                  <Text strong style={{ fontSize: 14, color: C.success, marginLeft: 4 }}>₹{totalPaymentAmount.toLocaleString()}</Text>
-                </div>
-              )}
-            </Flex>
+            <div>
+              <Text style={{ fontSize: 11, color: C.textMuted }}>To Pay:</Text>
+              <Text strong style={{ fontSize: 14, color: C.success, marginLeft: 4 }}>
+                ₹{totalPaymentAmount.toLocaleString()}
+              </Text>
+            </div>
 
             <Button
               type="primary"
               icon={<DollarCircleOutlined />}
               onClick={handleProcessPayments}
-              disabled={totalPaymentAmount === 0 || (paymentMethod === 'online' && !transactionId) || (paymentMethod === 'advance' && totalPaymentAmount > advanceBalance)}
+              disabled={totalPaymentAmount === 0}
               style={{
                 background: `linear-gradient(135deg, ${C.primary}, ${C.secondary})`,
                 border: 'none', borderRadius: 8,
@@ -917,7 +888,9 @@ const MemberPaymentPage = () => {
         memberPayments={memberPayments}
         currentAgent={currentAgent}
         paymentMethod={paymentMethod}
+        setPaymentMethod={setPaymentMethod}
         transactionId={transactionId}
+        setTransactionId={setTransactionId}
         totalPaymentAmount={totalPaymentAmount}
         paymentDate={paymentDate}
         setPaymentDate={setPaymentDate}
@@ -925,8 +898,7 @@ const MemberPaymentPage = () => {
         setPaymentNote={setPaymentNote}
         uploadedFile={uploadedFile}
         setUploadedFile={setUploadedFile}
-        allMembers={members.filter(m => !m.isDeleted)}
-        filterLabel={paymentFilter === 'pending' ? 'Pending Only' : paymentFilter === 'paid' ? 'Paid Only' : 'All Members'}
+        advanceBalance={advanceBalance}
         colors={C}
       />
     </ConfigProvider>
