@@ -184,8 +184,9 @@ const PaymentHistoryPage = () => {
           key: `${g.id}_${tx.id}`,
           groupDate:     g.paymentDate ? dayjs(g.paymentDate).format('DD/MM/YYYY') : '—',
           agentName:     g.agent?.name || '—',
-          agentPhone:    g.agent?.phone1 || '',
+          agentPhone:    String(g.agent?.phone1 || ''),
           memberName:    tx.memberName || '—',
+          memberPhone:   String(tx.memberPhone || ''),
           regNo:         tx.memberRegNo || tx.registrationNumber || '—',
           programName:   tx.programName || '—',
           paymentType:   g.paymentType === 'closingPayment' ? 'Closing' : 'Join Fees',
@@ -224,10 +225,34 @@ const PaymentHistoryPage = () => {
   const exportCSV = async () => {
     const allTx = await fetchExportData();
     if (!allTx || !allTx.length) { message.warning('No data'); return; }
-    const headers = ['Date', 'Agent Name', 'Agent Phone', 'Member Name', 'Reg No', 'Yojna / Program', 'Payment Type', 'Amount', 'Method', 'UTR / Cash ID'];
-    const rows = allTx.map(r => [r.groupDate, r.agentName, r.agentPhone, r.memberName, r.regNo, r.programName, r.paymentType, r.amount, r.method, r.transactionId]);
-    const csv = [headers.join(','), ...rows.map(r => r.map(v => String(v ?? '').includes(',') ? `"${String(v).replace(/"/g, '""')}"` : v).join(','))].join('\n');
-    const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+
+    // Helper: wrap text in CSV-safe double-quotes, escape internal quotes
+    const q  = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+    // Helper: force phone numbers to display as text in Excel (="number" trick)
+    const ph = (v) => v ? `="${String(v).replace(/"/g, '')}"` : '';
+
+    const headers = ['Date', 'Agent Name', 'Agent Phone', 'Member Name', 'Member Phone', 'Reg No', 'Yojna / Program', 'Payment Type', 'Amount', 'Method', 'UTR / Cash ID'];
+    const rows = allTx.map(r => [
+      q(r.groupDate),
+      q(r.agentName),
+      ph(r.agentPhone),
+      q(r.memberName),
+      ph(r.memberPhone),
+      q(r.regNo),
+      q(r.programName),
+      q(r.paymentType),
+      r.amount,
+      q(r.method),
+      q(r.transactionId),
+    ]);
+
+    const csv = [headers.map(q).join(','), ...rows.map(r => r.join(','))].join('\r\n');
+
+    // Use explicit UTF-8 BOM bytes + TextEncoder to guarantee proper encoding for Hindi
+    const bom     = new Uint8Array([0xEF, 0xBB, 0xBF]);
+    const encoded = new TextEncoder().encode(csv);
+    const blob    = new Blob([bom, encoded], { type: 'text/csv;charset=utf-8;' });
+
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     a.download = `payment-history_${dayjs().format('YYYYMMDD_HHmmss')}.csv`;
@@ -239,91 +264,156 @@ const PaymentHistoryPage = () => {
   const exportExcel = async () => {
     const allTx = await fetchExportData();
     if (!allTx || !allTx.length) { message.warning('No data'); return; }
-    const data = [...allTx.map(r => ({
-      'Date': r.groupDate, 'Agent': r.agentName, 'Phone': r.agentPhone,
-      'Member': r.memberName, 'Reg No': r.regNo, 'Yojna / Program': r.programName,
-      'Type': r.paymentType, 'Amount': r.amount, 'Method': r.method, 'UTR / Cash ID': r.transactionId,
-    })), { 'Date': '', 'Agent': 'TOTAL', 'Amount': allTx.reduce((s, r) => s + r.amount, 0) }];
-    const ws = XLSX.utils.json_to_sheet(data);
+
+    // Helper: explicit string cell — XLSX will never auto-convert to number
+    const s = (v) => ({ t: 's', v: String(v ?? '') });
+    // Helper: number cell
+    const n = (v) => ({ t: 'n', v: Number(v) || 0 });
+
+    const header = ['Date', 'Agent Name', 'Agent Phone', 'Member Name', 'Member Phone', 'Reg No', 'Yojna / Program', 'Type', 'Amount', 'Method', 'UTR / Cash ID'];
+
+    const dataRows = allTx.map(r => [
+      s(r.groupDate),
+      s(r.agentName),
+      s(r.agentPhone),    // explicit string → no scientific notation
+      s(r.memberName),
+      s(r.memberPhone),   // explicit string → no scientific notation
+      s(r.regNo),
+      s(r.programName),
+      s(r.paymentType),
+      n(r.amount),
+      s(r.method),
+      s(r.transactionId),
+    ]);
+
+    const total = allTx.reduce((acc, r) => acc + r.amount, 0);
+    const totalRow = [s(''), s('TOTAL'), s(''), s(''), s(''), s(''), s(''), s(''), n(total), s(''), s('')];
+
+    // aoa_to_sheet with explicit cell objects = full type control, no XLSX auto-inference
+    const ws = XLSX.utils.aoa_to_sheet([header, ...dataRows, totalRow]);
+
+    ws['!cols'] = [
+      { wch: 12 }, // Date
+      { wch: 22 }, // Agent Name
+      { wch: 14 }, // Agent Phone
+      { wch: 22 }, // Member Name
+      { wch: 14 }, // Member Phone
+      { wch: 14 }, // Reg No
+      { wch: 26 }, // Yojna
+      { wch: 12 }, // Type
+      { wch: 10 }, // Amount
+      { wch: 10 }, // Method
+      { wch: 22 }, // UTR
+    ];
+
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Payments');
     XLSX.writeFile(wb, `payment-history_${dayjs().format('YYYYMMDD_HHmmss')}.xlsx`);
-    message.success(`Exported ${data.length - 1} records`);
+    message.success(`Exported ${allTx.length} records`);
   };
 
   const exportPDF = async () => {
     const allTx = await fetchExportData();
     if (!allTx || !allTx.length) { message.warning('No data'); return; }
+
+    // Escape HTML entities to prevent injection / broken cells
+    const esc = (v) => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
     const rows = allTx.map((r, i) => `<tr>
       <td class="c">${i + 1}</td>
-      <td class="c">${r.groupDate}</td>
-      <td>${r.agentName}</td>
-      <td>${r.memberName}</td>
-      <td class="c reg">${r.regNo}</td>
-      <td>${r.programName}</td>
-      <td class="c">${r.paymentType}</td>
-      <td class="c amt">₹${r.amount.toLocaleString()}</td>
-      <td class="c">${r.method}</td>
-      <td class="txid">${r.transactionId}</td>
+      <td class="c">${esc(r.groupDate)}</td>
+      <td><div class="nm">${esc(r.agentName)}</div>${r.agentPhone ? `<div class="ph">${esc(r.agentPhone)}</div>` : ''}</td>
+      <td><div class="nm">${esc(r.memberName)}</div>${r.memberPhone ? `<div class="ph">${esc(r.memberPhone)}</div>` : ''}</td>
+      <td class="c reg">${esc(r.regNo)}</td>
+      <td>${esc(r.programName)}</td>
+      <td class="c">${esc(r.paymentType)}</td>
+      <td class="c amt">₹${(r.amount || 0).toLocaleString()}</td>
+      <td class="c">${esc(r.method)}</td>
+      <td class="txid">${esc(r.transactionId)}</td>
     </tr>`).join('');
+
     const t = allTx.reduce((s, r) => s + r.amount, 0);
+
     const html = `<!DOCTYPE html><html><head>
       <meta charset="utf-8"><title>Payment History</title>
+      <link rel="preconnect" href="https://fonts.googleapis.com">
+      <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Devanagari:wght@400;700&family=Noto+Sans:wght@400;700&display=swap" rel="stylesheet">
       <style>
         *{margin:0;padding:0;box-sizing:border-box}
-        body{font-family:Arial,sans-serif;background:#b0b0b0;color:#111}
-        .print-bar{position:sticky;top:0;z-index:100;padding:12px 24px;background:#1B385A;display:flex;gap:12px;align-items:center}
-        .btn-print{background:#D3292F;color:#fff;border:none;padding:10px 28px;border-radius:6px;cursor:pointer;font-weight:700;font-size:14px}
-        .btn-close{background:rgba(255,255,255,.15);color:#fff;border:1px solid rgba(255,255,255,.3);padding:10px 20px;border-radius:6px;cursor:pointer;font-size:14px}
-        .page{width:210mm;min-height:297mm;background:#fff;margin:18px auto;padding:8mm;box-shadow:0 6px 28px rgba(0,0,0,.25)}
-        h2{text-align:center;color:#1B385A;margin-bottom:4px;font-size:18px}
-        .sub{text-align:center;color:#D3292F;font-size:12px;margin-bottom:10px}
-        table{width:100%;border-collapse:collapse;border:1.5px solid #999;font-size:9px}
-        th{padding:5px 3px;font-weight:700;color:#1B385A;text-align:center;border:1px solid #999;background:#f0f0f0}
-        td{padding:4px 3px;color:#111;border:0.8px solid #c0c8d4}
+        body{font-family:'Noto Sans Devanagari','Noto Sans',Arial,sans-serif;background:#b0b0b0;color:#111}
+        .print-bar{position:sticky;top:0;z-index:100;padding:10px 20px;background:#1B385A;display:flex;gap:12px;align-items:center}
+        .btn-print{background:#D3292F;color:#fff;border:none;padding:8px 24px;border-radius:6px;cursor:pointer;font-weight:700;font-size:13px}
+        .btn-close{background:rgba(255,255,255,.15);color:#fff;border:1px solid rgba(255,255,255,.3);padding:8px 18px;border-radius:6px;cursor:pointer;font-size:13px}
+        /* A4 landscape for more column space */
+        .page{width:270mm;min-height:190mm;background:#fff;margin:16px auto;padding:8mm;box-shadow:0 6px 28px rgba(0,0,0,.25)}
+        h2{text-align:center;color:#1B385A;margin-bottom:3px;font-size:16px;font-family:'Noto Sans Devanagari','Noto Sans',Arial,sans-serif}
+        .sub{text-align:center;color:#D3292F;font-size:11px;margin-bottom:8px;font-family:'Noto Sans Devanagari','Noto Sans',Arial,sans-serif}
+        table{width:100%;border-collapse:collapse;border:1.5px solid #999;font-size:8.5px;table-layout:fixed}
+        th{padding:5px 2px;font-weight:700;color:#1B385A;text-align:center;border:1px solid #999;background:#f0f0f0;word-wrap:break-word;overflow-wrap:break-word}
+        td{padding:3px 2px;color:#111;border:0.8px solid #c0c8d4;vertical-align:top;word-wrap:break-word;overflow-wrap:break-word}
         td.c{text-align:center}
-        td.reg{font-family:monospace;color:#db2777;font-size:8.5px}
-        td.amt{font-weight:700}
-        td.txid{font-size:8px;color:#555}
+        td.reg{font-family:monospace;color:#db2777;font-size:8px;text-align:center}
+        td.amt{font-weight:700;text-align:center}
+        td.txid{font-size:7.5px;color:#555;word-break:break-all}
+        .nm{font-weight:600;line-height:1.3}
+        .ph{font-size:7.5px;color:#555;margin-top:1px}
         .total-row td{font-weight:700;background:#fff3f0}
-        .footer{text-align:center;margin-top:10px;font-size:10px;color:#666;border-top:1.5px solid #D3292F;padding-top:6px}
-        @media print{body{background:#fff}.print-bar{display:none!important}.page{margin:0;box-shadow:none;padding:4mm}}
+        .footer{text-align:center;margin-top:8px;font-size:9px;color:#666;border-top:1.5px solid #D3292F;padding-top:5px}
+        @media print{
+          @page{size:A4 landscape;margin:6mm}
+          body{background:#fff}
+          .print-bar{display:none!important}
+          .page{margin:0;box-shadow:none;padding:0;width:100%}
+        }
       </style>
     </head><body>
       <div class="print-bar">
-        <button class="btn-print" onclick="window.print()">🖨 Print</button>
+        <button class="btn-print" onclick="window.print()">🖨 Print / Save PDF</button>
         <button class="btn-close" onclick="window.close()">✕ Close</button>
-        <span style="color:#fff;font-size:13px">📄 ${allTx.length} records</span>
+        <span style="color:#fff;font-size:12px">📄 ${allTx.length} records &nbsp;|&nbsp; Total: ₹${t.toLocaleString()}</span>
       </div>
       <div class="page">
         <h2>श्री क्षत्रिय घांची मोदी समाज सेवा संस्थान ट्रस्ट</h2>
-        <div class="sub">पूर्ण भुगतान इतिहास रिपोर्ट</div>
+        <div class="sub">भुगतान इतिहास रिपोर्ट — Generated ${dayjs().format('DD MMM YYYY hh:mm A')}</div>
         <table>
+          <colgroup>
+            <col style="width:22px">   <!-- # -->
+            <col style="width:52px">   <!-- Date -->
+            <col style="width:88px">   <!-- Agent (name+phone) -->
+            <col style="width:88px">   <!-- Member (name+phone) -->
+            <col style="width:72px">   <!-- Reg No -->
+            <col>                      <!-- Yojna (flex) -->
+            <col style="width:46px">   <!-- Type -->
+            <col style="width:52px">   <!-- Amount -->
+            <col style="width:40px">   <!-- Method -->
+            <col style="width:72px">   <!-- UTR -->
+          </colgroup>
           <thead><tr>
-            <th style="width:22px">#</th>
-            <th style="width:58px">Date</th>
-            <th style="width:80px">Agent</th>
-            <th style="width:85px">Member</th>
-            <th style="width:68px">Reg No</th>
+            <th>#</th>
+            <th>Date</th>
+            <th>Agent</th>
+            <th>Member</th>
+            <th>Reg No</th>
             <th>Yojna / Program</th>
-            <th style="width:48px">Type</th>
-            <th style="width:58px">Amount</th>
-            <th style="width:42px">Method</th>
-            <th style="width:70px">UTR / Cash ID</th>
+            <th>Type</th>
+            <th>Amount</th>
+            <th>Method</th>
+            <th>UTR / Cash ID</th>
           </tr></thead>
           <tbody>${rows}
             <tr class="total-row">
-              <td colspan="7" style="text-align:right;padding-right:6px">Total (${allTx.length} records):</td>
+              <td colspan="7" style="text-align:right;padding-right:6px;font-size:9px">Total (${allTx.length} records):</td>
               <td class="c">₹${t.toLocaleString()}</td>
               <td colspan="2"></td>
             </tr>
           </tbody>
         </table>
-        <div class="footer">Generated ${dayjs().format('DD MMM YYYY hh:mm A')}</div>
+        <div class="footer">Generated by SSGMS Web Panel &nbsp;•&nbsp; ${dayjs().format('DD MMM YYYY hh:mm A')}</div>
       </div>
     </body></html>`;
+
     const win = window.open('', '_blank');
-    if (!win) { message.error('Popup blocked!'); return; }
+    if (!win) { message.error('Popup blocked! Please allow popups for this site.'); return; }
     win.document.write(html);
     win.document.close();
   };

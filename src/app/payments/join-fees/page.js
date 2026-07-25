@@ -115,18 +115,20 @@ const JoinFeesPage = () => {
   const agentsWithStats = processAgentStats(agentList, programList);
   const activeAgents = agentsWithStats.filter((a) => a.active_flag && !a.delete_flag);
 
-  // Search + status filter
-  const filteredAgents = activeAgents.filter((a) => {
-    const q = searchText.trim().toLowerCase();
-    if (q) {
-      const nameMatch  = (a.name  || '').toLowerCase().includes(q);
-      const phoneMatch = (a.phone1 || a.phone || '').toLowerCase().includes(q);
-      if (!nameMatch && !phoneMatch) return false;
-    }
-    if (statusFilter === 'pending') return (a.totalJoinFeesPending || 0) > 0;
-    if (statusFilter === 'paid')    return (a.totalJoinFeesPending || 0) === 0;
-    return true;
-  });
+  // Search + status filter + sort: agents with pending > 0 always first
+  const filteredAgents = activeAgents
+    .filter((a) => {
+      const q = searchText.trim().toLowerCase();
+      if (q) {
+        const nameMatch  = (a.name  || '').toLowerCase().includes(q);
+        const phoneMatch = (a.phone1 || a.phone || '').toLowerCase().includes(q);
+        if (!nameMatch && !phoneMatch) return false;
+      }
+      if (statusFilter === 'pending') return (a.totalJoinFeesPending || 0) > 0;
+      if (statusFilter === 'paid')    return (a.totalJoinFeesPending || 0) === 0;
+      return true;
+    })
+    .sort((a, b) => (b.totalJoinFeesPending || 0) - (a.totalJoinFeesPending || 0));
 
   // Summary calculations
   const totalPending = activeAgents.reduce((s, a) => s + (a.totalJoinFeesPending || 0), 0);
