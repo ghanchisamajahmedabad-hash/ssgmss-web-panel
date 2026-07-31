@@ -292,6 +292,43 @@ export const recordJoinFeeTransaction = async (memberData, paymentData) => {
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Generate the membership certificate, save its URL on the member doc, and
+// send the Gupshup WhatsApp join template (with the certificate attached).
+//
+// Deliberately non-throwing — a WhatsApp/PDF failure must never roll back or
+// block member creation / request approval.  Returns the API result or null.
+// ─────────────────────────────────────────────────────────────────────────────
+export const sendJoinCertificate = async (memberId) => {
+  if (!memberId) return null
+  try {
+    const currentUser = auth.currentUser
+    if (!currentUser) { console.warn('sendJoinCertificate: no authenticated user'); return null }
+    const token = await currentUser.getIdToken()
+
+    const res  = await fetch('/api/members/join-certificate', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json', 'authorization': `Bearer ${token}` },
+      body:    JSON.stringify({ memberId }),
+    })
+    const data = await res.json()
+
+    if (data?.whatsapp?.sent) {
+      console.log(`✅ Join certificate sent on WhatsApp to ${data.whatsapp.destination}`)
+    } else {
+      console.warn('⚠️ Join certificate WhatsApp not sent:', data?.whatsapp?.error || data?.message)
+    }
+    if (data?.certificate?.generated) {
+      console.log(`📄 Certificate saved: ${data.certificate.url}`)
+    }
+    return data
+  } catch (err) {
+    // Non-critical — log and move on
+    console.warn('sendJoinCertificate failed (non-critical):', err)
+    return null
+  }
+}
+
 export const memberAccoiuntCreate = async (memberData, commissionData = null) => {
   const currentUser = auth.currentUser
   if (!currentUser) throw new Error('No authenticated user')
@@ -375,6 +412,7 @@ export const handleSubmit = async (values, context, message) => {
     setOpen,
     setLoading,
     sendWhatsApp,
+    sendNotification,
   } = context
 
   setLoading(true)
@@ -601,37 +639,15 @@ export const handleSubmit = async (values, context, message) => {
     await createClosingPayment({ ...memberData, id: memberId })
     message.success('Member added successfully!')
 
-    // ── Send WhatsApp welcome message ─────────────────────────────────────────
+    // ── Generate certificate + send WhatsApp join message ─────────────────────
+    // Non-critical: never block or fail member creation if this errors.
     if (sendWhatsApp !== false && values.phone) {
-      const joinFeesText = selectedProgramDetail?.joinFees
-        ? `\n💰 Join Fees: ₹${selectedProgramDetail.joinFees}${actualPaidAmount > 0 ? `\n✅ Paid: ₹${actualPaidAmount}` : ''}${pendingAmount > 0 ? `\n⏳ Pending: ₹${pendingAmount}` : ''}`
-        : ''
-      const waMessage =
-        `🎉 Welcome to SSGMS!\n\n` +
-        `Dear *${values.name}*,\n` +
-        `Your membership has been successfully registered.\n\n` +
-        `📋 Member Details:\n` +
-        `• Name: ${values.name} ${values.fatherName || ''}\n` +
-        `• Reg. No: ${registrationNumber}\n` +
-        `• Program: ${selectedProgramDetail?.programName || ''}\n` +
-        `• Join Date: ${joinDate.format('DD-MM-YYYY')}` +
-        joinFeesText +
-        `\n\nThank you for joining us! 🙏\n_SSGMS Management_`
-
-      try {
-        await fetch('/api/whatsapp', {
-          method:  'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body:    JSON.stringify({ phone: values.phone, message: waMessage }),
-        })
-      } catch (waErr) {
-        console.warn('WhatsApp send failed (non-critical):', waErr)
-      }
+      await sendJoinCertificate(memberId)
     }
 
-    // Notify agent
+    // ── Notify agent (in-app push) — only if the checkbox was left checked ────
     const agentIdToNotify = addedByRole === 'agent' ? selectedAgent : memberData.agentId
-    if (agentIdToNotify) {
+    if (sendNotification !== false && agentIdToNotify) {
       notifyAgent(
         agentIdToNotify,
         "New Member Assigned",

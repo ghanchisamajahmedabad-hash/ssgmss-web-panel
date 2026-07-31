@@ -9,7 +9,7 @@ import {
   WhatsAppOutlined, UserOutlined, TeamOutlined,
   DollarOutlined, FilterOutlined, SendOutlined,
   CheckCircleOutlined, CloseCircleOutlined, ReloadOutlined,
-  EyeOutlined, WarningOutlined, GlobalOutlined,
+  EyeOutlined, WarningOutlined, GlobalOutlined, ExperimentOutlined,
 } from '@ant-design/icons'
 import { useSelector } from 'react-redux'
 import { auth } from '../../../../lib/firbase-client'
@@ -50,6 +50,15 @@ export default function WhatsAppPage() {
   const [sendResult, setSendResult] = useState(null)
   const [templateModal, setTemplateModal] = useState(false)
   const [editableTemplate, setEditableTemplate] = useState(DEFAULT_TEMPLATE)
+
+  // ── Test template state ───────────────────────────────────────────────────
+  const [testModal, setTestModal]           = useState(false)
+  const [testPhone, setTestPhone]           = useState('')
+  const [testParam1, setTestParam1]         = useState('')
+  const [testParam2, setTestParam2]         = useState('')
+  const [testParam3, setTestParam3]         = useState('')
+  const [testSending, setTestSending]       = useState(false)
+  const [testResult, setTestResult]         = useState(null)   // { success, message }
 
   // ── Fetch data ────────────────────────────────────────────────────────────
   const fetchData = useCallback(async (page = 1) => {
@@ -190,6 +199,38 @@ export default function WhatsAppPage() {
     }
   }
 
+  // ── Send Gupshup test template ────────────────────────────────────────────
+  const handleTestTemplate = async () => {
+    if (!testPhone.trim()) { message.warning('Enter a phone number'); return }
+    setTestSending(true)
+    setTestResult(null)
+    try {
+      const token = await auth.currentUser?.getIdToken()
+      if (!token) { message.error('Not authenticated'); return }
+      const res = await fetch('/api/whatsapp/test-template', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({
+          phone:  testPhone.trim(),
+          params: [testParam1, testParam2, testParam3],
+        }),
+      })
+      const data = await res.json()
+      setTestResult(data)
+      if (data.success) {
+        message.success(`✅ Test message sent to ${testPhone}`)
+      } else {
+        message.error(`❌ ${data.message}`)
+      }
+    } catch (e) {
+      console.error(e)
+      message.error('Failed to send test message')
+      setTestResult({ success: false, message: e.message })
+    } finally {
+      setTestSending(false)
+    }
+  }
+
   // ── Columns ───────────────────────────────────────────────────────────────
   const memberColumns = [
     {
@@ -245,6 +286,10 @@ export default function WhatsAppPage() {
           WhatsApp Reminders
         </Title>
         <Space wrap>
+          <Button size="small" icon={<ExperimentOutlined />} onClick={() => { setTestResult(null); setTestModal(true) }}
+            style={{ borderColor: '#25D366', color: '#25D366' }}>
+            Test Template
+          </Button>
           <Button size="small" icon={<EyeOutlined />} onClick={() => setTemplateModal(true)}>Template</Button>
           <Button size="small" icon={<ReloadOutlined />} onClick={() => fetchData(pagination.page)} loading={loading}>Refresh</Button>
         </Space>
@@ -431,6 +476,101 @@ export default function WhatsAppPage() {
             </Card>
           ))}
         </div>
+      </Modal>
+
+      {/* ── Test Template Modal ───────────────────────────────────────── */}
+      <Modal
+        title={
+          <Space>
+            <WhatsAppOutlined style={{ color: '#25D366' }} />
+            <span>Send Test Template</span>
+            <Tag color="green" style={{ fontSize: 11 }}>thankyou_msg</Tag>
+          </Space>
+        }
+        open={testModal}
+        onCancel={() => setTestModal(false)}
+        footer={[
+          <Button key="cancel" onClick={() => setTestModal(false)}>Cancel</Button>,
+          <Button
+            key="send"
+            type="primary"
+            icon={<SendOutlined />}
+            loading={testSending}
+            onClick={handleTestTemplate}
+            style={{ background: '#25D366', borderColor: '#25D366' }}
+          >
+            Send Test Message
+          </Button>,
+        ]}
+        width={480}
+        destroyOnClose
+      >
+        {/* Template info */}
+        <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 8, padding: '10px 14px', marginBottom: 16, fontSize: 12 }}>
+          <Text strong style={{ fontSize: 12, color: '#166534', display: 'block', marginBottom: 4 }}>Template: thankyou_msg</Text>
+          <Text style={{ fontSize: 12, color: '#555' }}>
+            Thank you for your purchase of <b>{'{{1}}'}</b>. Your warranty is active as of <b>{'{{2}}'}</b>. Our <b>{'{{3}}'}</b> are below, for your reference.
+          </Text>
+        </div>
+
+        {/* Phone */}
+        <div style={{ marginBottom: 14 }}>
+          <Text strong style={{ display: 'block', marginBottom: 4 }}>
+            Test Phone Number <span style={{ color: 'red' }}>*</span>
+          </Text>
+          <Input
+            placeholder="e.g. 9876543210"
+            value={testPhone}
+            onChange={e => setTestPhone(e.target.value)}
+            addonBefore="+91"
+            maxLength={10}
+          />
+          <Text type="secondary" style={{ fontSize: 11 }}>10-digit Indian mobile number</Text>
+        </div>
+
+        {/* Template params */}
+        <div style={{ background: '#fafafa', border: '1px solid #e5e7eb', borderRadius: 8, padding: 12, marginBottom: 14 }}>
+          <Text strong style={{ display: 'block', marginBottom: 10 }}>Template Variables</Text>
+          <div style={{ marginBottom: 10 }}>
+            <Text style={{ display: 'block', marginBottom: 4, fontSize: 12 }}>
+              <Tag color="blue" style={{ fontSize: 11 }}>{'{{1}}'}</Tag> Product / Purchase Name
+            </Text>
+            <Input placeholder="e.g. Membership Plan" value={testParam1} onChange={e => setTestParam1(e.target.value)} />
+          </div>
+          <div style={{ marginBottom: 10 }}>
+            <Text style={{ display: 'block', marginBottom: 4, fontSize: 12 }}>
+              <Tag color="blue" style={{ fontSize: 11 }}>{'{{2}}'}</Tag> Warranty / Active Date
+            </Text>
+            <Input placeholder="e.g. 24-07-2026" value={testParam2} onChange={e => setTestParam2(e.target.value)} />
+          </div>
+          <div>
+            <Text style={{ display: 'block', marginBottom: 4, fontSize: 12 }}>
+              <Tag color="blue" style={{ fontSize: 11 }}>{'{{3}}'}</Tag> Contact / Support Details
+            </Text>
+            <Input placeholder="e.g. support details" value={testParam3} onChange={e => setTestParam3(e.target.value)} />
+          </div>
+        </div>
+
+        {/* Live preview */}
+        {(testParam1 || testParam2 || testParam3) && (
+          <div style={{ marginBottom: 14 }}>
+            <Text strong style={{ display: 'block', marginBottom: 6, fontSize: 12 }}>Live Preview:</Text>
+            <div style={{ background: '#dcf8c6', borderRadius: 8, padding: '10px 14px', fontSize: 12, lineHeight: 1.6 }}>
+              {`Thank you for your purchase of ${testParam1 || '{{1}}'}. Your warranty is active as of ${testParam2 || '{{2}}'}. Our ${testParam3 || '{{3}}'} are below, for your reference.`}
+            </div>
+          </div>
+        )}
+
+        {/* Result */}
+        {testResult && (
+          <Alert
+            type={testResult.success ? 'success' : 'error'}
+            message={testResult.message}
+            description={testResult.gupshupResponse ? JSON.stringify(testResult.gupshupResponse, null, 2) : undefined}
+            showIcon
+            style={{ fontSize: 12 }}
+          />
+        )}
       </Modal>
 
       {/* ── Template Editor Modal ─────────────────────────────────────── */}

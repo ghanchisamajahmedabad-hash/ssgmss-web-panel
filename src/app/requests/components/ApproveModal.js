@@ -1,4 +1,4 @@
-import { Button, Drawer, Form, Spin, Alert, Radio, Input, Row, Col, Typography, message, App, DatePicker } from 'antd'
+import { Button, Drawer, Form, Spin, Alert, Radio, Input, Row, Col, Typography, message, App, DatePicker, Checkbox } from 'antd'
 import React, { useState, useEffect } from 'react'
 import { 
   CheckCircleOutlined,
@@ -9,7 +9,7 @@ import { db } from '../../../../lib/firbase-client'
 import { auth } from '../../../../lib/firbase-client'
 import dayjs from 'dayjs'
 import isBetween from 'dayjs/plugin/isBetween'
-import { createClosingPayment, createSearchIndex, generateRegistrationNumber, getNextMemberSrNo, memberAccoiuntCreate, recordJoinFeeTransaction } from '@/app/members/components/components/firebaseUtils'
+import { createClosingPayment, createSearchIndex, generateRegistrationNumber, getNextMemberSrNo, memberAccoiuntCreate, recordJoinFeeTransaction, sendJoinCertificate } from '@/app/members/components/components/firebaseUtils'
 import { notifyAgent } from '@/app/utils/notifyAgent'
 
 dayjs.extend(isBetween)
@@ -24,6 +24,10 @@ const ApproveModal = ({ open, setOpen, selectedMember, setSelectedMember, fetchA
   const [paymentMode, setPaymentMode] = useState('cash')
   const [paidAmount, setPaidAmount]   = useState(0)
   const [programDetail, setProgramDetail] = useState(null)   // single object
+
+  // ── Notification options (both default ON) ─────────────────────────────────
+  const [sendWhatsApp, setSendWhatsApp]         = useState(true)
+  const [sendNotification, setSendNotification] = useState(true)
 
   // ── Recalculate whenever selectedMember or programList changes ──────────────
   useEffect(() => {
@@ -259,8 +263,15 @@ const ApproveModal = ({ open, setOpen, selectedMember, setSelectedMember, fetchA
       await memberAccoiuntCreate({ ...selectedMember, ...memberUpdate, id: selectedMember.id }, commissionPayload)
       await createClosingPayment({ ...selectedMember, id: selectedMember.id })
       message.success(`Member approved! Registration: ${finalRegNumber}`)
-      // Notify agent
-      if (selectedMember.agentId) {
+
+      // ── Generate certificate + send WhatsApp join message ──────────────────
+      // Non-critical: never block approval if this fails.
+      if (sendWhatsApp && selectedMember.phone) {
+        await sendJoinCertificate(selectedMember.id)
+      }
+
+      // ── Notify agent (in-app push) ─────────────────────────────────────────
+      if (sendNotification && selectedMember.agentId) {
         notifyAgent(
           selectedMember.agentId,
           "New Member Approved",
@@ -287,6 +298,8 @@ const ApproveModal = ({ open, setOpen, selectedMember, setSelectedMember, fetchA
     setPaymentMode('cash')
     setPaidAmount(0)
     setProgramDetail(null)
+    setSendWhatsApp(true)
+    setSendNotification(true)
   }
 
   const handleClose = () => {
@@ -502,6 +515,65 @@ const ApproveModal = ({ open, setOpen, selectedMember, setSelectedMember, fetchA
                     type="info"
                     showIcon
                   />
+                )}
+              </div>
+
+              {/* ── Notification options ────────────────────────────────────── */}
+              <div className="border rounded-lg p-4">
+                <div className="mb-3">
+                  <div className="font-medium">Notifications</div>
+                  <p className="text-xs text-gray-500">Choose what to send after approval</p>
+                </div>
+
+                <div className="flex flex-col gap-3">
+                  <Checkbox
+                    checked={sendWhatsApp}
+                    onChange={(e) => setSendWhatsApp(e.target.checked)}
+                    disabled={loading}
+                  >
+                    <span className="text-sm">
+                      Send WhatsApp message to member
+                      {sendWhatsApp && (
+                        <span className="text-xs text-green-600 ml-2">
+                          (with membership certificate
+                          {selectedMember?.phone ? ` → ${selectedMember.phone}` : ''})
+                        </span>
+                      )}
+                    </span>
+                  </Checkbox>
+
+                  {sendWhatsApp && !selectedMember?.phone && (
+                    <div className="text-xs text-amber-600 bg-amber-50 p-2 rounded ml-6">
+                      ⚠️ This member has no phone number — WhatsApp message cannot be sent.
+                    </div>
+                  )}
+
+                  <Checkbox
+                    checked={sendNotification}
+                    onChange={(e) => setSendNotification(e.target.checked)}
+                    disabled={loading}
+                  >
+                    <span className="text-sm">
+                      Send in-app notification to agent
+                      {sendNotification && (
+                        <span className="text-xs text-blue-600 ml-2">
+                          (agent will be notified of the approval)
+                        </span>
+                      )}
+                    </span>
+                  </Checkbox>
+
+                  {sendNotification && !selectedMember?.agentId && (
+                    <div className="text-xs text-amber-600 bg-amber-50 p-2 rounded ml-6">
+                      ⚠️ This member has no agent assigned — no notification will be sent.
+                    </div>
+                  )}
+                </div>
+
+                {!sendWhatsApp && !sendNotification && (
+                  <div className="mt-3 text-xs text-amber-600 bg-amber-50 p-2 rounded">
+                    ⚠️ No notification method selected. Neither the member nor the agent will be informed.
+                  </div>
                 )}
               </div>
 
