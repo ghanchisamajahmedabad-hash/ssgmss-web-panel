@@ -20,6 +20,7 @@ import { renderToBuffer } from '@react-pdf/renderer';
 import admin from '../../db/firebaseAdmin';
 import { checkRole, verifyToken } from '../../../../../middleware/authMiddleware';
 import { generatePassword } from '../route';
+import { recordOutbound } from '../../whatsapp/_lib/store';
 import CertificateCom from '@/app/members/components/MemberPdf/CertificateCom';
 
 export const runtime = 'nodejs';
@@ -247,6 +248,28 @@ export async function POST(req) {
           if (!sendRes.ok) result.whatsapp.error = sendRes.data?.message || `Gupshup error (${sendRes.status})`;
 
           console.log(`[JoinCert] WhatsApp → ${destination}: ${sendRes.ok ? 'SENT' : 'FAILED'}`, sendRes.data);
+
+          // Mirror into the inbox thread so the join message + certificate show
+          // up in the conversation alongside anything the member sends back.
+          if (sendRes.ok) {
+            const gsMessageId = sendRes.data?.messageId || sendRes.data?.id || null;
+            try {
+              await recordOutbound(destination, {
+                id:          gsMessageId || undefined,
+                gsMessageId,
+                type:        'document',
+                text:        `Welcome message sent — ${m.registrationNumber || ''}`,
+                mediaUrl:    certificateUrl,
+                mediaType:   'application/pdf',
+                fileName:    certificateName || 'certificate.pdf',
+                templateId:  TEMPLATE_ID,
+                status:      'sent',
+                sentBy:      authResult.user.uid,
+              });
+            } catch (recErr) {
+              console.warn('[JoinCert] Failed to mirror into inbox (non-critical):', recErr);
+            }
+          }
         } catch (waErr) {
           console.error('[JoinCert] WhatsApp send failed:', waErr);
           result.whatsapp.error = waErr.message;

@@ -116,6 +116,7 @@ const buildMenuItems = (user, pendingCount, collapsed) => {
         { key: '/payments/closing-payment', label: 'Closing Payment', module: 'payments' },
         { key: '/payments/history', label: 'Payment History', module: 'payments' },
         { key: '/payments/whatsapp', label: 'WhatsApp', icon: <WhatsAppOutlined />, module: 'payments' },
+        { key: '/payments/whatsapp/inbox', label: 'WhatsApp Inbox', icon: <WhatsAppOutlined />, module: 'payments' },
       ],
     },
     {
