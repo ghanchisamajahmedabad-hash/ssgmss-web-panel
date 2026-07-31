@@ -43,22 +43,38 @@ export const localPhone = (raw) => {
 };
 
 // ── Member lookup ───────────────────────────────────────────────────────────
+// One phone is routinely shared by several members — a father registering his
+// wife and children all use the same number — so this returns EVERY match.
 // Members store a 10-digit phone, so we look up on that form.
-export const findMemberByPhone = async (phone) => {
+export const findMembersByPhone = async (phone) => {
   const local = localPhone(phone);
-  if (!local) return null;
+  if (!local) return [];
   try {
     const snap = await db.collection('members')
       .where('phone', '==', local)
-      .limit(1)
       .get();
-    if (snap.empty) return null;
-    const d = snap.docs[0];
-    return { id: d.id, ...d.data() };
+
+    return snap.docs
+      .map(d => ({ id: d.id, ...d.data() }))
+      // Soft-deleted members shouldn't count towards the linked total
+      .filter(m => m.delete_flag !== true)
+      // Active first, then newest — so the "primary" pick below is sensible
+      .sort((a, b) => {
+        const aActive = a.status === 'active' ? 0 : 1;
+        const bActive = b.status === 'active' ? 0 : 1;
+        if (aActive !== bActive) return aActive - bActive;
+        return (b.srNo || 0) - (a.srNo || 0);
+      });
   } catch (e) {
-    console.error('[WA] findMemberByPhone failed:', e);
-    return null;
+    console.error('[WA] findMembersByPhone failed:', e);
+    return [];
   }
+};
+
+// Convenience: the member a chat is primarily attributed to
+export const findMemberByPhone = async (phone) => {
+  const list = await findMembersByPhone(phone);
+  return list[0] || null;
 };
 
 // ── Media mirroring ─────────────────────────────────────────────────────────
@@ -121,21 +137,38 @@ export const upsertChat = async (phone, patch = {}, { attachMember = false } = {
 
   const base = { phone, updated_at: STS() };
 
-  // Only look the member up when the chat is new (or explicitly asked) —
+  // Only look members up when the chat is new (or explicitly asked) —
   // avoids a members query on every single inbound message.
   if (!snap.exists || attachMember) {
-    const member = await findMemberByPhone(phone);
-    if (member) {
-      base.memberId           = member.id;
-      base.memberName         = member.displayName || '';
-      base.fatherName         = member.fatherName || '';
-      base.registrationNumber = member.registrationNumber || '';
-      base.programName        = member.programName || '';
-      base.agentId            = member.agentId || null;
-      base.photoURL           = member.photoURL || '';
+    const members = await findMembersByPhone(phone);
+
+    if (members.length) {
+      const primary = members[0];
+      base.memberId           = primary.id;
+      base.memberName         = primary.displayName || '';
+      base.fatherName         = primary.fatherName || '';
+      base.registrationNumber = primary.registrationNumber || '';
+      base.programName        = primary.programName || '';
+      base.agentId            = primary.agentId || null;
+      base.photoURL           = primary.photoURL || '';
       base.isMember           = true;
+
+      // How many members share this number, plus a small denormalised roster
+      // so the inbox can render the badge without a second query. Full details
+      // are fetched live by /api/whatsapp/linked-members when the drawer opens
+      // — this copy is only ever a preview and may lag member edits.
+      base.memberCount = members.length;
+      base.linkedMembers = members.slice(0, 25).map(m => ({
+        id:                 m.id,
+        displayName:        m.displayName || '',
+        fatherName:         m.fatherName || '',
+        registrationNumber: m.registrationNumber || '',
+        programName:        m.programName || '',
+        status:             m.status || '',
+      }));
     } else if (!snap.exists) {
-      base.isMember = false;
+      base.isMember    = false;
+      base.memberCount = 0;
     }
   }
 

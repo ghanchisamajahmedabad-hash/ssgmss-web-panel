@@ -13,11 +13,13 @@ import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import {
   Card, Input, Avatar, Badge, Typography, Empty, Spin, Tag, Button,
   Tooltip, Image, message as antMessage, Segmented, Alert, Grid,
+  Drawer, Statistic, Row, Col, Divider,
 } from 'antd'
 import {
   SearchOutlined, SendOutlined, UserOutlined, ReloadOutlined,
   CheckOutlined, ClockCircleOutlined, WarningOutlined,
   FileTextOutlined, ArrowLeftOutlined, WhatsAppOutlined, DownloadOutlined,
+  TeamOutlined, IdcardOutlined, EnvironmentOutlined, SafetyCertificateOutlined,
 } from '@ant-design/icons'
 import {
   collection, query, orderBy, limit, onSnapshot, doc, updateDoc,
@@ -193,6 +195,11 @@ export default function WhatsAppInboxPage() {
   const [draft, setDraft]       = useState('')
   const [sending, setSending]   = useState(false)
 
+  // ── Linked-members drawer ─────────────────────────────────────────────────
+  const [linkedOpen, setLinkedOpen]       = useState(false)
+  const [linkedLoading, setLinkedLoading] = useState(false)
+  const [linkedData, setLinkedData]       = useState(null)  // { count, totals, members }
+
   const bottomRef = useRef(null)
 
   // ── Live listener: conversation list (bounded) ────────────────────────────
@@ -285,6 +292,30 @@ export default function WhatsAppInboxPage() {
       }
     } catch (e) {
       console.warn('Read receipt call failed (non-critical):', e)
+    }
+  }, [])
+
+  // ── Load every member registered against this phone ───────────────────────
+  // Fetched live rather than read off the chat doc, whose linkedMembers copy is
+  // only a preview and goes stale as members are edited.
+  const openLinkedMembers = useCallback(async (phone) => {
+    if (!phone) return
+    setLinkedOpen(true)
+    setLinkedLoading(true)
+    setLinkedData(null)
+    try {
+      const token = await auth.currentUser?.getIdToken()
+      const res = await fetch(`/api/whatsapp/linked-members?phone=${encodeURIComponent(phone)}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      const data = await res.json()
+      if (data.success) setLinkedData(data)
+      else antMessage.error(data.message || 'Failed to load members')
+    } catch (e) {
+      console.error(e)
+      antMessage.error('Failed to load linked members')
+    } finally {
+      setLinkedLoading(false)
     }
   }, [])
 
@@ -412,14 +443,31 @@ export default function WhatsAppInboxPage() {
                       <Badge count={c.unreadCount} style={{ backgroundColor: C.primary }} />
                     )}
                   </div>
-                  {c.registrationNumber && (
-                    <Text style={{ fontSize: 10, color: '#db2777', fontFamily: 'monospace' }}>
-                      {c.registrationNumber}
-                    </Text>
-                  )}
-                  {!c.isMember && (
-                    <Tag color="orange" style={{ fontSize: 9, lineHeight: '14px', marginLeft: 4 }}>Unknown</Tag>
-                  )}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 1 }}>
+                    {c.registrationNumber && (
+                      <Text style={{ fontSize: 10, color: '#db2777', fontFamily: 'monospace' }}>
+                        {c.registrationNumber}
+                      </Text>
+                    )}
+                    {/* More than one member shares this number */}
+                    {c.memberCount > 1 && (
+                      <Tooltip title={`${c.memberCount} members on this number — click to view`}>
+                        <Tag
+                          color="blue"
+                          icon={<TeamOutlined />}
+                          style={{ fontSize: 9, lineHeight: '15px', margin: 0, padding: '0 4px', cursor: 'pointer' }}
+                          onClick={(e) => { e.stopPropagation(); openLinkedMembers(c.id) }}
+                        >
+                          +{c.memberCount - 1} more
+                        </Tag>
+                      </Tooltip>
+                    )}
+                    {!c.isMember && (
+                      <Tag color="orange" style={{ fontSize: 9, lineHeight: '15px', margin: 0, padding: '0 4px' }}>
+                        Unknown
+                      </Tag>
+                    )}
+                  </div>
                 </div>
               </div>
             )
@@ -466,6 +514,22 @@ export default function WhatsAppInboxPage() {
                 {activeChat.programName && ` · ${activeChat.programName}`}
               </Text>
             </div>
+
+            {/* Linked members — always clickable, even for a single member */}
+            <Tooltip title="View all members registered on this number">
+              <Button
+                size="small"
+                icon={<TeamOutlined />}
+                onClick={() => openLinkedMembers(activeChat.id)}
+                style={{
+                  borderColor: activeChat.memberCount > 1 ? C.primary : undefined,
+                  color:       activeChat.memberCount > 1 ? C.dark : undefined,
+                }}
+              >
+                {activeChat.memberCount ?? 0} member{(activeChat.memberCount ?? 0) === 1 ? '' : 's'}
+              </Button>
+            </Tooltip>
+
             <Tag color={session.open ? 'green' : 'default'} style={{ fontSize: 10 }}>
               {session.label}
             </Tag>
@@ -529,6 +593,167 @@ export default function WhatsAppInboxPage() {
     </div>
   )
 
+  // ── Linked members drawer ─────────────────────────────────────────────────
+  const linkedDrawer = (
+    <Drawer
+      title={
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <TeamOutlined style={{ color: C.primary }} />
+          <span>Linked Members</span>
+          {linkedData && <Tag color="blue">{linkedData.count}</Tag>}
+        </div>
+      }
+      open={linkedOpen}
+      onClose={() => setLinkedOpen(false)}
+      width={isMobile ? '100%' : 520}
+    >
+      {linkedLoading ? (
+        <div style={{ textAlign: 'center', padding: 60 }}><Spin /></div>
+      ) : !linkedData ? (
+        <Empty description="Could not load members" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+      ) : linkedData.count === 0 ? (
+        <Empty
+          description={
+            <div>
+              <div style={{ fontWeight: 600, marginBottom: 4 }}>No member registered</div>
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                +{linkedData.phone} isn&apos;t linked to any member record.
+              </Text>
+            </div>
+          }
+          image={Empty.PRESENTED_IMAGE_SIMPLE}
+          style={{ marginTop: 40 }}
+        />
+      ) : (
+        <>
+          {/* Phone + combined totals across every linked member */}
+          <Card size="small" style={{ marginBottom: 12, background: '#f0fdf4', borderColor: '#bbf7d0' }}>
+            <Text strong style={{ fontSize: 13, display: 'block', marginBottom: 8 }}>
+              +{linkedData.phone}
+            </Text>
+            <Row gutter={8}>
+              <Col span={8}>
+                <Statistic title="Members" value={linkedData.count}
+                  valueStyle={{ fontSize: 17 }} prefix={<TeamOutlined />} />
+              </Col>
+              <Col span={8}>
+                <Statistic title="Join Fees Pending" value={linkedData.totals.pending} prefix="₹"
+                  valueStyle={{ fontSize: 17, color: linkedData.totals.pending > 0 ? '#dc2626' : '#16a34a' }} />
+              </Col>
+              <Col span={8}>
+                <Statistic title="Closing Pending" value={linkedData.totals.closingPending} prefix="₹"
+                  valueStyle={{ fontSize: 17, color: linkedData.totals.closingPending > 0 ? '#dc2626' : '#16a34a' }} />
+              </Col>
+            </Row>
+          </Card>
+
+          {/* One card per member */}
+          {linkedData.members.map((m, i) => (
+            <Card key={m.id} size="small" style={{ marginBottom: 10 }}>
+              <div style={{ display: 'flex', gap: 10 }}>
+                <Avatar src={m.photoURL || undefined} icon={<UserOutlined />} size={46} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                    <Text strong style={{ fontSize: 14 }}>{m.displayName || '—'}</Text>
+                    {i === 0 && <Tag color="green" style={{ fontSize: 9, margin: 0 }}>PRIMARY</Tag>}
+                    <Tag color={m.isActive ? 'success' : 'default'} style={{ fontSize: 9, margin: 0 }}>
+                      {m.status || 'unknown'}
+                    </Tag>
+                    {m.migratedData && <Tag color="purple" style={{ fontSize: 9, margin: 0 }}>Migrated</Tag>}
+                    {m.memberClosed && <Tag color="volcano" style={{ fontSize: 9, margin: 0 }}>Closed</Tag>}
+                  </div>
+
+                  {m.fatherName && (
+                    <Text type="secondary" style={{ fontSize: 11, display: 'block' }}>
+                      s/o {m.fatherName}
+                    </Text>
+                  )}
+
+                  <div style={{ marginTop: 4, display: 'flex', flexWrap: 'wrap', gap: 10, fontSize: 11 }}>
+                    <span>
+                      <IdcardOutlined style={{ marginRight: 3, color: C.muted }} />
+                      <Text style={{ fontSize: 11, color: '#db2777', fontFamily: 'monospace' }}>
+                        {m.registrationNumber || '—'}
+                      </Text>
+                    </span>
+                    {m.ageGroupName && <Tag style={{ fontSize: 9, margin: 0 }}>{m.ageGroupName}</Tag>}
+                  </div>
+
+                  {m.programName && (
+                    <div style={{ marginTop: 3 }}>
+                      <Tag color="geekblue" style={{ fontSize: 10 }}>{m.programName}</Tag>
+                    </div>
+                  )}
+
+                  {(m.village || m.district || m.agentName) && (
+                    <Text type="secondary" style={{ fontSize: 10.5, display: 'block', marginTop: 3 }}>
+                      {(m.village || m.district) && (
+                        <>
+                          <EnvironmentOutlined style={{ marginRight: 3 }} />
+                          {[m.village, m.district].filter(Boolean).join(', ')}
+                        </>
+                      )}
+                      {m.agentName && ` · Agent: ${m.agentName}`}
+                    </Text>
+                  )}
+
+                  <Divider style={{ margin: '8px 0' }} />
+
+                  {/* Money */}
+                  <Row gutter={6}>
+                    <Col span={8}>
+                      <div style={{ fontSize: 9.5, color: C.muted }}>Join Fees</div>
+                      <div style={{ fontSize: 12, fontWeight: 600 }}>₹{m.joinFees.toLocaleString('en-IN')}</div>
+                    </Col>
+                    <Col span={8}>
+                      <div style={{ fontSize: 9.5, color: C.muted }}>Paid</div>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: '#16a34a' }}>
+                        ₹{m.paidAmount.toLocaleString('en-IN')}
+                      </div>
+                    </Col>
+                    <Col span={8}>
+                      <div style={{ fontSize: 9.5, color: C.muted }}>Pending</div>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: m.pendingAmount > 0 ? '#dc2626' : '#16a34a' }}>
+                        ₹{m.pendingAmount.toLocaleString('en-IN')}
+                      </div>
+                    </Col>
+                  </Row>
+
+                  {(m.closingPending > 0 || m.pendingClosingCount > 0) && (
+                    <div style={{ marginTop: 6, padding: '4px 8px', background: '#fef2f2', borderRadius: 4 }}>
+                      <Text style={{ fontSize: 10.5, color: '#dc2626' }}>
+                        Closing pending: ₹{m.closingPending.toLocaleString('en-IN')}
+                        {m.pendingClosingCount > 0 && ` (${m.pendingClosingCount} closing${m.pendingClosingCount === 1 ? '' : 's'})`}
+                      </Text>
+                    </div>
+                  )}
+
+                  <div style={{ marginTop: 8, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    <Button
+                      size="small" type="link" style={{ padding: 0, fontSize: 11 }}
+                      onClick={() => window.open(`/members?search=${encodeURIComponent(m.registrationNumber || '')}`, '_blank')}
+                    >
+                      Open member →
+                    </Button>
+                    {m.certificateUrl && (
+                      <Button
+                        size="small" type="link" icon={<SafetyCertificateOutlined />}
+                        style={{ padding: 0, fontSize: 11 }}
+                        onClick={() => window.open(m.certificateUrl, '_blank')}
+                      >
+                        Certificate
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </Card>
+          ))}
+        </>
+      )}
+    </Drawer>
+  )
+
   // ── Layout ────────────────────────────────────────────────────────────────
   return (
     <div style={{ padding: isMobile ? 0 : 16 }}>
@@ -549,6 +774,8 @@ export default function WhatsAppInboxPage() {
           )}
         </div>
       </Card>
+
+      {linkedDrawer}
     </div>
   )
 }
