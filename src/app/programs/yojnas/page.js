@@ -601,8 +601,11 @@ const router=useRouter()
               )}
             </div>
           }
-          width={800}
+          // Wide enough for the age-group / period tables to breathe, but capped
+          // as a viewport percentage so it never overflows on smaller laptops.
+          size={1000}
           open={drawerVisible}
+          destroyOnHidden
           onClose={() => {
             setDrawerVisible(false);
             setEditMode(false);
@@ -610,9 +613,33 @@ const router=useRouter()
             form.resetFields();
           }}
           styles={{
-            header: { borderBottom: '1px solid #e5e7eb', padding: '20px 24px' },
-            body: { padding: '24px' }
+            header: { borderBottom: '1px solid #e5e7eb', padding: '18px 28px', background: '#fafafa' },
+            body:   { padding: '24px 28px', background: '#f7f8fa' },
+            footer: { padding: '12px 28px', borderTop: '1px solid #e5e7eb', background: '#fff' },
           }}
+          // Actions pinned to a footer so Save is always reachable without
+          // scrolling past every age group and period
+          footer={
+            editMode ? (
+              <div className="flex justify-between items-center gap-3">
+                <Text type="secondary" className="text-xs">
+                  {editingProgram?.name ? `Editing “${editingProgram.name}”` : ''}
+                </Text>
+                <div className="flex gap-3">
+                  <Button onClick={() => setEditMode(false)}>Cancel</Button>
+                  <Button
+                    type="primary"
+                    loading={loading}
+                    icon={<SaveOutlined />}
+                    onClick={() => form.submit()}
+                    className="bg-gradient-to-r from-rose-600 to-orange-600"
+                  >
+                    Update Program
+                  </Button>
+                </div>
+              </div>
+            ) : null
+          }
           extra={
             <Button
               icon={<CloseOutlined />}
@@ -1001,20 +1028,7 @@ const router=useRouter()
                 ))}
               </Card>
 
-              <div className="flex justify-end gap-3 pt-4 border-t">
-                <Button onClick={() => setEditMode(false)}>
-                  Cancel
-                </Button>
-                <Button
-                  type="primary"
-                  htmlType="submit"
-                  loading={loading}
-                  icon={<SaveOutlined />}
-                  className="bg-gradient-to-r from-rose-600 to-orange-600"
-                >
-                  Update Program
-                </Button>
-              </div>
+              {/* Save / Cancel live in the drawer footer so they stay pinned */}
             </Form>
           ) : (
             // View Mode
