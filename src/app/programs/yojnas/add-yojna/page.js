@@ -42,9 +42,26 @@ const { Option } = Select;
 const { Title, Text } = Typography;
 const { TextArea } = Input;
 
+// Builds the registration number that will be issued next, matching the format
+// in generateRegistrationNumber: {prefix}5{YY}{M}{NNNN}
+const buildRegNoPreview = (prefix, nextCount) => {
+  const now = dayjs();
+  const clean = (prefix || 'MEM').toUpperCase().replace(/[^A-Z0-9]/g, '') || 'MEM';
+  return `${clean}5${now.format('YY')}${now.month() + 1}${String(nextCount).padStart(4, '0')}`;
+};
+
 const ProgramsFormPage = () => {
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
+
+  // Live preview of the next registration number as the admin types
+  const watchPrefix = Form.useWatch('regNoPrefix', form);
+  const watchStart  = Form.useWatch('regNoStartCount', form);
+  const nextRegNo   = React.useMemo(() => {
+    const start = Number(watchStart);
+    const base  = Number.isFinite(start) && start > 0 ? Math.floor(start) : 0;
+    return buildRegNoPreview(watchPrefix, base + 1);
+  }, [watchPrefix, watchStart]);
 
   // For age groups table
   const [ageGroups, setAgeGroups] = useState([]);
@@ -81,6 +98,11 @@ const ProgramsFormPage = () => {
       const rawPrefix = (values.regNoPrefix || 'MEM').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
       const regNoPrefix = rawPrefix || 'MEM';
 
+      // Coerce to a positive integer — generateRegistrationNumber falls back to
+      // 1 on anything invalid, so store a clean value rather than null/NaN.
+      const startRaw = Number(values.regNoStartCount);
+      const regNoStartCount = Number.isFinite(startRaw) && startRaw > 0 ? Math.floor(startRaw) : 0;
+
       // Prepare program data
       const programData = {
         name: values.name,
@@ -89,6 +111,7 @@ const ProgramsFormPage = () => {
         programType,
         certificateRule,
         regNoPrefix,
+        regNoStartCount,
         ageGroups,
         memberGroups: memberGroups.map(group => ({
           id: group.id,
@@ -419,7 +442,7 @@ const ProgramsFormPage = () => {
                   />
                 </Form.Item>
               </Col>
-              <Col span={10}>
+              <Col span={7}>
                 <Form.Item
                   name="hindiName"
                   label="Program Name (Hindi)"
@@ -465,7 +488,41 @@ const ProgramsFormPage = () => {
                   />
                 </Form.Item>
               </Col>
+              <Col span={3}>
+                <Form.Item
+                  name="regNoStartCount"
+                  label={
+                    <span className="flex items-center gap-1">
+                      Last Reg. No
+                      <Tooltip title="The last registration number already used for this yojna. The next member gets this + 1 — set 4050 and the next member becomes 4051 (MEM52684051). Leave 0 for a brand-new yojna.">
+                        <InfoCircleOutlined className="text-gray-400 text-xs" />
+                      </Tooltip>
+                    </span>
+                  }
+                  initialValue={0}
+                >
+                  <InputNumber
+                    placeholder="0"
+                    size="large"
+                    min={0}
+                    precision={0}
+                    className="w-full hover:border-rose-300"
+                    style={{ width: '100%' }}
+                  />
+                </Form.Item>
+              </Col>
             </Row>
+
+            {/* Live preview — shows the +1 applied to the last reg no */}
+            <div className="mb-4 -mt-2 flex items-center gap-2 flex-wrap">
+              <span className="text-xs text-gray-500">Next member will get:</span>
+              <span className="font-mono font-semibold text-blue-600 bg-blue-50 border border-blue-200 rounded px-2 py-0.5 text-sm">
+                {nextRegNo}
+              </span>
+              <span className="text-xs text-gray-400">
+                (Last Reg. No {Number(watchStart) > 0 ? Math.floor(Number(watchStart)) : 0} + 1)
+              </span>
+            </div>
              <Form.Item
               label="Yojna Type"
               required

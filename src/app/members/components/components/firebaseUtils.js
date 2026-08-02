@@ -113,49 +113,86 @@ export const uploadAllFiles = async (files) => {
   }
 }
 
-// Generate registration number
-// If programId is supplied, fetches that program's regNoPrefix and counts
-// members in that program only — so each yojna has its own independent sequence.
+// Generate registration number — format {prefix}5{YY}{M}{NNNN} (e.g. MEM52670001)
+//
+// Each yojna keeps its own sequence in an ATOMIC counter on the program doc
+// (`regNoLastCount`), incremented inside a transaction. The previous approach
+// counted existing members and added one, which could hand the same number to
+// two members registered at the same moment.
+//
+// `regNoStartCount` on the program is the LAST NUMBER ALREADY USED — set it to
+// 4050 and the next member issued is 4051. That lets a yojna migrated from an
+// older system carry on from where it left off.
+//
+// The counter seeds itself on first use as max(regNoStartCount, existing member
+// count), so yojnas created before this field existed keep generating exactly
+// the numbers they would have before.
 export const generateRegistrationNumber = async (programId) => {
   try {
-    const now = dayjs();
-    const year  = now.format('YY');
-    const month = now.format('MM');
+    const now         = dayjs();
+    const year        = now.format('YY');
+    const monthNoZero = String(now.month() + 1); // 1–12, no leading zero
 
-    // ── Resolve prefix from program doc (or fall back to 'MEM') ──────────────
     let prefix = 'MEM';
-    if (programId) {
-      try {
-        const progSnap = await getDoc(doc(db, 'programs', programId));
-        if (progSnap.exists()) {
-          const raw = (progSnap.data().regNoPrefix || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
-          if (raw) prefix = raw;
-        }
-      } catch (_) { /* use default */ }
-    }
+    let nextCount;
 
-    // ── Count existing members for this program (or globally if no programId) ─
-    let q;
     if (programId) {
-      q = query(
-        collection(db, 'members'),
-        where('programId',   '==', programId),
-        where('active_flag', '==', true)
-      );
+      const progRef = doc(db, 'programs', programId);
+
+      // If the counter has never been initialised we need the current member
+      // count to seed it. Queries can't run inside a transaction, so this is
+      // resolved up front — and only on the very first generation per yojna.
+      let seedFromExisting = 0;
+      try {
+        const peek = await getDoc(progRef);
+        if (peek.exists() && peek.data().regNoLastCount == null) {
+          const snap = await getDocs(query(
+            collection(db, 'members'),
+            where('programId',   '==', programId),
+            where('active_flag', '==', true)
+          ));
+          seedFromExisting = snap.size;
+        }
+      } catch (_) { /* seed stays 0 */ }
+
+      const result = await runTransaction(db, async (txn) => {
+        const snap = await txn.get(progRef);
+        const p    = snap.exists() ? snap.data() : {};
+
+        const raw = (p.regNoPrefix || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+        const resolvedPrefix = raw || 'MEM';
+
+        const rawStart = Number(p.regNoStartCount);
+        const start    = Number.isFinite(rawStart) && rawStart > 0 ? Math.floor(rawStart) : 0;
+
+        // Highest number issued so far. Taking max() against start means raising
+        // the start count later jumps the sequence forward, while lowering it can
+        // never reissue a number that's already out there.
+        const last = p.regNoLastCount;
+        const current = last == null
+          ? Math.max(start, seedFromExisting)
+          : Math.max(Number(last) || 0, start);
+
+        const next = current + 1;
+        txn.set(progRef, { regNoLastCount: next }, { merge: true });
+        return { next, resolvedPrefix };
+      });
+
+      nextCount = result.next;
+      prefix    = result.resolvedPrefix;
     } else {
-      q = query(
+      // No program supplied — fall back to a global count
+      const snap = await getDocs(query(
         collection(db, 'members'),
         where('status',      '==', 'active'),
         where('active_flag', '==', true)
-      );
+      ));
+      nextCount = snap.size + 1;
     }
 
-    const snapshot    = await getDocs(q);
-    const count       = snapshot.size + 1;
-    const paddedCount = count.toString().padStart(4, '0');
-    const monthNoZero = String(now.month() + 1); // 1–12, no leading zero
+    // padStart only pads — counts wider than 4 digits pass through intact
+    const paddedCount = String(nextCount).padStart(4, '0');
 
-    // Format: {prefix}5{YY}{M}{NNNN}  →  e.g. MEM52670001
     return `${prefix}5${year}${monthNoZero}${paddedCount}`;
   } catch (error) {
     console.error('Error generating registration number:', error);
