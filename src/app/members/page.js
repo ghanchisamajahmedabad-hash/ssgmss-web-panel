@@ -166,12 +166,17 @@ const isSuperAdmin = (user) => user?.role === 'superadmin';
     }
   }, [displayedMembers, pagination.total, searchMode, searchResults.length])
 
-  const fetchMembers = useCallback(async (page = 1, resetPagination = false) => {
+  // `filtersOverride` lets a caller fetch with values it just set, without
+  // waiting for the state update to land. Without it, a caller that changes
+  // filters and fetches in the same tick (Reset does exactly that) would query
+  // using the stale `filters` captured in this callback's closure.
+  const fetchMembers = useCallback(async (page = 1, resetPagination = false, filtersOverride = null) => {
     setLoading(true)
     setSearchMode('paginated')
+    const effectiveFilters = filtersOverride || filters
     try {
       const lastDoc = resetPagination ? null : pagination.lastDocs[page - 1] || null
-      const result  = await fetchMembersPaginated({ ...filters, search: '', pageSize: pagination.pageSize, lastDoc })
+      const result  = await fetchMembersPaginated({ ...effectiveFilters, search: '', pageSize: pagination.pageSize, lastDoc })
       setMembers(result.members)
 
       const newLastDocs = { ...pagination.lastDocs }
@@ -180,7 +185,7 @@ const isSuperAdmin = (user) => user?.role === 'superadmin';
       setPagination(prev => ({ ...prev, lastDocs: newLastDocs, hasNextPage: result.hasNextPage, current: page }))
 
       if (resetPagination) {
-        const totalCount = await getTotalMembersCount(filters)
+        const totalCount = await getTotalMembersCount(effectiveFilters)
         setPagination(prev => ({ ...prev, total: totalCount }))
       }
     } catch (error) {
@@ -253,12 +258,40 @@ const isSuperAdmin = (user) => user?.role === 'superadmin';
   }
 
   const resetFilters = () => {
-    const reset = { programId: 'all', ageGroupId: 'all', agentId: 'all', status: 'all', paymentStatus: 'all', closingPaymentStatus: 'all', gender: 'all', fromDate: null, toDate: null, sortField: 'createdAt', sortOrder: 'desc' }
-    setFilters(prev => ({ ...prev, ...reset }))
-    filterForm.resetFields()
-    setSearchMode('paginated'); setSearchResults([])
+    const reset = {
+      search: '', programId: 'all', ageGroupId: 'all', agentId: 'all',
+      status: 'all', paymentStatus: 'all', closingPaymentStatus: 'all', gender: 'all',
+      fromDate: null, toDate: null, sortField: 'createdAt', sortOrder: 'desc'
+    }
+
+    setFilters(reset)
+
+    // setFieldsValue, not resetFields(): resetFields() restores the Form's
+    // `initialValues`, which were captured when the form first mounted — so it
+    // would put the *old* filters back into the inputs instead of clearing them.
+    filterForm.setFieldsValue(reset)
+
+    setSearchMode('paginated')
+    setSearchResults([])
+    setAllMembersForExport(null)
     setPagination(prev => ({ ...prev, current: 1, lastDoc: null, lastDocs: {} }))
-    setTimeout(() => fetchMembers(1, true), 0)
+    if (searchTimerRef.current) clearTimeout(searchTimerRef.current)
+
+    // Pass the new values explicitly — fetchMembers' closure still holds the
+    // pre-reset filters at this point, which is why clearing appeared to do
+    // nothing before.
+    setTimeout(() => fetchMembers(1, true, reset), 0)
+  }
+
+  // Clear one filter (used by the chip close buttons). Same stale-closure trap
+  // as resetFilters — the new values must be handed to fetchMembers directly.
+  const clearFilter = (patch) => {
+    const next = { ...filters, ...patch }
+    setFilters(next)
+    filterForm.setFieldsValue(patch)
+    setAllMembersForExport(null)
+    setPagination(prev => ({ ...prev, current: 1, lastDoc: null, lastDocs: {} }))
+    setTimeout(() => fetchMembers(1, true, next), 0)
   }
 
   const getActiveFilterCount = () => {
@@ -1224,55 +1257,55 @@ ${filterHtml}
 
             {filters.programId !== 'all' && (
               <Tag color="magenta" closable style={{ margin: 0 }}
-                onClose={() => { setFilters(p => ({ ...p, programId: 'all', ageGroupId: 'all' })); filterForm.setFieldsValue({ programId: 'all', ageGroupId: 'all' }); setTimeout(() => fetchMembers(1, true), 0) }}>
+                onClose={() => clearFilter({ programId: 'all', ageGroupId: 'all' })}>
                 Yojna: {programList?.find(p => p.id === filters.programId)?.name || filters.programId}
               </Tag>
             )}
             {filters.ageGroupId !== 'all' && (
               <Tag color="purple" closable style={{ margin: 0 }}
-                onClose={() => { setFilters(p => ({ ...p, ageGroupId: 'all' })); filterForm.setFieldValue('ageGroupId', 'all'); setTimeout(() => fetchMembers(1, true), 0) }}>
+                onClose={() => clearFilter({ ageGroupId: 'all' })}>
                 Age: {availableAgeGroups.find(g => g.id === filters.ageGroupId)?.ageGroupName || filters.ageGroupId}
               </Tag>
             )}
             {filters.agentId !== 'all' && (
               <Tag color="blue" closable style={{ margin: 0 }}
-                onClose={() => { setFilters(p => ({ ...p, agentId: 'all' })); filterForm.setFieldValue('agentId', 'all'); setTimeout(() => fetchMembers(1, true), 0) }}>
+                onClose={() => clearFilter({ agentId: 'all' })}>
                 Agent: {getAgentName(filters.agentId)}
               </Tag>
             )}
             {filters.status !== 'all' && (
               <Tag color={filters.status === 'closed' ? 'purple' : 'green'} closable style={{ margin: 0 }}
-                onClose={() => { setFilters(p => ({ ...p, status: 'all' })); filterForm.setFieldValue('status', 'all'); setTimeout(() => fetchMembers(1, true), 0) }}>
+                onClose={() => clearFilter({ status: 'all' })}>
                 Status: {filters.status === 'closed' ? 'Closed' : filters.status}
               </Tag>
             )}
             {filters.gender !== 'all' && (
               <Tag closable style={{ margin: 0 }}
-                onClose={() => { setFilters(p => ({ ...p, gender: 'all' })); filterForm.setFieldValue('gender', 'all'); setTimeout(() => fetchMembers(1, true), 0) }}>
+                onClose={() => clearFilter({ gender: 'all' })}>
                 Gender: {filters.gender}
               </Tag>
             )}
             {filters.paymentStatus !== 'all' && (
               <Tag color="orange" closable style={{ margin: 0 }}
-                onClose={() => { setFilters(p => ({ ...p, paymentStatus: 'all' })); filterForm.setFieldValue('paymentStatus', 'all'); setTimeout(() => fetchMembers(1, true), 0) }}>
+                onClose={() => clearFilter({ paymentStatus: 'all' })}>
                 Join Fees: {filters.paymentStatus}
               </Tag>
             )}
             {filters.closingPaymentStatus !== 'all' && (
               <Tag color="volcano" closable style={{ margin: 0 }}
-                onClose={() => { setFilters(p => ({ ...p, closingPaymentStatus: 'all' })); filterForm.setFieldValue('closingPaymentStatus', 'all'); setTimeout(() => fetchMembers(1, true), 0) }}>
+                onClose={() => clearFilter({ closingPaymentStatus: 'all' })}>
                 Closing: {filters.closingPaymentStatus.replace('closed', '')}
               </Tag>
             )}
             {filters.fromDate && (
               <Tag color="cyan" closable style={{ margin: 0 }}
-                onClose={() => { setFilters(p => ({ ...p, fromDate: null })); filterForm.setFieldValue('fromDate', null); setTimeout(() => fetchMembers(1, true), 0) }}>
+                onClose={() => clearFilter({ fromDate: null })}>
                 From: {formatDate(filters.fromDate)}
               </Tag>
             )}
             {filters.toDate && (
               <Tag color="cyan" closable style={{ margin: 0 }}
-                onClose={() => { setFilters(p => ({ ...p, toDate: null })); filterForm.setFieldValue('toDate', null); setTimeout(() => fetchMembers(1, true), 0) }}>
+                onClose={() => clearFilter({ toDate: null })}>
                 To: {formatDate(filters.toDate)}
               </Tag>
             )}
