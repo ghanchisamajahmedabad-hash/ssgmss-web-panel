@@ -26,8 +26,9 @@ const ApproveModal = ({ open, setOpen, selectedMember, setSelectedMember, fetchA
   const [programDetail, setProgramDetail] = useState(null)   // single object
 
   // ── Notification options (both default ON) ─────────────────────────────────
-  const [sendWhatsApp, setSendWhatsApp]         = useState(true)
-  const [sendNotification, setSendNotification] = useState(true)
+  const [sendWhatsApp, setSendWhatsApp]           = useState(true)
+  const [sendAgentWhatsApp, setSendAgentWhatsApp] = useState(true)
+  const [sendNotification, setSendNotification]   = useState(true)
 
   // ── Recalculate whenever selectedMember or programList changes ──────────────
   useEffect(() => {
@@ -266,8 +267,10 @@ const ApproveModal = ({ open, setOpen, selectedMember, setSelectedMember, fetchA
 
       // ── Generate certificate + send WhatsApp join message ──────────────────
       // Non-critical: never block approval if this fails.
-      if (sendWhatsApp && selectedMember.phone) {
-        await sendJoinCertificate(selectedMember.id)
+      // Certificate is generated whenever either recipient is being messaged,
+      // so an agent-only send still attaches the PDF.
+      if ((sendWhatsApp || sendAgentWhatsApp) && selectedMember.phone) {
+        await sendJoinCertificate(selectedMember.id, { sendToAgent: sendAgentWhatsApp })
       }
 
       // ── Notify agent (in-app push) ─────────────────────────────────────────
@@ -299,6 +302,7 @@ const ApproveModal = ({ open, setOpen, selectedMember, setSelectedMember, fetchA
     setPaidAmount(0)
     setProgramDetail(null)
     setSendWhatsApp(true)
+    setSendAgentWhatsApp(true)
     setSendNotification(true)
   }
 
@@ -549,6 +553,27 @@ const ApproveModal = ({ open, setOpen, selectedMember, setSelectedMember, fetchA
                   )}
 
                   <Checkbox
+                    checked={sendAgentWhatsApp}
+                    onChange={(e) => setSendAgentWhatsApp(e.target.checked)}
+                    disabled={loading}
+                  >
+                    <span className="text-sm">
+                      Send WhatsApp message to agent
+                      {sendAgentWhatsApp && (
+                        <span className="text-xs text-green-600 ml-2">
+                          (same details + certificate to the agent&apos;s number)
+                        </span>
+                      )}
+                    </span>
+                  </Checkbox>
+
+                  {sendAgentWhatsApp && !selectedMember?.agentId && (
+                    <div className="text-xs text-amber-600 bg-amber-50 p-2 rounded ml-6">
+                      ⚠️ This member has no agent assigned — there is no number to send the copy to.
+                    </div>
+                  )}
+
+                  <Checkbox
                     checked={sendNotification}
                     onChange={(e) => setSendNotification(e.target.checked)}
                     disabled={loading}
@@ -570,7 +595,7 @@ const ApproveModal = ({ open, setOpen, selectedMember, setSelectedMember, fetchA
                   )}
                 </div>
 
-                {!sendWhatsApp && !sendNotification && (
+                {!sendWhatsApp && !sendAgentWhatsApp && !sendNotification && (
                   <div className="mt-3 text-xs text-amber-600 bg-amber-50 p-2 rounded">
                     ⚠️ No notification method selected. Neither the member nor the agent will be informed.
                   </div>

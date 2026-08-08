@@ -140,6 +140,7 @@ export async function POST(req) {
     success:        true,
     certificate:    { generated: false, url: null, error: null },
     whatsapp:       { sent: false, destination: null, error: null, response: null },
+    agentWhatsapp:  { sent: false, destination: null, error: null, skipped: true },
   };
 
   try {
@@ -149,7 +150,13 @@ export async function POST(req) {
     if (!checkRole(['superadmin', 'admin'], authResult.user.role))
       return NextResponse.json({ success: false, message: 'Insufficient permissions' }, { status: 403 });
 
-    const { memberId, skipWhatsApp = false } = await req.json();
+    const {
+      memberId,
+      skipWhatsApp = false,   // skip both recipients (certificate only)
+      sendToMember = true,    // deliver to the member's own number
+      sendToAgent  = false,   // also deliver the same message to the agent
+    } = await req.json();
+
     if (!memberId)
       return NextResponse.json({ success: false, message: 'memberId is required' }, { status: 400 });
 
@@ -167,11 +174,16 @@ export async function POST(req) {
       if (progSnap.exists) memberProgram = { id: progSnap.id, ...progSnap.data() };
     }
 
-    // ── Load agent name for the certificate footer ──────────────────────────
-    let agentName = m.addedByName || '';
-    if (!agentName && m.agentId) {
+    // ── Load the agent: name for the certificate footer, phone for the copy ──
+    let agentName  = m.addedByName || '';
+    let agentPhone = null;
+    if (m.agentId) {
       const agentSnap = await db.collection('agents').doc(m.agentId).get();
-      if (agentSnap.exists) agentName = agentSnap.data().name || '';
+      if (agentSnap.exists) {
+        const a = agentSnap.data();
+        if (!agentName) agentName = a.name || '';
+        agentPhone = a.phone1 || a.phone || null;
+      }
     }
 
     // Shape the data exactly the way CertificateCom expects it
@@ -203,76 +215,116 @@ export async function POST(req) {
 
     // ── Send the WhatsApp template ──────────────────────────────────────────
     if (!skipWhatsApp) {
+      const programName = m.programName || memberProgram?.name || '';
+      const ageGroup    = m.ageGroupName || m.memberGroupName || m.ageGroup || '';
+
+      // App login password — same fallback used when the Firebase Auth account
+      // is created in /api/members, so what we send always matches what works.
+      const loginPassword = m.password || generatePassword(m.displayName, m.dobDate) || '';
+
+      // {{6}} carries reg no + app login password, e.g. "MEM00012024-Password:lalit2005"
+      const regNoWithPassword = loginPassword
+        ? `${m.registrationNumber || ''}-Password:${loginPassword}`
+        : (m.registrationNumber || '');
+
+      // Template body params, in order {{1}}…{{9}}.
+      // The agent receives exactly the same member details, so one set is built
+      // and reused for both recipients.
+      const params = [
+        m.displayName || '',                            // {{1}} नमस्कार <name>
+        programName,                                    // {{2}} योजना
+        m.displayName || '',                            // {{3}} सदस्य नाम
+        m.fatherName || '',                             // {{4}} पिता का नाम
+        ageGroup,                                       // {{5}} आयु वर्ग
+        regNoWithPassword,                              // {{6}} रजिस्ट्रेशन नंबर + पासवर्ड
+        programName,                                    // {{7}} योजना (भुगतान राशि)
+        String(m.payAmount || 0),                       // {{8}} भुगतान राशि
+        String(m.joinFees || 0),                        // {{9}} जुड़ने का शुल्क
+      ];
+
+      const fileName = certificateName || `${slug(m.registrationNumber || memberId)}_certificate.pdf`;
+
+      // Shared send + inbox-mirror for one recipient
+      const deliverTo = async (destination, label) => {
+        const sendRes = await sendJoinTemplate({ destination, params, certificateUrl, fileName });
+
+        console.log(`[JoinCert] WhatsApp → ${label} ${destination}: ${sendRes.ok ? 'SENT' : 'FAILED'}`, sendRes.data);
+
+        // Mirror into the inbox thread so the join message + certificate show up
+        // in the conversation alongside anything they send back.
+        if (sendRes.ok) {
+          const gsMessageId = sendRes.data?.messageId || sendRes.data?.id || null;
+          try {
+            await recordOutbound(destination, {
+              id:          gsMessageId || undefined,
+              gsMessageId,
+              type:        'document',
+              text:        label === 'agent'
+                ? `New member registered — ${m.displayName || ''} (${m.registrationNumber || ''})`
+                : `Welcome message sent — ${m.registrationNumber || ''}`,
+              mediaUrl:    certificateUrl,
+              mediaType:   'application/pdf',
+              fileName,
+              templateId:  TEMPLATE_ID,
+              status:      'sent',
+              sentBy:      authResult.user.uid,
+            });
+          } catch (recErr) {
+            console.warn('[JoinCert] Failed to mirror into inbox (non-critical):', recErr);
+          }
+        }
+        return sendRes;
+      };
+
+      // ── Member ────────────────────────────────────────────────────────────
       const destination = normalisePhone(m.phone);
       result.whatsapp.destination = destination;
 
-      if (!destination) {
+      if (!sendToMember) {
+        result.whatsapp.skipped = true;
+        console.log(`[JoinCert] Member send not requested for ${memberId}`);
+      } else if (!destination) {
         result.whatsapp.error = 'Member has no valid phone number';
-        console.warn(`[JoinCert] Skipping WhatsApp for ${memberId} — invalid phone: ${m.phone}`);
+        console.warn(`[JoinCert] Skipping member WhatsApp for ${memberId} — invalid phone: ${m.phone}`);
       } else {
-        const programName = m.programName || memberProgram?.name || '';
-        const ageGroup    = m.ageGroupName || m.memberGroupName || m.ageGroup || '';
-
-        // App login password — same fallback used when the Firebase Auth account
-        // is created in /api/members, so what we send always matches what works.
-        const loginPassword = m.password || generatePassword(m.displayName, m.dobDate) || '';
-
-        // {{6}} carries reg no + app login password, e.g. "MEM00012024-Password:lalit2005"
-        const regNoWithPassword = loginPassword
-          ? `${m.registrationNumber || ''}-Password:${loginPassword}`
-          : (m.registrationNumber || '');
-
-        // Template body params, in order {{1}}…{{9}}
-        const params = [
-          m.displayName || '',                            // {{1}} नमस्कार <name>
-          programName,                                    // {{2}} योजना
-          m.displayName || '',                            // {{3}} सदस्य नाम
-          m.fatherName || '',                             // {{4}} पिता का नाम
-          ageGroup,                                       // {{5}} आयु वर्ग
-          regNoWithPassword,                              // {{6}} रजिस्ट्रेशन नंबर + पासवर्ड
-          programName,                                    // {{7}} योजना (भुगतान राशि)
-          String(m.payAmount || 0),                       // {{8}} भुगतान राशि
-          String(m.joinFees || 0),                        // {{9}} जुड़ने का शुल्क
-        ];
-
         try {
-          const sendRes = await sendJoinTemplate({
-            destination,
-            params,
-            certificateUrl,
-            fileName: certificateName || `${slug(m.registrationNumber || memberId)}_certificate.pdf`,
-          });
-
+          const sendRes = await deliverTo(destination, 'member');
           result.whatsapp.sent     = sendRes.ok;
           result.whatsapp.response = sendRes.data;
           if (!sendRes.ok) result.whatsapp.error = sendRes.data?.message || `Gupshup error (${sendRes.status})`;
-
-          console.log(`[JoinCert] WhatsApp → ${destination}: ${sendRes.ok ? 'SENT' : 'FAILED'}`, sendRes.data);
-
-          // Mirror into the inbox thread so the join message + certificate show
-          // up in the conversation alongside anything the member sends back.
-          if (sendRes.ok) {
-            const gsMessageId = sendRes.data?.messageId || sendRes.data?.id || null;
-            try {
-              await recordOutbound(destination, {
-                id:          gsMessageId || undefined,
-                gsMessageId,
-                type:        'document',
-                text:        `Welcome message sent — ${m.registrationNumber || ''}`,
-                mediaUrl:    certificateUrl,
-                mediaType:   'application/pdf',
-                fileName:    certificateName || 'certificate.pdf',
-                templateId:  TEMPLATE_ID,
-                status:      'sent',
-                sentBy:      authResult.user.uid,
-              });
-            } catch (recErr) {
-              console.warn('[JoinCert] Failed to mirror into inbox (non-critical):', recErr);
-            }
-          }
         } catch (waErr) {
-          console.error('[JoinCert] WhatsApp send failed:', waErr);
+          console.error('[JoinCert] Member WhatsApp send failed:', waErr);
           result.whatsapp.error = waErr.message;
+        }
+      }
+
+      // ── Agent copy ────────────────────────────────────────────────────────
+      if (sendToAgent) {
+        result.agentWhatsapp.skipped = false;
+        const agentDest = normalisePhone(agentPhone);
+        result.agentWhatsapp.destination = agentDest;
+
+        if (!agentDest) {
+          result.agentWhatsapp.error = m.agentId
+            ? 'Agent has no valid phone number'
+            : 'Member has no agent assigned';
+          console.warn(`[JoinCert] Skipping agent WhatsApp — ${result.agentWhatsapp.error}`);
+        } else if (sendToMember && result.whatsapp.sent && agentDest === destination) {
+          // Agent and member share a number and the member copy already went —
+          // no point sending the identical message to the same phone twice.
+          result.agentWhatsapp.error = 'Agent shares the member\'s number — copy skipped';
+          console.log('[JoinCert] Agent number matches member, not sending twice');
+        } else {
+          try {
+            const sendRes = await deliverTo(agentDest, 'agent');
+            result.agentWhatsapp.sent = sendRes.ok;
+            if (!sendRes.ok) {
+              result.agentWhatsapp.error = sendRes.data?.message || `Gupshup error (${sendRes.status})`;
+            }
+          } catch (waErr) {
+            console.error('[JoinCert] Agent WhatsApp send failed:', waErr);
+            result.agentWhatsapp.error = waErr.message;
+          }
         }
       }
     }
@@ -289,6 +341,9 @@ export async function POST(req) {
         destination:    result.whatsapp.destination,
         certificateUrl,
         sent:           result.whatsapp.sent,
+        agentDestination: result.agentWhatsapp.destination,
+        agentSent:        result.agentWhatsapp.sent,
+        agentError:       result.agentWhatsapp.error || null,
         error:          result.whatsapp.error || result.certificate.error || null,
         sentBy:         authResult.user.uid,
         sentAt:         admin.firestore.FieldValue.serverTimestamp(),

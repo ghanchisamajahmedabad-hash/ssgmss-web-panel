@@ -74,6 +74,7 @@ const AddMember = ({ open, setOpen, programs, agents, currentUser, onSuccess }) 
 
   // ── Notification options ───────────────────────────────────────────────────
   const [sendWhatsApp, setSendWhatsApp] = useState(true)
+  const [sendAgentWhatsApp, setSendAgentWhatsApp] = useState(true)
   const [sendNotification, setSendNotification] = useState(true)
 
   // ── Load static data once ──────────────────────────────────────────────────
@@ -266,6 +267,7 @@ const AddMember = ({ open, setOpen, programs, agents, currentUser, onSuccess }) 
         currentUser, form, setOpen, setLoading,
         // Pass notification options
         sendWhatsApp,
+        sendAgentWhatsApp,
         sendNotification
       },
       message
@@ -404,11 +406,33 @@ const AddMember = ({ open, setOpen, programs, agents, currentUser, onSuccess }) 
                   disabled={loading}
                 >
                   <span className="text-sm">
-                    Send WhatsApp Message
-                    {sendWhatsApp && <span className="text-xs text-green-600 ml-2">(Will be sent to member's mobile number)</span>}
+                    Send WhatsApp Message to Member
+                    {sendWhatsApp && <span className="text-xs text-green-600 ml-2">(with membership certificate)</span>}
                   </span>
                 </Checkbox>
-                
+
+                <Checkbox
+                  checked={sendAgentWhatsApp}
+                  onChange={(e) => setSendAgentWhatsApp(e.target.checked)}
+                  disabled={loading}
+                >
+                  <span className="text-sm">
+                    Send WhatsApp Message to Agent
+                    {sendAgentWhatsApp && (
+                      <span className="text-xs text-green-600 ml-2">
+                        (same details + certificate to the agent&apos;s number)
+                      </span>
+                    )}
+                  </span>
+                </Checkbox>
+
+                {sendAgentWhatsApp && addedByRole !== 'agent' && (
+                  <div className="text-xs text-amber-600 bg-amber-50 p-2 rounded ml-6">
+                    ⚠️ This member is being added by an admin, not an agent — with no agent
+                    assigned there is no number to send the copy to.
+                  </div>
+                )}
+
                 <Checkbox
                   checked={sendNotification}
                   onChange={(e) => setSendNotification(e.target.checked)}
@@ -416,15 +440,15 @@ const AddMember = ({ open, setOpen, programs, agents, currentUser, onSuccess }) 
                 >
                   <span className="text-sm">
                     Send In-App Notification
-                    {sendNotification && <span className="text-xs text-blue-600 ml-2">(Member will receive notification in dashboard)</span>}
+                    {sendNotification && <span className="text-xs text-blue-600 ml-2">(Agent will receive notification in dashboard)</span>}
                   </span>
                 </Checkbox>
               </Space>
-              
-              {/* Optional: Show summary if both are unchecked */}
-              {!sendWhatsApp && !sendNotification && (
+
+              {/* Optional: Show summary if all are unchecked */}
+              {!sendWhatsApp && !sendAgentWhatsApp && !sendNotification && (
                 <div className="mt-3 text-xs text-amber-600 bg-amber-50 p-2 rounded">
-                  ⚠️ No notification method selected. Member will not receive any registration confirmation.
+                  ⚠️ No notification method selected. Neither the member nor the agent will be informed.
                 </div>
               )}
             </div>

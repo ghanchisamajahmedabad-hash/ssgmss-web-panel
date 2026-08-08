@@ -540,9 +540,13 @@ const styles = StyleSheet.create({
 
           {/* Member ID, Scheme Name and Date Row */}
           <View style={styles.memberInfoRow}>
-            <Text style={styles.memberIdText}>
-              सदस्य क्रमांक : <Text style={styles.memberIdValue}>{data?.registrationNumber || 'S1001511'}</Text>
-            </Text>
+       <Text style={styles.memberIdText}>
+  सदस्य क्रमांक :{" "}
+  <Text style={styles.memberIdValue}>
+    {data?.registrationNumber}
+    {data?.legacyApplicationNo && ` (${data.legacyApplicationNo})`}
+  </Text>
+</Text>
             <Text style={styles.schemeNameText}>
              {memberProgram?.name || '-'} Group - { data.ageGroupName || data.memberGroupName || data.ageGroup || '-'}
             </Text>

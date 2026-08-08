@@ -5,8 +5,9 @@ import AddMember from './components/AddMember'
 import { 
   Button, Card, Table, Space, Input, Tag, Avatar,
   Badge, Tooltip, message, Dropdown, Modal, Drawer,
-  Select, Form, DatePicker
+  Select, Form, DatePicker, Checkbox, Progress, Alert, Typography
 } from 'antd'
+import { WhatsAppOutlined } from '@ant-design/icons'
 import { 
   PlusOutlined, SearchOutlined, EyeOutlined, 
   EditOutlined, DeleteOutlined, MoreOutlined,
@@ -96,6 +97,15 @@ const Page = () => {
   const [allMembersExportLoading, setAllMembersExportLoading] = useState(false)
   const [selectedRowKeys, setSelectedRowKeys] = useState([])
   const [isCertDownloading, setIsCertDownloading] = useState(false)
+
+  // ── Send certificate on WhatsApp (existing members) ────────────────────────
+  const [waOpen,      setWaOpen]      = useState(false)
+  const [waTargets,   setWaTargets]   = useState([])     // member objects
+  const [waToMember,  setWaToMember]  = useState(true)
+  const [waToAgent,   setWaToAgent]   = useState(true)
+  const [waSending,   setWaSending]   = useState(false)
+  const [waProgress,  setWaProgress]  = useState({ current: 0, total: 0 })
+  const [waResults,   setWaResults]   = useState(null)   // array of per-member outcomes
   // Agent transfer
   const [transferOpen,    setTransferOpen]    = useState(false)
   const [transferAgentId, setTransferAgentId] = useState(null)
@@ -337,6 +347,88 @@ const isSuperAdmin = (user) => user?.role === 'superadmin';
     } finally {
       loadingMessage();
       setIsCertDownloading(false);
+    }
+  }
+
+  // ── WhatsApp certificate send — existing members ────────────────────────────
+  // Sends the exact same template + certificate that goes out when a member is
+  // first added or a request is approved.
+  const openWhatsAppSend = (members) => {
+    const list = (Array.isArray(members) ? members : [members]).filter(Boolean)
+    if (!list.length) { message.warning('No members selected'); return }
+    setWaTargets(list)
+    setWaResults(null)
+    setWaProgress({ current: 0, total: list.length })
+    setWaToMember(true)
+    setWaToAgent(true)
+    setWaOpen(true)
+  }
+
+  const openWhatsAppSendSelected = () => {
+    const selected = selectedRowKeys
+      .map(id => displayedMembers.find(m => m.id === id))
+      .filter(Boolean)
+    if (!selected.length) { message.warning('Select members first'); return }
+    openWhatsAppSend(selected)
+  }
+
+  const runWhatsAppSend = async () => {
+    if (!waToMember && !waToAgent) {
+      message.warning('Choose at least one recipient')
+      return
+    }
+    setWaSending(true)
+    setWaResults(null)
+    setWaProgress({ current: 0, total: waTargets.length })
+
+    const results = []
+    try {
+      const token = await auth.currentUser?.getIdToken()
+
+      // Sequential rather than Promise.all — each request renders a PDF and
+      // hits Gupshup, so firing 50 at once would risk rate limits and timeouts.
+      for (let i = 0; i < waTargets.length; i++) {
+        const m = waTargets[i]
+        try {
+          const res = await fetch('/api/members/join-certificate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+            body: JSON.stringify({
+              memberId:     m.id,
+              sendToMember: waToMember,
+              sendToAgent:  waToAgent,
+            }),
+          })
+          const data = await res.json()
+          results.push({
+            id:        m.id,
+            name:      m.displayName || '',
+            regNo:     m.registrationNumber || '',
+            memberSent: !!data?.whatsapp?.sent,
+            agentSent:  !!data?.agentWhatsapp?.sent,
+            certOk:     !!data?.certificate?.generated,
+            error:      data?.whatsapp?.error || data?.certificate?.error || data?.message || null,
+            agentError: data?.agentWhatsapp?.error || null,
+          })
+        } catch (err) {
+          results.push({
+            id: m.id, name: m.displayName || '', regNo: m.registrationNumber || '',
+            memberSent: false, agentSent: false, certOk: false, error: err.message,
+          })
+        }
+        setWaProgress({ current: i + 1, total: waTargets.length })
+      }
+
+      setWaResults(results)
+      const ok = results.filter(r => r.memberSent || r.agentSent).length
+      if (ok === results.length) message.success(`Sent to ${ok} member(s)`)
+      else if (ok > 0)           message.warning(`Sent ${ok} of ${results.length} — see details`)
+      else                       message.error('No messages could be sent — see details')
+    } catch (e) {
+      console.error(e)
+      message.error('Send failed: ' + e.message)
+    } finally {
+      setWaSending(false)
     }
   }
 
@@ -623,6 +715,12 @@ const handleDeleteMember = (member) => {
             label: 'Certificate',
             icon: <FileTextOutlined />,
             onClick: () => handleCertificateMember(record)
+          },
+          {
+            key: 'wa_cert',
+            label: 'Send Certificate on WhatsApp',
+            icon: <WhatsAppOutlined style={{ color: '#25D366' }} />,
+            onClick: () => openWhatsAppSend(record)
           },
           can('edit') && {
     key: 'edit',
@@ -1067,6 +1165,17 @@ ${filterHtml}
             )
             }
            
+            <Tooltip title={selectedRowKeys.length ? `Send the join certificate to ${selectedRowKeys.length} selected member(s)` : 'Select members first'}>
+              <Button
+                icon={<WhatsAppOutlined />}
+                disabled={selectedRowKeys.length === 0}
+                onClick={openWhatsAppSendSelected}
+                style={selectedRowKeys.length ? { borderColor: '#25D366', color: '#075E54' } : undefined}
+              >
+                Send WhatsApp{selectedRowKeys.length ? ` (${selectedRowKeys.length})` : ''}
+              </Button>
+            </Tooltip>
+
             <Tooltip title={selectedRowKeys.length ? `Transfer ${selectedRowKeys.length} selected member(s) to another agent` : 'Select members first'}>
               <Button
                 icon={<UserSwitchOutlined />}
@@ -1109,6 +1218,161 @@ ${filterHtml}
           sticky size="small" rowClassName="text-xs"
         />
       </Card>
+
+      {/* ── Send Certificate on WhatsApp Drawer ───────────────────────────── */}
+      <Drawer
+        title={
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <WhatsAppOutlined style={{ color: '#25D366', fontSize: 20 }} />
+            <div>
+              <div style={{ fontWeight: 700, fontSize: 15 }}>Send Certificate on WhatsApp</div>
+              <div style={{ fontSize: 11, color: '#888', fontWeight: 400 }}>
+                Same message that goes out when a member is added or approved
+              </div>
+            </div>
+          </div>
+        }
+        placement="right"
+        width={520}
+        open={waOpen}
+        onClose={() => { if (!waSending) setWaOpen(false) }}
+        maskClosable={!waSending}
+        extra={
+          !waResults ? (
+            <div style={{ display: 'flex', gap: 8 }}>
+              <Button onClick={() => setWaOpen(false)} disabled={waSending}>Cancel</Button>
+              <Button
+                type="primary"
+                icon={<WhatsAppOutlined />}
+                loading={waSending}
+                disabled={!waToMember && !waToAgent}
+                onClick={runWhatsAppSend}
+                style={{ background: '#25D366', borderColor: '#25D366' }}
+              >
+                Send{waTargets.length > 1 ? ` (${waTargets.length})` : ''}
+              </Button>
+            </div>
+          ) : (
+            <Button onClick={() => setWaOpen(false)}>Close</Button>
+          )
+        }
+      >
+        {/* Recipients */}
+        {!waResults && (
+          <>
+            <Alert
+              type="info"
+              showIcon
+              style={{ marginBottom: 14, fontSize: 12 }}
+              message="A fresh certificate is generated for each member"
+              description="The PDF is regenerated from current member data, saved to their record, and attached to the message."
+            />
+
+            <div style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: 12, marginBottom: 14 }}>
+              <div style={{ fontWeight: 600, marginBottom: 10, fontSize: 13 }}>Send to</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <Checkbox checked={waToMember} onChange={e => setWaToMember(e.target.checked)} disabled={waSending}>
+                  <span style={{ fontSize: 13 }}>
+                    Member&apos;s own number
+                    {waToMember && <span style={{ fontSize: 11, color: '#16a34a', marginLeft: 6 }}>(with certificate)</span>}
+                  </span>
+                </Checkbox>
+                <Checkbox checked={waToAgent} onChange={e => setWaToAgent(e.target.checked)} disabled={waSending}>
+                  <span style={{ fontSize: 13 }}>
+                    Their agent&apos;s number
+                    {waToAgent && <span style={{ fontSize: 11, color: '#16a34a', marginLeft: 6 }}>(same details + certificate)</span>}
+                  </span>
+                </Checkbox>
+              </div>
+              {!waToMember && !waToAgent && (
+                <div style={{ marginTop: 10, fontSize: 11, color: '#d97706', background: '#fffbeb', padding: 8, borderRadius: 4 }}>
+                  ⚠️ Choose at least one recipient.
+                </div>
+              )}
+            </div>
+
+            {/* Target list */}
+            <div style={{ fontWeight: 600, marginBottom: 8, fontSize: 13 }}>
+              {waTargets.length} member{waTargets.length === 1 ? '' : 's'}
+            </div>
+            <div style={{ maxHeight: 300, overflowY: 'auto', border: '1px solid #f0f0f0', borderRadius: 8 }}>
+              {waTargets.map(m => (
+                <div key={m.id} style={{
+                  display: 'flex', alignItems: 'center', gap: 8,
+                  padding: '8px 10px', borderBottom: '1px solid #f5f5f5',
+                }}>
+                  <Avatar src={m.photoURL || undefined} size={30}>{(m.displayName || '?')[0]}</Avatar>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 12, fontWeight: 600 }}>{m.displayName || '—'}</div>
+                    <div style={{ fontSize: 10.5, color: '#888', fontFamily: 'monospace' }}>
+                      {m.registrationNumber || '—'}
+                    </div>
+                  </div>
+                  {m.phone
+                    ? <Tag style={{ fontSize: 10, margin: 0 }}>{m.phone}</Tag>
+                    : <Tag color="error" style={{ fontSize: 10, margin: 0 }}>No phone</Tag>}
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+
+        {/* Progress */}
+        {waSending && (
+          <div style={{ marginTop: 16 }}>
+            <Progress
+              percent={waProgress.total ? Math.round((waProgress.current / waProgress.total) * 100) : 0}
+              status="active"
+              strokeColor="#25D366"
+            />
+            <div style={{ fontSize: 12, color: '#888', textAlign: 'center' }}>
+              Sending {waProgress.current} of {waProgress.total}…
+            </div>
+          </div>
+        )}
+
+        {/* Results */}
+        {waResults && (
+          <>
+            <Alert
+              type={waResults.every(r => r.memberSent || r.agentSent) ? 'success' : 'warning'}
+              showIcon
+              style={{ marginBottom: 12 }}
+              message={`${waResults.filter(r => r.memberSent || r.agentSent).length} of ${waResults.length} sent`}
+            />
+            <div style={{ maxHeight: 420, overflowY: 'auto' }}>
+              {waResults.map(r => (
+                <div key={r.id} style={{
+                  padding: '8px 10px', borderBottom: '1px solid #f5f5f5', fontSize: 12,
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                    <span style={{ fontWeight: 600 }}>{r.name}</span>
+                    <span style={{ fontFamily: 'monospace', fontSize: 10.5, color: '#db2777' }}>{r.regNo}</span>
+                  </div>
+                  <div style={{ display: 'flex', gap: 6, marginTop: 4, flexWrap: 'wrap' }}>
+                    {waToMember && (
+                      <Tag color={r.memberSent ? 'success' : 'error'} style={{ fontSize: 10, margin: 0 }}>
+                        Member {r.memberSent ? 'sent' : 'failed'}
+                      </Tag>
+                    )}
+                    {waToAgent && (
+                      <Tag color={r.agentSent ? 'success' : 'default'} style={{ fontSize: 10, margin: 0 }}>
+                        Agent {r.agentSent ? 'sent' : 'skipped'}
+                      </Tag>
+                    )}
+                    {r.certOk && <Tag color="blue" style={{ fontSize: 10, margin: 0 }}>Certificate ✓</Tag>}
+                  </div>
+                  {(r.error || r.agentError) && (
+                    <div style={{ fontSize: 10.5, color: '#dc2626', marginTop: 3 }}>
+                      {r.error || r.agentError}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+      </Drawer>
 
       {/* ── Agent Transfer Drawer ─────────────────────────────────────────── */}
       <Drawer

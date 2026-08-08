@@ -336,7 +336,7 @@ export const recordJoinFeeTransaction = async (memberData, paymentData) => {
 // Deliberately non-throwing — a WhatsApp/PDF failure must never roll back or
 // block member creation / request approval.  Returns the API result or null.
 // ─────────────────────────────────────────────────────────────────────────────
-export const sendJoinCertificate = async (memberId) => {
+export const sendJoinCertificate = async (memberId, { sendToAgent = false } = {}) => {
   if (!memberId) return null
   try {
     const currentUser = auth.currentUser
@@ -346,14 +346,21 @@ export const sendJoinCertificate = async (memberId) => {
     const res  = await fetch('/api/members/join-certificate', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json', 'authorization': `Bearer ${token}` },
-      body:    JSON.stringify({ memberId }),
+      body:    JSON.stringify({ memberId, sendToAgent }),
     })
     const data = await res.json()
 
     if (data?.whatsapp?.sent) {
-      console.log(`✅ Join certificate sent on WhatsApp to ${data.whatsapp.destination}`)
+      console.log(`✅ Join certificate sent on WhatsApp to member ${data.whatsapp.destination}`)
     } else {
-      console.warn('⚠️ Join certificate WhatsApp not sent:', data?.whatsapp?.error || data?.message)
+      console.warn('⚠️ Member WhatsApp not sent:', data?.whatsapp?.error || data?.message)
+    }
+    if (sendToAgent) {
+      if (data?.agentWhatsapp?.sent) {
+        console.log(`✅ Copy sent to agent ${data.agentWhatsapp.destination}`)
+      } else {
+        console.warn('⚠️ Agent WhatsApp not sent:', data?.agentWhatsapp?.error)
+      }
     }
     if (data?.certificate?.generated) {
       console.log(`📄 Certificate saved: ${data.certificate.url}`)
@@ -449,6 +456,7 @@ export const handleSubmit = async (values, context, message) => {
     setOpen,
     setLoading,
     sendWhatsApp,
+    sendAgentWhatsApp,
     sendNotification,
   } = context
 
@@ -678,8 +686,10 @@ export const handleSubmit = async (values, context, message) => {
 
     // ── Generate certificate + send WhatsApp join message ─────────────────────
     // Non-critical: never block or fail member creation if this errors.
-    if (sendWhatsApp !== false && values.phone) {
-      await sendJoinCertificate(memberId)
+    // The certificate is generated whenever either recipient is being messaged,
+    // so an agent-only send still attaches the PDF.
+    if ((sendWhatsApp !== false || sendAgentWhatsApp) && values.phone) {
+      await sendJoinCertificate(memberId, { sendToAgent: sendAgentWhatsApp !== false })
     }
 
     // ── Notify agent (in-app push) — only if the checkbox was left checked ────
