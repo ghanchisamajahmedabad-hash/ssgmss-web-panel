@@ -123,7 +123,7 @@ const Page = () => {
   })
 
   const [filters, setFilters] = useState({
-    search: '', programId: 'all', agentId: 'all',
+    search: '', programId: 'all', ageGroupId: 'all', agentId: 'all',
     status: 'all', paymentStatus: 'all',
     closingPaymentStatus: 'all', gender: 'all',
     fromDate: null, toDate: null,
@@ -224,7 +224,26 @@ const isSuperAdmin = (user) => user?.role === 'superadmin';
   // Clear export cache whenever filters change so downloads always use fresh data
   useEffect(() => { setAllMembersForExport(null) }, [filters])
 
-  const handleFilterChange = (changedValues) => setFilters(prev => ({ ...prev, ...changedValues }))
+  const handleFilterChange = (changedValues) => {
+    setFilters(prev => {
+      const next = { ...prev, ...changedValues }
+      // Age groups are scoped to a program — switching programs invalidates any
+      // previously chosen group, so clear it rather than filtering on an id that
+      // belongs to a different yojna (which would return zero rows).
+      if ('programId' in changedValues) {
+        next.ageGroupId = 'all'
+        filterForm.setFieldValue('ageGroupId', 'all')
+      }
+      return next
+    })
+  }
+
+  // Age groups available for the currently selected program
+  const availableAgeGroups = useMemo(() => {
+    if (!filters.programId || filters.programId === 'all') return []
+    const prog = programList?.find(p => p.id === filters.programId)
+    return prog?.ageGroups || []
+  }, [filters.programId, programList])
 
   const applyFilters = () => {
     setFilterModalVisible(false)
@@ -234,7 +253,7 @@ const isSuperAdmin = (user) => user?.role === 'superadmin';
   }
 
   const resetFilters = () => {
-    const reset = { programId: 'all', agentId: 'all', status: 'all', paymentStatus: 'all', closingPaymentStatus: 'all', gender: 'all', fromDate: null, toDate: null, sortField: 'createdAt', sortOrder: 'desc' }
+    const reset = { programId: 'all', ageGroupId: 'all', agentId: 'all', status: 'all', paymentStatus: 'all', closingPaymentStatus: 'all', gender: 'all', fromDate: null, toDate: null, sortField: 'createdAt', sortOrder: 'desc' }
     setFilters(prev => ({ ...prev, ...reset }))
     filterForm.resetFields()
     setSearchMode('paginated'); setSearchResults([])
@@ -245,6 +264,7 @@ const isSuperAdmin = (user) => user?.role === 'superadmin';
   const getActiveFilterCount = () => {
     let c = 0
     if (filters.programId            !== 'all') c++
+    if (filters.ageGroupId           !== 'all') c++
     if (filters.agentId              !== 'all') c++
     if (filters.status               !== 'all') c++
     if (filters.paymentStatus        !== 'all') c++
@@ -765,22 +785,49 @@ const handleDeleteMember = (member) => {
 
   const exportToCSV = (data) => {
     const list = data || displayedMembers
+
+    // Quote every text field: names and villages routinely contain commas, which
+    // would otherwise split one value across several columns.
+    const q = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`
+    // Long digit strings (phone, Aadhaar) become 9.87E+09 if Excel treats them as
+    // numbers. The ="…" form pins them as text.
+    const num = (v) => (v ? `="${String(v).replace(/["=]/g, '')}"` : '""')
+
     const headers = ['Registration No','Name','Father Name','Phone','Aadhaar','Village','City','Program','Age Group','Join Date','Status','Payment %','Paid Amount','Pending Amount','Agent Name']
+
     const rows = list.map(m => [
-      m.registrationNumber, m.displayName, m.fatherName, m.phone, m.aadhaarNo,
-      m.village, m.city,
-      m.programName || (programList?.find(p => p.id === m.programId)?.name || ''),
-      m.ageGroupName || m.memberGroupName || m.ageGroup || '',
-      m.dateJoin,
-      m.active_flag ? 'Active' : 'Inactive',
-      m.paymentPercentage || 0, m.paidAmount || 0, m.pendingAmount || 0,
-      getAgentName(m.agentId)
+      q(m.registrationNumber),
+      q(m.displayName),
+      q(m.fatherName),
+      num(m.phone),
+      num(m.aadhaarNo),
+      q(m.village),
+      q(m.city),
+      q(m.programName || (programList?.find(p => p.id === m.programId)?.name || '')),
+      q(m.ageGroupName || m.memberGroupName || m.ageGroup || ''),
+      q(m.dateJoin),
+      q(m.active_flag ? 'Active' : 'Inactive'),
+      m.paymentPercentage || 0,
+      m.paidAmount || 0,
+      Math.max(0, (m.joinFees || 0) - (m.paidAmount || 0)),
+      q(getAgentName(m.agentId)),
     ])
-    const csv  = [headers, ...rows].map(r => r.join(',')).join('\n')
-    const blob = new Blob([csv], { type: 'text/csv' })
-    const url  = window.URL.createObjectURL(blob)
-    const a    = document.createElement('a')
-    a.href = url; a.download = `members_${dayjs().format('YYYY-MM-DD')}.csv`; a.click()
+
+    const csv = [headers.map(q).join(','), ...rows.map(r => r.join(','))].join('\r\n')
+
+    // Hindi text needs a real UTF-8 BOM. Writing the string '﻿' into a Blob
+    // is unreliable — encode explicitly and prepend the BOM bytes so Excel can't
+    // fall back to Latin-1 (which is what turns मोहनलाल into à¤®à¥‹à¤¹à¤¨...).
+    const bom     = new Uint8Array([0xEF, 0xBB, 0xBF])
+    const encoded = new TextEncoder().encode(csv)
+    const blob    = new Blob([bom, encoded], { type: 'text/csv;charset=utf-8;' })
+
+    const url = window.URL.createObjectURL(blob)
+    const a   = document.createElement('a')
+    a.href = url
+    a.download = `members_${dayjs().format('YYYY-MM-DD')}.csv`
+    a.click()
+    window.URL.revokeObjectURL(url)
   }
 
   const fetchAllMembersForExport = async () => {
@@ -789,6 +836,7 @@ const handleDeleteMember = (member) => {
       let q = collection(db, 'members')
       const constraints = []
       if (filters.programId !== 'all') constraints.push(where('programId', '==', filters.programId))
+      if (filters.ageGroupId && filters.ageGroupId !== 'all') constraints.push(where('ageGroupId', '==', filters.ageGroupId))
       if (filters.status === 'active') constraints.push(where('active_flag', '==', true))
       else if (filters.status === 'inactive') constraints.push(where('active_flag', '==', false))
       else if (filters.status === 'closed') constraints.push(where('member_closed', '==', true))
@@ -836,6 +884,7 @@ const handleDeleteMember = (member) => {
         where("status",      "==", "active")
       ]
       if (filters.programId !== 'all') constraints.push(where('programId', '==', filters.programId))
+      if (filters.ageGroupId && filters.ageGroupId !== 'all') constraints.push(where('ageGroupId', '==', filters.ageGroupId))
       if (filters.status === 'active') constraints.push(where('active_flag', '==', true))
       else if (filters.status === 'inactive') constraints.push(where('active_flag', '==', false))
       else if (filters.status === 'closed') constraints.push(where('member_closed', '==', true))
@@ -1062,62 +1111,30 @@ ${filterHtml}
           }
         </div>
 
-        {/* Search + Filter bar */}
-        <div className="flex justify-between items-center mb-4">
-          <div className="flex gap-2 items-center">
+        {/* ── Search + Actions bar ──────────────────────────────────────────
+            Filter chips live on their own row below. Keeping them inline here
+            meant a growing chip list squeezed the action buttons until they
+            overlapped. */}
+        <div className="flex flex-wrap justify-between items-center gap-3 mb-3">
+          <div className="flex gap-2 items-center flex-1" style={{ minWidth: 240 }}>
             <Search
               placeholder="Search by name, reg no, phone, aadhaar, village..."
               prefix={<SearchOutlined />}
-              style={{ width: 450 }}
+              style={{ flex: 1, maxWidth: 450, minWidth: 200 }}
               onChange={handleSearchChange}
               value={filters.search}
               allowClear loading={searchLoading}
             />
             {searchMode === 'search' && (
-              <Tag color="blue" className="text-xs">Search Mode — {searchResults.length} results</Tag>
+              <Tag color="blue" className="text-xs whitespace-nowrap">
+                Search Mode — {searchResults.length} results
+              </Tag>
             )}
           </div>
 
-          <div className="flex gap-2">
-            {/* Active filter tags */}
-            <div className="flex gap-1 items-center flex-wrap">
-              {filters.programId !== 'all' && (
-                <Tag color="blue" closable onClose={() => { setFilters(p => ({...p, programId:'all'})); setTimeout(() => fetchMembers(1,true), 0) }}>
-                  Yojna: {programList?.find(p => p.id === filters.programId)?.name || filters.programId}
-                </Tag>
-              )}
-              {filters.agentId !== 'all' && (
-                <Tag color="purple" closable onClose={() => { setFilters(p => ({...p, agentId:'all'})); setTimeout(() => fetchMembers(1,true), 0) }}>
-                  Agent: {getAgentName(filters.agentId)}
-                </Tag>
-              )}
-              {filters.status !== 'all' && (
-                <Tag color={filters.status === 'closed' ? 'purple' : 'green'} closable onClose={() => { setFilters(p => ({...p, status:'all'})); setTimeout(() => fetchMembers(1,true), 0) }}>
-                  Status: {filters.status === 'closed' ? 'Closed' : filters.status}
-                </Tag>
-              )}
-              {filters.paymentStatus !== 'all' && (
-                <Tag color="orange" closable onClose={() => { setFilters(p => ({...p, paymentStatus:'all'})); setTimeout(() => fetchMembers(1,true), 0) }}>
-                  Join Fees: {filters.paymentStatus}
-                </Tag>
-              )}
-              {filters.closingPaymentStatus !== 'all' && (
-                <Tag color="purple" closable onClose={() => { setFilters(p => ({...p, closingPaymentStatus:'all'})); setTimeout(() => fetchMembers(1,true), 0) }}>
-                  Closing: {filters.closingPaymentStatus.replace('closed', '')}
-                </Tag>
-              )}
-              {filters.fromDate && (
-                <Tag color="purple" closable onClose={() => { setFilters(p => ({...p, fromDate:null})); setTimeout(() => fetchMembers(1,true), 0) }}>
-                  From: {formatDate(filters.fromDate)}
-                </Tag>
-              )}
-              {filters.toDate && (
-                <Tag color="cyan" closable onClose={() => { setFilters(p => ({...p, toDate:null})); setTimeout(() => fetchMembers(1,true), 0) }}>
-                  To: {formatDate(filters.toDate)}
-                </Tag>
-              )}
-            </div>
-
+          {/* shrink-0 keeps the buttons at their natural size instead of
+              collapsing when the search field grows */}
+          <div className="flex gap-2 flex-wrap shrink-0">
             <Button icon={<FilterOutlined />} onClick={() => setFilterModalVisible(true)}>
               Filters {getActiveFilterCount() > 0 && `(${getActiveFilterCount()})`}
             </Button>
@@ -1194,6 +1211,78 @@ ${filterHtml}
             </Tooltip>
           </div>
         </div>
+
+        {/* ── Active filter chips ───────────────────────────────────────────
+            Own row so the list can grow without disturbing the toolbar */}
+        {getActiveFilterCount() > 0 && (
+          <div className="flex flex-wrap items-center gap-1.5 mb-3 px-3 py-2 rounded-lg"
+               style={{ background: '#fdf2f8', border: '1px solid #fce7f3' }}>
+            <span className="text-xs font-semibold shrink-0" style={{ color: '#9d174d' }}>
+              <FilterOutlined className="mr-1" />
+              {getActiveFilterCount()} active:
+            </span>
+
+            {filters.programId !== 'all' && (
+              <Tag color="magenta" closable style={{ margin: 0 }}
+                onClose={() => { setFilters(p => ({ ...p, programId: 'all', ageGroupId: 'all' })); filterForm.setFieldsValue({ programId: 'all', ageGroupId: 'all' }); setTimeout(() => fetchMembers(1, true), 0) }}>
+                Yojna: {programList?.find(p => p.id === filters.programId)?.name || filters.programId}
+              </Tag>
+            )}
+            {filters.ageGroupId !== 'all' && (
+              <Tag color="purple" closable style={{ margin: 0 }}
+                onClose={() => { setFilters(p => ({ ...p, ageGroupId: 'all' })); filterForm.setFieldValue('ageGroupId', 'all'); setTimeout(() => fetchMembers(1, true), 0) }}>
+                Age: {availableAgeGroups.find(g => g.id === filters.ageGroupId)?.ageGroupName || filters.ageGroupId}
+              </Tag>
+            )}
+            {filters.agentId !== 'all' && (
+              <Tag color="blue" closable style={{ margin: 0 }}
+                onClose={() => { setFilters(p => ({ ...p, agentId: 'all' })); filterForm.setFieldValue('agentId', 'all'); setTimeout(() => fetchMembers(1, true), 0) }}>
+                Agent: {getAgentName(filters.agentId)}
+              </Tag>
+            )}
+            {filters.status !== 'all' && (
+              <Tag color={filters.status === 'closed' ? 'purple' : 'green'} closable style={{ margin: 0 }}
+                onClose={() => { setFilters(p => ({ ...p, status: 'all' })); filterForm.setFieldValue('status', 'all'); setTimeout(() => fetchMembers(1, true), 0) }}>
+                Status: {filters.status === 'closed' ? 'Closed' : filters.status}
+              </Tag>
+            )}
+            {filters.gender !== 'all' && (
+              <Tag closable style={{ margin: 0 }}
+                onClose={() => { setFilters(p => ({ ...p, gender: 'all' })); filterForm.setFieldValue('gender', 'all'); setTimeout(() => fetchMembers(1, true), 0) }}>
+                Gender: {filters.gender}
+              </Tag>
+            )}
+            {filters.paymentStatus !== 'all' && (
+              <Tag color="orange" closable style={{ margin: 0 }}
+                onClose={() => { setFilters(p => ({ ...p, paymentStatus: 'all' })); filterForm.setFieldValue('paymentStatus', 'all'); setTimeout(() => fetchMembers(1, true), 0) }}>
+                Join Fees: {filters.paymentStatus}
+              </Tag>
+            )}
+            {filters.closingPaymentStatus !== 'all' && (
+              <Tag color="volcano" closable style={{ margin: 0 }}
+                onClose={() => { setFilters(p => ({ ...p, closingPaymentStatus: 'all' })); filterForm.setFieldValue('closingPaymentStatus', 'all'); setTimeout(() => fetchMembers(1, true), 0) }}>
+                Closing: {filters.closingPaymentStatus.replace('closed', '')}
+              </Tag>
+            )}
+            {filters.fromDate && (
+              <Tag color="cyan" closable style={{ margin: 0 }}
+                onClose={() => { setFilters(p => ({ ...p, fromDate: null })); filterForm.setFieldValue('fromDate', null); setTimeout(() => fetchMembers(1, true), 0) }}>
+                From: {formatDate(filters.fromDate)}
+              </Tag>
+            )}
+            {filters.toDate && (
+              <Tag color="cyan" closable style={{ margin: 0 }}
+                onClose={() => { setFilters(p => ({ ...p, toDate: null })); filterForm.setFieldValue('toDate', null); setTimeout(() => fetchMembers(1, true), 0) }}>
+                To: {formatDate(filters.toDate)}
+              </Tag>
+            )}
+
+            <Button type="link" size="small" onClick={resetFilters}
+              className="ml-auto shrink-0" style={{ fontSize: 12, height: 22, padding: '0 4px' }}>
+              Clear all
+            </Button>
+          </div>
+        )}
 
         <Table
           columns={columns}
@@ -1548,91 +1637,193 @@ ${filterHtml}
         )}
       </Drawer>
 
-      {/* Filter Modal */}
-      <Modal
-        title={<span><FilterOutlined className="mr-2" />Advanced Filters</span>}
+      {/* ── Advanced Filters Drawer ───────────────────────────────────────── */}
+      <Drawer
+        title={
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <FilterOutlined style={{ color: '#db2777', fontSize: 18 }} />
+            <div>
+              <div style={{ fontWeight: 700, fontSize: 15 }}>Advanced Filters</div>
+              <div style={{ fontSize: 11, color: '#888', fontWeight: 400 }}>
+                {getActiveFilterCount() > 0
+                  ? `${getActiveFilterCount()} filter${getActiveFilterCount() === 1 ? '' : 's'} active`
+                  : 'No filters applied'}
+              </div>
+            </div>
+          </div>
+        }
+        placement="right"
+        width={460}
         open={filterModalVisible}
-        onCancel={() => setFilterModalVisible(false)}
-        footer={[
-          <Button key="cancel" onClick={() => setFilterModalVisible(false)}>Cancel</Button>,
-          <Button key="reset"  onClick={resetFilters}>Reset</Button>,
-          <Button key="apply"  type="primary" onClick={applyFilters}>Apply Filters</Button>,
-        ]}
-        width={600}
+        onClose={() => setFilterModalVisible(false)}
+        styles={{
+          header: { borderBottom: '1px solid #e5e7eb', padding: '16px 20px' },
+          body:   { padding: '16px 20px', background: '#fafafa' },
+          footer: { padding: '12px 20px', borderTop: '1px solid #e5e7eb' },
+        }}
+        // Apply pinned to the footer so it's reachable without scrolling
+        footer={
+          <div style={{ display: 'flex', gap: 8 }}>
+            <Button onClick={resetFilters} disabled={getActiveFilterCount() === 0} style={{ flex: 1 }}>
+              Reset
+            </Button>
+            <Button type="primary" onClick={applyFilters} style={{ flex: 2 }}>
+              Apply Filters
+              {getActiveFilterCount() > 0 ? ` (${getActiveFilterCount()})` : ''}
+            </Button>
+          </div>
+        }
       >
         <Form form={filterForm} layout="vertical" onValuesChange={handleFilterChange} initialValues={filters}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-            {/* Program — single select */}
-            <Form.Item label="Yojna" name="programId">
-              <Select placeholder="Select Yojna" showSearch optionFilterProp="children">
+
+          {/* ── Yojna & Age Group ──────────────────────────────────────────── */}
+          <div style={{ background: '#fff', border: '1px solid #eee', borderRadius: 10, padding: 14, marginBottom: 12 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: '#374151', marginBottom: 10 }}>
+              YOJNA
+            </div>
+
+            <Form.Item label="Yojna" name="programId" style={{ marginBottom: 12 }}>
+              <Select placeholder="All Yojna" showSearch optionFilterProp="children">
                 <Option value="all">All Yojna</Option>
                 {programList?.map(p => <Option key={p.id} value={p.id}>{p.name}</Option>)}
               </Select>
             </Form.Item>
 
-            <Form.Item label="Agent" name="agentId">
-              <Select placeholder="Select Agent" showSearch optionFilterProp="children">
+            {/* Age groups are defined per yojna, so this stays locked until one is chosen */}
+            <Form.Item label="Age Group" name="ageGroupId" style={{ marginBottom: 0 }}>
+              <Select
+                placeholder={filters.programId === 'all' ? 'Select a Yojna first' : 'All Age Groups'}
+                disabled={filters.programId === 'all'}
+                showSearch
+                optionFilterProp="children"
+              >
+                <Option value="all">All Age Groups</Option>
+                {availableAgeGroups.map(g => (
+                  <Option key={g.id} value={g.id}>
+                    {g.ageGroupName || `${g.startAge}-${g.endAge}`}
+                    {g.startAge != null && g.endAge != null ? ` (${g.startAge}–${g.endAge} yrs)` : ''}
+                  </Option>
+                ))}
+              </Select>
+            </Form.Item>
+
+            {filters.programId === 'all' && (
+              <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 6 }}>
+                Age groups are defined per yojna — pick one to filter by group.
+              </div>
+            )}
+          </div>
+
+          {/* ── People ─────────────────────────────────────────────────────── */}
+          <div style={{ background: '#fff', border: '1px solid #eee', borderRadius: 10, padding: 14, marginBottom: 12 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: '#374151', marginBottom: 10 }}>
+              PEOPLE
+            </div>
+
+            <Form.Item label="Agent" name="agentId" style={{ marginBottom: 12 }}>
+              <Select placeholder="All Agents" showSearch optionFilterProp="children">
                 <Option value="all">All Agents</Option>
                 {agentList?.map(a => <Option key={a.id} value={a.id}>{a.name} ({a.phone1 || 'No phone'})</Option>)}
               </Select>
             </Form.Item>
 
-            <Form.Item label="Status" name="status">
-              <Select placeholder="Select Status">
-                <Option value="all">All Status</Option>
-                <Option value="active">Active</Option>
-                <Option value="inactive">Inactive</Option>
-                <Option value="closed">Closed (Marriage)</Option>
-              </Select>
-            </Form.Item>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+              <Form.Item label="Status" name="status" style={{ marginBottom: 0 }}>
+                <Select placeholder="All">
+                  <Option value="all">All Status</Option>
+                  <Option value="active">Active</Option>
+                  <Option value="inactive">Inactive</Option>
+                  <Option value="closed">Closed (Marriage)</Option>
+                </Select>
+              </Form.Item>
 
-            <Form.Item label="Join Fees" name="paymentStatus">
-              <Select placeholder="Select Join Fees Payment">
-                <Option value="all">All</Option>
-                <Option value="paid">Paid</Option>
-                <Option value="partial">Partial</Option>
-                <Option value="pending">Pending</Option>
-              </Select>
-            </Form.Item>
-
-            <Form.Item label="Closing Payment" name="closingPaymentStatus">
-              <Select placeholder="Select Closing Payment">
-                <Option value="all">All</Option>
-                <Option value="closedPaid">Paid</Option>
-                <Option value="closedPending">Pending</Option>
-                <Option value="closedPartial">Partial</Option>
-              </Select>
-            </Form.Item>
-
-            <Form.Item label="Gender" name="gender">
-              <Select placeholder="Select Gender">
-                <Option value="all">All</Option>
-                <Option value="male">♂ Male</Option>
-                <Option value="female">♀ Female</Option>
-                <Option value="other">Other</Option>
-              </Select>
-            </Form.Item>
-
-            <Form.Item label="From Date" name="fromDate">
-              <DatePicker format="DD-MM-YYYY" style={{ width: '100%' }} />
-            </Form.Item>
-
-            <Form.Item label="To Date" name="toDate">
-              <DatePicker format="DD-MM-YYYY" style={{ width: '100%' }} />
-            </Form.Item>
+              <Form.Item label="Gender" name="gender" style={{ marginBottom: 0 }}>
+                <Select placeholder="All">
+                  <Option value="all">All</Option>
+                  <Option value="male">♂ Male</Option>
+                  <Option value="female">♀ Female</Option>
+                  <Option value="other">Other</Option>
+                </Select>
+              </Form.Item>
+            </div>
           </div>
 
-          <div className="text-xs text-gray-500 mt-2 p-3 bg-gray-50 rounded">
-            <div className="font-medium mb-1">Active Filters:</div>
-            <div>• Yojna: {filters.programId === 'all' ? 'All' : (programList?.find(p => p.id === filters.programId)?.name || filters.programId)}</div>
-            <div>• Agent: {filters.agentId === 'all' ? 'All' : getAgentName(filters.agentId)}</div>
-            <div>• Status: {filters.status === 'all' ? 'All' : filters.status}</div>
-            <div>• Payment: {filters.paymentStatus === 'all' ? 'All' : filters.paymentStatus}</div>
-            <div>• Gender: {filters.gender === 'all' ? 'All' : filters.gender}</div>
-            <div>• Dates: {filters.fromDate ? formatDate(filters.fromDate) : 'Any'} → {filters.toDate ? formatDate(filters.toDate) : 'Any'}</div>
+          {/* ── Payments ───────────────────────────────────────────────────── */}
+          <div style={{ background: '#fff', border: '1px solid #eee', borderRadius: 10, padding: 14, marginBottom: 12 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: '#374151', marginBottom: 10 }}>
+              PAYMENTS
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+              <Form.Item label="Join Fees" name="paymentStatus" style={{ marginBottom: 0 }}>
+                <Select placeholder="All">
+                  <Option value="all">All</Option>
+                  <Option value="paid">Paid</Option>
+                  <Option value="partial">Partial</Option>
+                  <Option value="pending">Pending</Option>
+                </Select>
+              </Form.Item>
+
+              <Form.Item label="Closing Payment" name="closingPaymentStatus" style={{ marginBottom: 0 }}>
+                <Select placeholder="All">
+                  <Option value="all">All</Option>
+                  <Option value="closedPaid">Paid</Option>
+                  <Option value="closedPending">Pending</Option>
+                  <Option value="closedPartial">Partial</Option>
+                </Select>
+              </Form.Item>
+            </div>
           </div>
+
+          {/* ── Join Date ──────────────────────────────────────────────────── */}
+          <div style={{ background: '#fff', border: '1px solid #eee', borderRadius: 10, padding: 14, marginBottom: 12 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: '#374151', marginBottom: 10 }}>
+              JOIN DATE
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+              <Form.Item label="From" name="fromDate" style={{ marginBottom: 0 }}>
+                <DatePicker format="DD-MM-YYYY" style={{ width: '100%' }} placeholder="Any" />
+              </Form.Item>
+              <Form.Item label="To" name="toDate" style={{ marginBottom: 0 }}>
+                <DatePicker format="DD-MM-YYYY" style={{ width: '100%' }} placeholder="Any" />
+              </Form.Item>
+            </div>
+          </div>
+
+          {/* ── Active filter chips ────────────────────────────────────────── */}
+          {getActiveFilterCount() > 0 && (
+            <div style={{ background: '#fff', border: '1px solid #eee', borderRadius: 10, padding: 14 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: '#374151', marginBottom: 10 }}>
+                ACTIVE FILTERS
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                {filters.programId !== 'all' && (
+                  <Tag color="magenta" style={{ margin: 0 }}>
+                    {programList?.find(p => p.id === filters.programId)?.name || filters.programId}
+                  </Tag>
+                )}
+                {filters.ageGroupId !== 'all' && (
+                  <Tag color="purple" style={{ margin: 0 }}>
+                    {availableAgeGroups.find(g => g.id === filters.ageGroupId)?.ageGroupName || 'Age group'}
+                  </Tag>
+                )}
+                {filters.agentId !== 'all' && (
+                  <Tag color="blue" style={{ margin: 0 }}>{getAgentName(filters.agentId)}</Tag>
+                )}
+                {filters.status !== 'all'               && <Tag style={{ margin: 0 }}>{filters.status}</Tag>}
+                {filters.gender !== 'all'               && <Tag style={{ margin: 0 }}>{filters.gender}</Tag>}
+                {filters.paymentStatus !== 'all'        && <Tag color="green" style={{ margin: 0 }}>Join: {filters.paymentStatus}</Tag>}
+                {filters.closingPaymentStatus !== 'all' && <Tag color="orange" style={{ margin: 0 }}>Closing: {filters.closingPaymentStatus}</Tag>}
+                {(filters.fromDate || filters.toDate) && (
+                  <Tag color="cyan" style={{ margin: 0 }}>
+                    {filters.fromDate ? formatDate(filters.fromDate) : 'Any'} → {filters.toDate ? formatDate(filters.toDate) : 'Any'}
+                  </Tag>
+                )}
+              </div>
+            </div>
+          )}
         </Form>
-      </Modal>
+      </Drawer>
 
       {/* Drawers & Modals */}
       <AddMember programs={programList||[]} agents={agentList||[]} open={openAddMember} setOpen={setOpenAddMember} currentUser={user}

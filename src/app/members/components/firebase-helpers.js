@@ -22,6 +22,7 @@ export const buildMembersQuery = (filters = {}) => {
   const {
     search              = "",
     programId           = null,
+    ageGroupId          = null,
     agentId             = null,
     status              = "all",
     paymentStatus       = "all",
@@ -43,6 +44,13 @@ export const buildMembersQuery = (filters = {}) => {
   // ── Program filter (flat field, not array-contains) ───────────────────────
   if (programId && programId !== "all") {
     conditions.push(where("programId", "==", programId));
+  }
+
+  // ── Age group filter ──────────────────────────────────────────────────────
+  // Matched on id rather than name: age group names get edited, ids don't.
+  // Only meaningful alongside a program, since ids are scoped to a program.
+  if (ageGroupId && ageGroupId !== "all") {
+    conditions.push(where("ageGroupId", "==", ageGroupId));
   }
 
   // ── Agent filter ──────────────────────────────────────────────────────────
@@ -103,6 +111,7 @@ export const getTotalMembersCount = async (filters = {}) => {
   const {
     search        = "",
     programId     = null,
+    ageGroupId    = null,
     agentId       = null,
     status        = "all",
     paymentStatus = "all",
@@ -123,6 +132,9 @@ export const getTotalMembersCount = async (filters = {}) => {
 
   if (programId && programId !== "all")
     conditions.push(where("programId", "==", programId));   // ← flat field
+
+  if (ageGroupId && ageGroupId !== "all")
+    conditions.push(where("ageGroupId", "==", ageGroupId));
 
   if (agentId && agentId !== "all")
     conditions.push(where("agentId", "==", agentId));
