@@ -1,6 +1,6 @@
 import {
   collection, addDoc, serverTimestamp, query, where, getDocs,
-  getDoc, doc, updateDoc, deleteDoc,
+  getDoc, doc, updateDoc, deleteDoc, limit,
   setDoc, runTransaction
 } from 'firebase/firestore'
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage'
@@ -113,90 +113,102 @@ export const uploadAllFiles = async (files) => {
   }
 }
 
-// Generate registration number — format {prefix}5{YY}{M}{NNNN} (e.g. MEM52670001)
+// Generate registration number — {prefix}{6 random digits}, e.g. MEM548217
 //
-// Each yojna keeps its own sequence in an ATOMIC counter on the program doc
-// (`regNoLastCount`), incremented inside a transaction. The previous approach
-// counted existing members and added one, which could hand the same number to
-// two members registered at the same moment.
+// Random rather than sequential. Uniqueness is guaranteed by ATOMICALLY
+// RESERVING each number: the candidate is claimed by creating
+// registrationNumbers/{regNo} inside a transaction. Simply querying "does any
+// member have this number?" and then using it is not safe — two registrations
+// running at the same instant would both see it free and both take it. Creating
+// the reservation doc can only succeed once, so the loser retries.
 //
-// `regNoStartCount` on the program is the LAST NUMBER ALREADY USED — set it to
-// 4050 and the next member issued is 4051. That lets a yojna migrated from an
-// older system carry on from where it left off.
-//
-// The counter seeds itself on first use as max(regNoStartCount, existing member
-// count), so yojnas created before this field existed keep generating exactly
-// the numbers they would have before.
+// Members registered before this collection existed aren't reserved, so each
+// candidate is also checked against the members collection to avoid reusing a
+// legacy number.
+const REG_NO_MIN      = 100000;
+const REG_NO_RANGE    = 900000;   // 100000–999999 → 900,000 values
+const REG_NO_ATTEMPTS = 15;
+
 export const generateRegistrationNumber = async (programId) => {
   try {
-    const now         = dayjs();
-    const year        = now.format('YY');
-    const monthNoZero = String(now.month() + 1); // 1–12, no leading zero
-
+    // ── Resolve the prefix from the program (falls back to 'MEM') ───────────
     let prefix = 'MEM';
-    let nextCount;
-
     if (programId) {
-      const progRef = doc(db, 'programs', programId);
-
-      // If the counter has never been initialised we need the current member
-      // count to seed it. Queries can't run inside a transaction, so this is
-      // resolved up front — and only on the very first generation per yojna.
-      let seedFromExisting = 0;
       try {
-        const peek = await getDoc(progRef);
-        if (peek.exists() && peek.data().regNoLastCount == null) {
-          const snap = await getDocs(query(
-            collection(db, 'members'),
-            where('programId',   '==', programId),
-            where('active_flag', '==', true)
-          ));
-          seedFromExisting = snap.size;
+        const progSnap = await getDoc(doc(db, 'programs', programId));
+        if (progSnap.exists()) {
+          const raw = (progSnap.data().regNoPrefix || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+          if (raw) prefix = raw;
         }
-      } catch (_) { /* seed stays 0 */ }
-
-      const result = await runTransaction(db, async (txn) => {
-        const snap = await txn.get(progRef);
-        const p    = snap.exists() ? snap.data() : {};
-
-        const raw = (p.regNoPrefix || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
-        const resolvedPrefix = raw || 'MEM';
-
-        const rawStart = Number(p.regNoStartCount);
-        const start    = Number.isFinite(rawStart) && rawStart > 0 ? Math.floor(rawStart) : 0;
-
-        // Highest number issued so far. Taking max() against start means raising
-        // the start count later jumps the sequence forward, while lowering it can
-        // never reissue a number that's already out there.
-        const last = p.regNoLastCount;
-        const current = last == null
-          ? Math.max(start, seedFromExisting)
-          : Math.max(Number(last) || 0, start);
-
-        const next = current + 1;
-        txn.set(progRef, { regNoLastCount: next }, { merge: true });
-        return { next, resolvedPrefix };
-      });
-
-      nextCount = result.next;
-      prefix    = result.resolvedPrefix;
-    } else {
-      // No program supplied — fall back to a global count
-      const snap = await getDocs(query(
-        collection(db, 'members'),
-        where('status',      '==', 'active'),
-        where('active_flag', '==', true)
-      ));
-      nextCount = snap.size + 1;
+      } catch (_) { /* use default */ }
     }
 
-    // padStart only pads — counts wider than 4 digits pass through intact
-    const paddedCount = String(nextCount).padStart(4, '0');
+    // ── Try random numbers until one can be reserved ────────────────────────
+    // If the reservation collection isn't writable (e.g. Firestore rules don't
+    // cover it yet) we degrade to the members-query check alone rather than
+    // failing — still correct in normal use, just not race-proof.
+    let reservationsUnavailable = false;
 
-    return `${prefix}5${year}${monthNoZero}${paddedCount}`;
+    for (let attempt = 1; attempt <= REG_NO_ATTEMPTS; attempt++) {
+      const n         = Math.floor(REG_NO_MIN + Math.random() * REG_NO_RANGE);
+      const candidate = `${prefix}${n}`;
+
+      // Legacy guard: members created before reservations existed
+      const legacy = await getDocs(query(
+        collection(db, 'members'),
+        where('registrationNumber', '==', candidate),
+        limit(1)
+      ));
+      if (!legacy.empty) {
+        console.warn(`[RegNo] ${candidate} already held by an existing member — retrying (${attempt}/${REG_NO_ATTEMPTS})`);
+        continue;
+      }
+
+      if (reservationsUnavailable) return candidate;
+
+      // Atomic claim — only one caller can create this doc
+      try {
+        const reserved = await runTransaction(db, async (txn) => {
+          const ref  = doc(db, 'registrationNumbers', candidate);
+          const snap = await txn.get(ref);
+          if (snap.exists()) return false;          // someone else holds it
+          txn.set(ref, {
+            registrationNumber: candidate,
+            prefix,
+            programId: programId || null,
+            createdAt: serverTimestamp(),
+          });
+          return true;
+        });
+
+        if (reserved) return candidate;
+        console.warn(`[RegNo] ${candidate} reserved by a concurrent registration — retrying (${attempt}/${REG_NO_ATTEMPTS})`);
+      } catch (resErr) {
+        // Almost always missing Firestore rules for `registrationNumbers`
+        reservationsUnavailable = true;
+        console.error(
+          `[RegNo] Could not reserve numbers (${resErr?.code || resErr?.message}). ` +
+          `Falling back to duplicate-checking against members only — add Firestore ` +
+          `rules for the "registrationNumbers" collection to restore race safety.`
+        );
+        return candidate;
+      }
+    }
+
+    // ── Exhausted the retries ───────────────────────────────────────────────
+    // With 900,000 values this is effectively unreachable. Still return a plain
+    // 6-digit number so the format never varies.
+    const fallback = `${prefix}${Math.floor(REG_NO_MIN + Math.random() * REG_NO_RANGE)}`;
+    console.error(
+      `[RegNo] No free number for prefix "${prefix}" after ${REG_NO_ATTEMPTS} attempts — ` +
+      `issued ${fallback} without a uniqueness guarantee.`
+    );
+    return fallback;
+
   } catch (error) {
     console.error('Error generating registration number:', error);
-    return `MEM${dayjs().format('YYYYMMDDHHmmss')}`;
+    // Keep the 6-digit shape even on unexpected failure
+    return `MEM${Math.floor(REG_NO_MIN + Math.random() * REG_NO_RANGE)}`;
   }
 };
 
@@ -336,17 +348,21 @@ export const recordJoinFeeTransaction = async (memberData, paymentData) => {
 // Deliberately non-throwing — a WhatsApp/PDF failure must never roll back or
 // block member creation / request approval.  Returns the API result or null.
 // ─────────────────────────────────────────────────────────────────────────────
-export const sendJoinCertificate = async (memberId, { sendToAgent = false } = {}) => {
+export const sendJoinCertificate = async (memberId, { sendToMember = false, sendToAgent = false } = {}) => {
   if (!memberId) return null
   try {
     const currentUser = auth.currentUser
     if (!currentUser) { console.warn('sendJoinCertificate: no authenticated user'); return null }
     const token = await currentUser.getIdToken()
 
+    // With no recipient selected we still want the certificate generated and
+    // saved on the member record — skipWhatsApp does exactly that.
+    const skipWhatsApp = !sendToMember && !sendToAgent
+
     const res  = await fetch('/api/members/join-certificate', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json', 'authorization': `Bearer ${token}` },
-      body:    JSON.stringify({ memberId, sendToAgent }),
+      body:    JSON.stringify({ memberId, sendToMember, sendToAgent, skipWhatsApp }),
     })
     const data = await res.json()
 
@@ -684,13 +700,14 @@ export const handleSubmit = async (values, context, message) => {
     await createClosingPayment({ ...memberData, id: memberId })
     message.success('Member added successfully!')
 
-    // ── Generate certificate + send WhatsApp join message ─────────────────────
+    // ── Generate certificate (+ optionally send it on WhatsApp) ───────────────
+    // Always runs so every member gets a certificate saved on their record; the
+    // checkboxes only control whether it's also messaged out.
     // Non-critical: never block or fail member creation if this errors.
-    // The certificate is generated whenever either recipient is being messaged,
-    // so an agent-only send still attaches the PDF.
-    if ((sendWhatsApp !== false || sendAgentWhatsApp) && values.phone) {
-      await sendJoinCertificate(memberId, { sendToAgent: sendAgentWhatsApp !== false })
-    }
+    await sendJoinCertificate(memberId, {
+      sendToMember: sendWhatsApp === true,
+      sendToAgent:  sendAgentWhatsApp === true,
+    })
 
     // ── Notify agent (in-app push) — only if the checkbox was left checked ────
     const agentIdToNotify = addedByRole === 'agent' ? selectedAgent : memberData.agentId

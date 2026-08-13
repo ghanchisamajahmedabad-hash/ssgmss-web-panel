@@ -73,8 +73,10 @@ const AddMember = ({ open, setOpen, programs, agents, currentUser, onSuccess }) 
   const [selectedDistrict, setSelectedDistrict] = useState(null)
 
   // ── Notification options ───────────────────────────────────────────────────
-  const [sendWhatsApp, setSendWhatsApp] = useState(true)
-  const [sendAgentWhatsApp, setSendAgentWhatsApp] = useState(true)
+  // WhatsApp sends are opt-in — messages cost money and go to real people, so
+  // they should be a deliberate choice rather than something that fires by default
+  const [sendWhatsApp, setSendWhatsApp] = useState(false)
+  const [sendAgentWhatsApp, setSendAgentWhatsApp] = useState(false)
   const [sendNotification, setSendNotification] = useState(true)
 
   // ── Load static data once ──────────────────────────────────────────────────

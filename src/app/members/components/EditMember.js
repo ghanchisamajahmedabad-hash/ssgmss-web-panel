@@ -375,10 +375,17 @@ const EditMember = ({ open, setOpen, programs, agents, currentUser, memberId, on
       const selectedCasteName    = castes.find(c => c.id === values.caste)?.name    || memberData?.caste    || ''
       const selectedRelationName = relations.find(r => r.id === values.guardianRelation)?.name || memberData?.guardianRelation || ''
 
+      // Only a superadmin may rename a member. A disabled input alone isn't
+      // enough — keep the stored name unless the role actually permits it.
+      const canEditName = currentUser?.role === 'superadmin'
+      const finalName   = canEditName
+        ? values.name
+        : (memberData?.displayName || values.name)
+
       // ── Build update payload ────────────────────────────────────────────────
       const updateData = {
         // Personal
-        displayName:  values.name,
+        displayName:  finalName,
         fatherName:   values.fatherName,
         surname:      values.surname,
         gender:       values.gender || '',
@@ -439,10 +446,12 @@ const EditMember = ({ open, setOpen, programs, agents, currentUser, memberId, on
         hasPendingPayments: pendingAmount > 0,
 
         // Search fields
-        search_name:               values.name?.toLowerCase()         || '',
+        // finalName, not values.name — otherwise a non-superadmin's edit would
+        // leave the search index pointing at a name the member doc never took
+        search_name:               finalName?.toLowerCase()           || '',
         search_fatherName:         values.fatherName?.toLowerCase()   || '',
         search_surname:            values.surname?.toLowerCase()       || '',
-        search_fullName:           `${values.name} ${values.fatherName} ${values.surname}`.toLowerCase().trim(),
+        search_fullName:           `${finalName} ${values.fatherName} ${values.surname}`.toLowerCase().trim(),
         search_phone:              values.phone                        || '',
         search_phoneLast4:         values.phone?.slice(-4)             || '',
         search_aadhaar:            values.aadhaarNo                   || '',
@@ -577,6 +586,7 @@ const EditMember = ({ open, setOpen, programs, agents, currentUser, memberId, on
               castes={castes}
               form={form}
               isEditMode={true}
+              currentUserRole={currentUser?.role}
             />
 
             <AddressForm

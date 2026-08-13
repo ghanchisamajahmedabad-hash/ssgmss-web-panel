@@ -68,31 +68,8 @@ const ProgramsViewPage = () => {
   const [memberGroups, setMemberGroups] = useState([]);
   const [editMode, setEditMode] = useState(false);
 
-  // ── Live preview of the next registration number ────────────────────────
-  // Mirrors generateRegistrationNumber: {prefix}5{YY}{M}{NNNN}. The running
-  // counter (regNoLastCount) may already be ahead of the entered value, and
-  // generation takes max() of the two — so the preview must too, otherwise it
-  // would promise a number that's already been issued.
+  // Registration numbers are random 5-digit values, so only the prefix matters
   const watchPrefix = Form.useWatch('regNoPrefix', form);
-  const watchStart  = Form.useWatch('regNoStartCount', form);
-
-  const regNoPreview = React.useMemo(() => {
-    const now      = dayjs();
-    const prefix   = (watchPrefix || 'MEM').toUpperCase().replace(/[^A-Z0-9]/g, '') || 'MEM';
-    const startRaw = Number(watchStart);
-    const start    = Number.isFinite(startRaw) && startRaw > 0 ? Math.floor(startRaw) : 0;
-    const lastRaw  = Number(editingProgram?.regNoLastCount);
-    const last     = Number.isFinite(lastRaw) ? lastRaw : 0;
-
-    const next = Math.max(start, last) + 1;
-    return {
-      regNo: `${prefix}5${now.format('YY')}${now.month() + 1}${String(next).padStart(4, '0')}`,
-      next,
-      // True when the yojna has already issued numbers past the entered value
-      counterAhead: last > start,
-      last,
-    };
-  }, [watchPrefix, watchStart, editingProgram]);
 const router=useRouter()
   // Firebase collection reference
   const programsCollectionRef = collection(db, 'programs');
@@ -151,7 +128,6 @@ const router=useRouter()
       hindiName: program.hindiName,
       description: program.description,
       regNoPrefix: program.regNoPrefix || 'MEM',
-      regNoStartCount: program.regNoStartCount ?? 0,
       orderNo: program.orderNo ?? null,
     });
   };
@@ -176,15 +152,9 @@ const router=useRouter()
       const rawPrefix = (values.regNoPrefix || 'MEM').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
       const regNoPrefix = rawPrefix || 'MEM';
 
-      // Coerce to a positive integer — generateRegistrationNumber falls back to
-      // 1 on anything invalid, so store a clean value rather than null/NaN.
-      const startRaw = Number(values.regNoStartCount);
-      const regNoStartCount = Number.isFinite(startRaw) && startRaw > 0 ? Math.floor(startRaw) : 0;
-
       const programData = {
         ...values,
         regNoPrefix,
-        regNoStartCount,
         programType:programType,
         certificateRule:certificateRule,
         ageGroups: ageGroups,
@@ -699,22 +669,7 @@ const router=useRouter()
                       />
                     </Form.Item>
                   </Col>
-                  <Col span={3}>
-                    <Form.Item
-                      name="regNoStartCount"
-                      label="Last Reg. No"
-                      tooltip="The last registration number already used for this yojna. The next member gets this + 1 — set 4050 and the next member becomes 4051. Leave 0 for a brand-new yojna. Raising this later jumps the sequence forward; lowering it never reissues an existing number."
-                    >
-                      <InputNumber
-                        placeholder="0"
-                        min={0}
-                        precision={0}
-                        className="w-full"
-                        style={{ width: '100%' }}
-                      />
-                    </Form.Item>
-                  </Col>
-                  <Col span={2}>
+                  <Col span={5}>
                     <Form.Item
                       name="orderNo"
                       label="Order No"
@@ -730,22 +685,13 @@ const router=useRouter()
                   </Col>
                 </Row>
 
-                {/* Live preview — shows the +1 applied to the last reg no */}
+                {/* Format reminder — numbers are random, not sequential */}
                 <div className="-mt-2 mb-3 flex items-center gap-2 flex-wrap">
-                  <span className="text-xs text-gray-500">Next member will get:</span>
+                  <span className="text-xs text-gray-500">Members will get numbers like:</span>
                   <span className="font-mono font-semibold text-blue-600 bg-blue-50 border border-blue-200 rounded px-2 py-0.5 text-sm">
-                    {regNoPreview.regNo}
+                    {((watchPrefix || 'MEM').toUpperCase().replace(/[^A-Z0-9]/g, '') || 'MEM')}54821
                   </span>
-                  {regNoPreview.counterAhead ? (
-                    <span className="text-xs text-amber-600">
-                      This yojna has already issued up to {regNoPreview.last}, so numbering
-                      continues from there. Enter a value above {regNoPreview.last} to jump ahead.
-                    </span>
-                  ) : (
-                    <span className="text-xs text-gray-400">
-                      (Last Reg. No {Math.max(0, Math.floor(Number(watchStart) || 0))} + 1)
-                    </span>
-                  )}
+                  <span className="text-xs text-gray-400">(prefix + random 5 digits)</span>
                 </div>
                   <Form.Item
               label="Yojna Type"

@@ -22,7 +22,7 @@ export const buildMembersQuery = (filters = {}) => {
   const {
     search              = "",
     programId           = null,
-    ageGroupId          = null,
+    ageGroupIds         = [],
     agentId             = null,
     status              = "all",
     paymentStatus       = "all",
@@ -46,11 +46,15 @@ export const buildMembersQuery = (filters = {}) => {
     conditions.push(where("programId", "==", programId));
   }
 
-  // ── Age group filter ──────────────────────────────────────────────────────
+  // ── Age group filter (multi-select) ───────────────────────────────────────
   // Matched on id rather than name: age group names get edited, ids don't.
   // Only meaningful alongside a program, since ids are scoped to a program.
-  if (ageGroupId && ageGroupId !== "all") {
-    conditions.push(where("ageGroupId", "==", ageGroupId));
+  // Firestore caps `in` at 30 values — far more than any yojna has groups.
+  const ageIds = Array.isArray(ageGroupIds) ? ageGroupIds.filter(Boolean) : [];
+  if (ageIds.length === 1) {
+    conditions.push(where("ageGroupId", "==", ageIds[0]));
+  } else if (ageIds.length > 1) {
+    conditions.push(where("ageGroupId", "in", ageIds.slice(0, 30)));
   }
 
   // ── Agent filter ──────────────────────────────────────────────────────────
@@ -111,7 +115,7 @@ export const getTotalMembersCount = async (filters = {}) => {
   const {
     search        = "",
     programId     = null,
-    ageGroupId    = null,
+    ageGroupIds   = [],
     agentId       = null,
     status        = "all",
     paymentStatus = "all",
@@ -133,8 +137,11 @@ export const getTotalMembersCount = async (filters = {}) => {
   if (programId && programId !== "all")
     conditions.push(where("programId", "==", programId));   // ← flat field
 
-  if (ageGroupId && ageGroupId !== "all")
-    conditions.push(where("ageGroupId", "==", ageGroupId));
+  const ageIdsForCount = Array.isArray(ageGroupIds) ? ageGroupIds.filter(Boolean) : [];
+  if (ageIdsForCount.length === 1)
+    conditions.push(where("ageGroupId", "==", ageIdsForCount[0]));
+  else if (ageIdsForCount.length > 1)
+    conditions.push(where("ageGroupId", "in", ageIdsForCount.slice(0, 30)));
 
   if (agentId && agentId !== "all")
     conditions.push(where("agentId", "==", agentId));

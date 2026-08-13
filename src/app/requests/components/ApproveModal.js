@@ -26,8 +26,10 @@ const ApproveModal = ({ open, setOpen, selectedMember, setSelectedMember, fetchA
   const [programDetail, setProgramDetail] = useState(null)   // single object
 
   // ── Notification options (both default ON) ─────────────────────────────────
-  const [sendWhatsApp, setSendWhatsApp]           = useState(true)
-  const [sendAgentWhatsApp, setSendAgentWhatsApp] = useState(true)
+  // WhatsApp sends are opt-in — messages cost money and go to real people, so
+  // they should be a deliberate choice rather than something that fires by default
+  const [sendWhatsApp, setSendWhatsApp]           = useState(false)
+  const [sendAgentWhatsApp, setSendAgentWhatsApp] = useState(false)
   const [sendNotification, setSendNotification]   = useState(true)
 
   // ── Recalculate whenever selectedMember or programList changes ──────────────
@@ -267,11 +269,12 @@ const ApproveModal = ({ open, setOpen, selectedMember, setSelectedMember, fetchA
 
       // ── Generate certificate + send WhatsApp join message ──────────────────
       // Non-critical: never block approval if this fails.
-      // Certificate is generated whenever either recipient is being messaged,
-      // so an agent-only send still attaches the PDF.
-      if ((sendWhatsApp || sendAgentWhatsApp) && selectedMember.phone) {
-        await sendJoinCertificate(selectedMember.id, { sendToAgent: sendAgentWhatsApp })
-      }
+      // Always runs so every approved member gets a certificate saved on their
+      // record; the checkboxes only control whether it's also messaged out.
+      await sendJoinCertificate(selectedMember.id, {
+        sendToMember: sendWhatsApp,
+        sendToAgent:  sendAgentWhatsApp,
+      })
 
       // ── Notify agent (in-app push) ─────────────────────────────────────────
       if (sendNotification && selectedMember.agentId) {
@@ -301,8 +304,8 @@ const ApproveModal = ({ open, setOpen, selectedMember, setSelectedMember, fetchA
     setPaymentMode('cash')
     setPaidAmount(0)
     setProgramDetail(null)
-    setSendWhatsApp(true)
-    setSendAgentWhatsApp(true)
+    setSendWhatsApp(false)
+    setSendAgentWhatsApp(false)
     setSendNotification(true)
   }
 

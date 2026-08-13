@@ -3,8 +3,16 @@ import { Card, Row, Col, Form, Input, DatePicker, Select, Alert, Spin, Radio } f
 import dayjs from "dayjs"
 import { LoadingOutlined } from '@ant-design/icons'
 
-const BasicInfoForm = ({ handleDobChange, age, castes, form, onAadhaarCheck,existingMember,setExistingMember }) => {
+const BasicInfoForm = ({
+  handleDobChange, age, castes, form, onAadhaarCheck, existingMember, setExistingMember,
+  isEditMode = false, currentUserRole,
+}) => {
   const [checkingAadhaar, setCheckingAadhaar] = useState(false)
+
+  // A member's name is printed on their certificate and baked into receipts and
+  // search keywords, so editing it after registration is restricted to superadmin.
+  // Adding a new member is unaffected.
+  const canEditName = !isEditMode || currentUserRole === 'superadmin'
 
   
   const handleAadhaarChange = async (e) => {
@@ -60,8 +68,12 @@ const BasicInfoForm = ({ handleDobChange, age, castes, form, onAadhaarCheck,exis
             label="Name"
             name="name"
             rules={[{ required: true, message: 'Please enter name' }]}
+            tooltip={!canEditName ? 'Only a superadmin can change a member\'s name' : undefined}
+            extra={!canEditName
+              ? <span style={{ fontSize: 11, color: '#d97706' }}>🔒 Only superadmin can change the name</span>
+              : undefined}
           >
-            <Input placeholder="Enter full name" />
+            <Input placeholder="Enter full name" disabled={!canEditName} />
           </Form.Item>
         </Col>
       </Row>

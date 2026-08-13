@@ -123,7 +123,7 @@ const Page = () => {
   })
 
   const [filters, setFilters] = useState({
-    search: '', programId: 'all', ageGroupId: 'all', agentId: 'all',
+    search: '', programId: 'all', ageGroupIds: [], agentId: 'all',
     status: 'all', paymentStatus: 'all',
     closingPaymentStatus: 'all', gender: 'all',
     fromDate: null, toDate: null,
@@ -233,11 +233,11 @@ const isSuperAdmin = (user) => user?.role === 'superadmin';
     setFilters(prev => {
       const next = { ...prev, ...changedValues }
       // Age groups are scoped to a program — switching programs invalidates any
-      // previously chosen group, so clear it rather than filtering on an id that
-      // belongs to a different yojna (which would return zero rows).
+      // previously chosen groups, so clear them rather than filtering on ids that
+      // belong to a different yojna (which would return zero rows).
       if ('programId' in changedValues) {
-        next.ageGroupId = 'all'
-        filterForm.setFieldValue('ageGroupId', 'all')
+        next.ageGroupIds = []
+        filterForm.setFieldValue('ageGroupIds', [])
       }
       return next
     })
@@ -259,7 +259,7 @@ const isSuperAdmin = (user) => user?.role === 'superadmin';
 
   const resetFilters = () => {
     const reset = {
-      search: '', programId: 'all', ageGroupId: 'all', agentId: 'all',
+      search: '', programId: 'all', ageGroupIds: [], agentId: 'all',
       status: 'all', paymentStatus: 'all', closingPaymentStatus: 'all', gender: 'all',
       fromDate: null, toDate: null, sortField: 'createdAt', sortOrder: 'desc'
     }
@@ -297,7 +297,7 @@ const isSuperAdmin = (user) => user?.role === 'superadmin';
   const getActiveFilterCount = () => {
     let c = 0
     if (filters.programId            !== 'all') c++
-    if (filters.ageGroupId           !== 'all') c++
+    if (filters.ageGroupIds?.length)            c++
     if (filters.agentId              !== 'all') c++
     if (filters.status               !== 'all') c++
     if (filters.paymentStatus        !== 'all') c++
@@ -450,6 +450,7 @@ const isSuperAdmin = (user) => user?.role === 'superadmin';
               memberId:     m.id,
               sendToMember: waToMember,
               sendToAgent:  waToAgent,
+              skipWhatsApp: !waToMember && !waToAgent,
             }),
           })
           const data = await res.json()
@@ -869,7 +870,8 @@ const handleDeleteMember = (member) => {
       let q = collection(db, 'members')
       const constraints = []
       if (filters.programId !== 'all') constraints.push(where('programId', '==', filters.programId))
-      if (filters.ageGroupId && filters.ageGroupId !== 'all') constraints.push(where('ageGroupId', '==', filters.ageGroupId))
+      if (filters.ageGroupIds?.length === 1) constraints.push(where('ageGroupId', '==', filters.ageGroupIds[0]))
+      else if (filters.ageGroupIds?.length > 1) constraints.push(where('ageGroupId', 'in', filters.ageGroupIds.slice(0, 30)))
       if (filters.status === 'active') constraints.push(where('active_flag', '==', true))
       else if (filters.status === 'inactive') constraints.push(where('active_flag', '==', false))
       else if (filters.status === 'closed') constraints.push(where('member_closed', '==', true))
@@ -917,7 +919,8 @@ const handleDeleteMember = (member) => {
         where("status",      "==", "active")
       ]
       if (filters.programId !== 'all') constraints.push(where('programId', '==', filters.programId))
-      if (filters.ageGroupId && filters.ageGroupId !== 'all') constraints.push(where('ageGroupId', '==', filters.ageGroupId))
+      if (filters.ageGroupIds?.length === 1) constraints.push(where('ageGroupId', '==', filters.ageGroupIds[0]))
+      else if (filters.ageGroupIds?.length > 1) constraints.push(where('ageGroupId', 'in', filters.ageGroupIds.slice(0, 30)))
       if (filters.status === 'active') constraints.push(where('active_flag', '==', true))
       else if (filters.status === 'inactive') constraints.push(where('active_flag', '==', false))
       else if (filters.status === 'closed') constraints.push(where('member_closed', '==', true))
@@ -1257,16 +1260,17 @@ ${filterHtml}
 
             {filters.programId !== 'all' && (
               <Tag color="magenta" closable style={{ margin: 0 }}
-                onClose={() => clearFilter({ programId: 'all', ageGroupId: 'all' })}>
+                onClose={() => clearFilter({ programId: 'all', ageGroupIds: [] })}>
                 Yojna: {programList?.find(p => p.id === filters.programId)?.name || filters.programId}
               </Tag>
             )}
-            {filters.ageGroupId !== 'all' && (
-              <Tag color="purple" closable style={{ margin: 0 }}
-                onClose={() => clearFilter({ ageGroupId: 'all' })}>
-                Age: {availableAgeGroups.find(g => g.id === filters.ageGroupId)?.ageGroupName || filters.ageGroupId}
+            {/* One chip per selected group, each removable on its own */}
+            {filters.ageGroupIds?.map(id => (
+              <Tag key={id} color="purple" closable style={{ margin: 0 }}
+                onClose={() => clearFilter({ ageGroupIds: filters.ageGroupIds.filter(x => x !== id) })}>
+                Age: {availableAgeGroups.find(g => g.id === id)?.ageGroupName || id}
               </Tag>
-            )}
+            ))}
             {filters.agentId !== 'all' && (
               <Tag color="blue" closable style={{ margin: 0 }}
                 onClose={() => clearFilter({ agentId: 'all' })}>
@@ -1723,28 +1727,64 @@ ${filterHtml}
             </Form.Item>
 
             {/* Age groups are defined per yojna, so this stays locked until one is chosen */}
-            <Form.Item label="Age Group" name="ageGroupId" style={{ marginBottom: 0 }}>
+            <Form.Item
+              label={
+                <div className="flex items-center justify-between w-full" style={{ minWidth: 220 }}>
+                  <span>Age Group</span>
+                  {availableAgeGroups.length > 0 && (
+                    <span className="flex gap-2">
+                      <a
+                        style={{ fontSize: 11 }}
+                        onClick={() => {
+                          const all = availableAgeGroups.map(g => g.id)
+                          filterForm.setFieldValue('ageGroupIds', all)
+                          setFilters(p => ({ ...p, ageGroupIds: all }))
+                        }}
+                      >
+                        Select all
+                      </a>
+                      {filters.ageGroupIds?.length > 0 && (
+                        <a
+                          style={{ fontSize: 11, color: '#9ca3af' }}
+                          onClick={() => {
+                            filterForm.setFieldValue('ageGroupIds', [])
+                            setFilters(p => ({ ...p, ageGroupIds: [] }))
+                          }}
+                        >
+                          Clear
+                        </a>
+                      )}
+                    </span>
+                  )}
+                </div>
+              }
+              name="ageGroupIds"
+              style={{ marginBottom: 0 }}
+            >
               <Select
+                mode="multiple"
+                allowClear
                 placeholder={filters.programId === 'all' ? 'Select a Yojna first' : 'All Age Groups'}
                 disabled={filters.programId === 'all'}
                 showSearch
-                optionFilterProp="children"
-              >
-                <Option value="all">All Age Groups</Option>
-                {availableAgeGroups.map(g => (
-                  <Option key={g.id} value={g.id}>
-                    {g.ageGroupName || `${g.startAge}-${g.endAge}`}
-                    {g.startAge != null && g.endAge != null ? ` (${g.startAge}–${g.endAge} yrs)` : ''}
-                  </Option>
-                ))}
-              </Select>
+                optionFilterProp="label"
+                maxTagCount="responsive"
+                options={availableAgeGroups.map(g => ({
+                  value: g.id,
+                  label: `${g.ageGroupName || `${g.startAge}-${g.endAge}`}${
+                    g.startAge != null && g.endAge != null ? ` (${g.startAge}–${g.endAge} yrs)` : ''
+                  }`,
+                }))}
+              />
             </Form.Item>
 
-            {filters.programId === 'all' && (
-              <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 6 }}>
-                Age groups are defined per yojna — pick one to filter by group.
-              </div>
-            )}
+            <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 6 }}>
+              {filters.programId === 'all'
+                ? 'Age groups are defined per yojna — pick one to filter by group.'
+                : filters.ageGroupIds?.length
+                  ? `Showing ${filters.ageGroupIds.length} of ${availableAgeGroups.length} groups`
+                  : 'Leave empty to include every age group.'}
+            </div>
           </div>
 
           {/* ── People ─────────────────────────────────────────────────────── */}
@@ -1835,11 +1875,11 @@ ${filterHtml}
                     {programList?.find(p => p.id === filters.programId)?.name || filters.programId}
                   </Tag>
                 )}
-                {filters.ageGroupId !== 'all' && (
-                  <Tag color="purple" style={{ margin: 0 }}>
-                    {availableAgeGroups.find(g => g.id === filters.ageGroupId)?.ageGroupName || 'Age group'}
+                {filters.ageGroupIds?.map(id => (
+                  <Tag key={id} color="purple" style={{ margin: 0 }}>
+                    {availableAgeGroups.find(g => g.id === id)?.ageGroupName || 'Age group'}
                   </Tag>
-                )}
+                ))}
                 {filters.agentId !== 'all' && (
                   <Tag color="blue" style={{ margin: 0 }}>{getAgentName(filters.agentId)}</Tag>
                 )}
