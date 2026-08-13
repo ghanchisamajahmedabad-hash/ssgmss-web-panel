@@ -30,6 +30,8 @@ const T = {
 }
 
 // ── Module config ────────────────────────────────────────────────────────────
+// Keep this in sync with the sidebar (components/Base/SideBar.js). Any page
+// missing here can never be granted, so the user simply can't reach it.
 const MODULE_CONFIG = {
   '/':         { label: 'Dashboard',  icon: <DashboardOutlined />,  module: 'dashboard' },
   '/programs': { label: 'Programs',   icon: <AppstoreOutlined />,   module: 'programs',
@@ -38,7 +40,11 @@ const MODULE_CONFIG = {
       { key: '/programs/yojnas',        label: 'Yojnas' },
     ],
   },
-  '/agents':   { label: 'Agents',     icon: <UserSwitchOutlined />, module: 'agents' },
+  '/agents':   { label: 'Agents',     icon: <UserSwitchOutlined />, module: 'agents',
+    children: [
+      { key: '/agents/performance', label: 'Performance' },
+    ],
+  },
   '/members':  { label: 'Members',    icon: <TeamOutlined />,       module: 'members' },
   '/requests': { label: 'Requests',   icon: <InboxOutlined />,      module: 'requests' },
   '/payments': { label: 'Payments',   icon: <CreditCardOutlined />, module: 'payments',
@@ -46,6 +52,8 @@ const MODULE_CONFIG = {
       { key: '/payments/join-fees',       label: 'Join Fees' },
       { key: '/payments/closing-payment', label: 'Closing Payment' },
       { key: '/payments/history',         label: 'Payment History' },
+      { key: '/payments/whatsapp',        label: 'WhatsApp' },
+      { key: '/payments/whatsapp/inbox',  label: 'WhatsApp Inbox' },
     ],
   },
   '/master':   { label: 'Master',     icon: <DatabaseOutlined />,   module: 'master',
@@ -63,12 +71,20 @@ const MODULE_CONFIG = {
     children: [
       { key: '/settings/about',                    label: 'About' },
       { key: '/settings/contact',                  label: 'Contact' },
+      { key: '/settings/commission',               label: 'Commission' },
       { key: '/settings/security/change-password', label: 'Password Change' },
       { key: '/settings/security/sessions',        label: 'Sessions' },
+      { key: '/settings/security/pin',             label: 'PIN Lock' },
     ],
   },
+  '/activity': { label: 'Activity',   icon: <FundOutlined />,       module: 'activity' },
   '/trash':    { label: 'Trash',      icon: <DeleteOutlined />,     module: 'trash' },
 }
+
+// Every page key in the config, used by the bulk enable/disable helpers
+const ALL_PAGE_KEYS = Object.entries(MODULE_CONFIG).flatMap(
+  ([key, cfg]) => [key, ...(cfg.children || []).map(c => c.key)]
+)
 
 const BASIC_ACTIONS = [
   { key: 'view',     label: 'View',     icon: <EyeOutlined />,      desc: 'View records & data' },
@@ -234,19 +250,35 @@ const PermissionDrawer = ({ visible, onClose, selectedUser, onSuccess }) => {
     }
   }, [visible, selectedUser])
 
+  // Derived from MODULE_CONFIG rather than a second hardcoded list — a separate
+  // map is exactly how '/activity' ended up ungrantable.
   const rebuildModuleAccess = (pages) => {
-    const map = {
-      '/': 'dashboard', '/programs': 'programs', '/agents': 'agents',
-      '/members': 'members', '/requests': 'requests', '/payments': 'payments',
-      '/master': 'master', '/expenses': 'expenses', '/settings': 'settings', '/trash': 'trash',
-    }
+    const map = Object.fromEntries(
+      Object.entries(MODULE_CONFIG).map(([key, cfg]) => [key, cfg.module])
+    )
     const acc = {}
     Object.values(map).forEach(m => (acc[m] = false))
     pages.forEach(k => {
-      const mod = Object.keys(map).find(m => k === m || k.startsWith(m + '/'))
+      // Longest match first so '/payments/whatsapp/inbox' resolves to the
+      // payments module and not something shorter that also prefixes it
+      const mod = Object.keys(map)
+        .filter(m => k === m || k.startsWith(m + '/'))
+        .sort((a, b) => b.length - a.length)[0]
       if (mod) acc[map[mod]] = true
     })
     return acc
+  }
+
+  // ── Bulk helpers ──────────────────────────────────────────────────────────
+  const handleEnableAllPages = () => {
+    setCheckedPages(ALL_PAGE_KEYS)
+    setPermissions(prev => ({ ...prev, moduleAccess: rebuildModuleAccess(ALL_PAGE_KEYS) }))
+  }
+
+  const handleDisableAllPages = () => {
+    // '/' always stays — a user with no landing page can't use the panel at all
+    setCheckedPages(['/'])
+    setPermissions(prev => ({ ...prev, moduleAccess: rebuildModuleAccess(['/']) }))
   }
 
   const handleToggle = (pageKey, checked, config) => {
@@ -329,6 +361,24 @@ const PermissionDrawer = ({ visible, onClose, selectedUser, onSuccess }) => {
       label: <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}><AppstoreOutlined />Page Access <CountBadge n={pagesCount} /></span>,
       children: (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            padding: '8px 12px', borderRadius: 8,
+            background: '#fff', border: `1px solid ${T.border}`,
+          }}>
+            <Text style={{ fontSize: 12, color: '#64748b' }}>
+              {pagesCount} of {ALL_PAGE_KEYS.length} pages granted
+            </Text>
+            <Space size={4}>
+              <Button size="small" type="link" style={{ fontSize: 12 }} onClick={handleEnableAllPages}>
+                Enable all
+              </Button>
+              <Button size="small" type="link" style={{ fontSize: 12, color: '#94a3b8' }} onClick={handleDisableAllPages}>
+                Disable all
+              </Button>
+            </Space>
+          </div>
+
           {Object.entries(MODULE_CONFIG).map(([key, config]) => (
             <ModuleCard key={key} pageKey={key} config={config}
               checkedPages={checkedPages} onToggle={handleToggle} onSubToggle={handleSubToggle} />
