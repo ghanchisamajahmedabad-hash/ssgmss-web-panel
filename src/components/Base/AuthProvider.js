@@ -36,8 +36,23 @@ function canVisit(user, pathname) {
   if (!user) return false;
   if (isSuperAdmin(user)) return true;
   if (pathname === "/") return true;
+
   const pages = user.permissions?.pages || [];
+
+  // Exact grant
   if (pages.includes(pathname)) return true;
+
+  // Parent page: the granted page is an ancestor of where we're going.
+  // This is what makes detail/dynamic routes work — granting
+  // "/payments/join-fees" must also allow "/payments/join-fees/{agentId}",
+  // which can never be listed explicitly because the id is data, not a route.
+  const hasParentAccess = pages.some(
+    (p) => p !== "/" && p !== pathname && pathname.startsWith(p + "/")
+  );
+  if (hasParentAccess) return true;
+
+  // Child page: only a sub-page was granted, so the section index is reachable
+  // too (e.g. "/payments/join-fees" granted → "/payments" opens).
   const hasChildAccess = pages.some(
     (p) => p !== pathname && p.startsWith(pathname + "/")
   );
