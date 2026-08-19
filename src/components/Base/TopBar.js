@@ -40,9 +40,14 @@ const isSuperAdmin = (user) => user?.role === 'superadmin';
       if (userId && sessionToken) {
         await deleteDoc(doc(db, "users", userId, "sessions", sessionToken));
       }
-      logout()
     } catch (error) {
-      console.error('Logout failed:', error);
+      console.error('Failed to clear session doc:', error);
+    } finally {
+      // Drop the token too. Leaving it behind meant the next login reused a
+      // token whose Firestore document had just been deleted — the watcher then
+      // saw a missing session and logged the user straight back out.
+      try { localStorage.removeItem('session_token') } catch {}
+      logout()
     }
   };
   // Mock notifications data
@@ -116,18 +121,47 @@ const isSuperAdmin = (user) => user?.role === 'superadmin';
   const handleAddProgram = () => {
     router.push('/programs/yojnas/add-yojna');
   };
-    useEffect(() => {
+  // ── Single-session watcher ────────────────────────────────────────────────
+  // Logs the user out if their session document is deleted elsewhere (e.g.
+  // revoked from the Sessions page or a login on another device).
+  //
+  // This previously ran with an empty dependency array, so it captured
+  // `user?.uid` on first mount — while AuthProvider was still resolving, that
+  // was `undefined`. Firestore then watched a bogus path, the snapshot reported
+  // "does not exist", and the user was signed straight back out moments after
+  // logging in. Clearing site data masked it by changing the timing.
+  useEffect(() => {
     const userId = user?.uid;
-    const sessionToken = localStorage.getItem("session_token");
-    const sessionRef = doc(db, "users", userId, "sessions", sessionToken);
-    const unsubscribe = onSnapshot(sessionRef, (doc) => {
-      if (!doc.exists()) {
-        logout()
+    const sessionToken = typeof window !== 'undefined'
+      ? localStorage.getItem('session_token')
+      : null;
+
+    // Nothing meaningful to watch yet — re-runs once the user resolves
+    if (!userId || !sessionToken) return;
+
+    const sessionRef = doc(db, 'users', userId, 'sessions', sessionToken);
+
+    // Only treat a missing document as a revoked session once we've actually
+    // seen it exist. Right after login the write may not have propagated, and
+    // acting on that first empty read is what caused the bounce.
+    let sessionConfirmed = false;
+
+    const unsubscribe = onSnapshot(
+      sessionRef,
+      (snap) => {
+        if (snap.exists()) { sessionConfirmed = true; return; }
+        // Ignore offline/cache-only misses — they aren't proof of deletion
+        if (snap.metadata.fromCache) return;
+        if (sessionConfirmed) logout();
+      },
+      (err) => {
+        // Never sign the user out because of a transient listener error
+        console.warn('Session watcher error (ignored):', err);
       }
-    });
-  
-    return unsubscribe;
-  }, []);
+    );
+
+    return () => unsubscribe();
+  }, [user?.uid]);
 
   return (
     <>

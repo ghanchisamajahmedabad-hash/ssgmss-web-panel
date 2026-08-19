@@ -735,19 +735,20 @@ const styles = StyleSheet.create({
         </View>
       </Page>)
 
-const CertificateCom = ({ data ,  memberProgram}) => {
-  console.log(data,"data")
-  // Format the date
-    const membersArray = Array.isArray(data) ? data : [data];
-
+const CertificateCom = ({ data, memberProgram }) => {
+  const membersArray = Array.isArray(data) ? data : [data];
 
   return (
     <Document>
-  {membersArray.map((member, index) => (
-        <CertificatePage 
+      {membersArray.map((member, index) => (
+        <CertificatePage
           key={member?.id || member?.registrationNumber || index}
           data={member}
-          memberProgram={memberProgram}
+          // Each member carries its own program when present. A batch download
+          // can span several yojnas, and using the single shared prop for every
+          // page stamped the first member's scheme name onto all of them.
+          // The prop remains the fallback for single-certificate rendering.
+          memberProgram={member?.memberProgram || memberProgram}
           index={index}
         />
       ))}

@@ -25,6 +25,12 @@ const ApproveModal = ({ open, setOpen, selectedMember, setSelectedMember, fetchA
   const [paidAmount, setPaidAmount]   = useState(0)
   const [programDetail, setProgramDetail] = useState(null)   // single object
 
+  // Join date drives which period (and therefore which join fee) applies.
+  // Because changing it changes the money charged, only a superadmin may edit
+  // it — everyone else sees the date the agent submitted, read-only.
+  const [joinDate, setJoinDate] = useState(null)
+  const canEditJoinDate = user?.role === 'superadmin'
+
   // ── Notification options (both default ON) ─────────────────────────────────
   // WhatsApp sends are opt-in — messages cost money and go to real people, so
   // they should be a deliberate choice rather than something that fires by default
@@ -32,12 +38,21 @@ const ApproveModal = ({ open, setOpen, selectedMember, setSelectedMember, fetchA
   const [sendAgentWhatsApp, setSendAgentWhatsApp] = useState(false)
   const [sendNotification, setSendNotification]   = useState(true)
 
-  // ── Recalculate whenever selectedMember or programList changes ──────────────
+  // Seed the join date from the request whenever a new member is opened
+  useEffect(() => {
+    if (!selectedMember) { setJoinDate(null); return }
+    const d = selectedMember.dateJoin
+      ? dayjs(selectedMember.dateJoin, 'DD-MM-YYYY')
+      : dayjs()
+    setJoinDate(d.isValid() ? d : dayjs())
+  }, [selectedMember])
+
+  // ── Recalculate whenever the member, program list or join date changes ──────
   useEffect(() => {
     if (selectedMember && programList) {
       calculateProgramDetail()
     }
-  }, [selectedMember, programList])
+  }, [selectedMember, programList, joinDate])
 
   // ── Resolve program detail from member doc (single program) ────────────────
   const calculateProgramDetail = () => {
@@ -57,7 +72,10 @@ const ApproveModal = ({ open, setOpen, selectedMember, setSelectedMember, fetchA
     }
 
     const calculatedAge = selectedMember.age || 0
-    const joinDateStr   = selectedMember.dateJoin
+    // Prefer the date currently in the picker so edits re-resolve the period
+    const joinDateStr   = joinDate?.isValid?.()
+      ? joinDate.format('DD-MM-YYYY')
+      : selectedMember.dateJoin
 
     const ageGroup = program.ageGroups?.find(
       ag => calculatedAge >= ag.startAge && calculatedAge <= ag.endAge
@@ -162,11 +180,15 @@ const ApproveModal = ({ open, setOpen, selectedMember, setSelectedMember, fetchA
         ageGroupName:       programDetail.ageGroupName,
       })
 
-      // Keep the join date from the request (may have been edited) —
-      // fall back to today only if the request has none.
-      const finalJoinDate = selectedMember.dateJoin
+      // The submitted date is the baseline; only a superadmin's edit overrides it.
+      // A disabled picker alone isn't enough — this decides the fee charged.
+      const submittedJoinDate = selectedMember.dateJoin
         ? dayjs(selectedMember.dateJoin, 'DD-MM-YYYY')
         : dayjs()
+
+      const finalJoinDate = (canEditJoinDate && joinDate?.isValid?.())
+        ? joinDate
+        : (submittedJoinDate.isValid() ? submittedJoinDate : dayjs())
 
       // ── Update member doc — all program fields embedded flat ──────────────
       const memberUpdate = {
@@ -304,6 +326,7 @@ const ApproveModal = ({ open, setOpen, selectedMember, setSelectedMember, fetchA
     setPaymentMode('cash')
     setPaidAmount(0)
     setProgramDetail(null)
+    setJoinDate(null)
     setSendWhatsApp(false)
     setSendAgentWhatsApp(false)
     setSendNotification(true)
@@ -376,6 +399,38 @@ const ApproveModal = ({ open, setOpen, selectedMember, setSelectedMember, fetchA
                   <div>
                     <div className="text-xs text-gray-500">Agent ID</div>
                     <div>{selectedMember.agentId || '—'}</div>
+                  </div>
+                </div>
+
+                {/* Join date — decides which period's fee applies, so editing
+                    is limited to superadmin */}
+                <div className="mt-3 pt-3 border-t border-blue-100">
+                  <div className="text-xs text-gray-500 mb-1">
+                    Join Date
+                    <span className="ml-2 text-[11px] text-gray-400">
+                      (decides the period &amp; join fees)
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <DatePicker
+                      value={joinDate}
+                      onChange={(d) => setJoinDate(d)}
+                      format="DD-MM-YYYY"
+                      allowClear={false}
+                      disabled={!canEditJoinDate}
+                      style={{ width: 180 }}
+                    />
+                    {!canEditJoinDate && (
+                      <span className="text-[11px] text-amber-600">
+                        🔒 Only superadmin can change the join date
+                      </span>
+                    )}
+                    {canEditJoinDate && selectedMember.dateJoin && joinDate
+                      && joinDate.format('DD-MM-YYYY') !== selectedMember.dateJoin && (
+                      <span className="text-[11px] text-amber-600">
+                        Changed from {selectedMember.dateJoin}
+                      </span>
+                    )}
                   </div>
                 </div>
               </div>

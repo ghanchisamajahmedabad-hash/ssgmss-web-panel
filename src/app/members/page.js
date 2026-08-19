@@ -374,9 +374,14 @@ const isSuperAdmin = (user) => user?.role === 'superadmin';
         ageGroupName:  member.ageGroupName || member.memberGroupName || member.ageGroup || '',
         agentName:     agentData.displayName || agentData.name || 'Admin/System',
         agentPhone:    agentData.phone1 || '',
-        programName:   programData.hindiName || member.programName || ''
+        programName:   programData.hindiName || member.programName || '',
+        // Carry each member's OWN program on the record. A batch can span
+        // several yojnas, so a single shared program object would stamp the
+        // same scheme name (and certificate rules) onto every page.
+        memberProgram: programData,
       }
     });
+    // Fallback only — used for members whose program couldn't be resolved
     const memberProgram = programList?.find(p => p.id === filters.programId) ||
       programList?.find(p => p.id === membersArray[0]?.programId) || {}
     try {
