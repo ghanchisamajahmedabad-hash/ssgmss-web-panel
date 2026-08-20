@@ -1005,13 +1005,17 @@ const fetchProgramDetailsStats = async () => {
         <div className="flex items-center gap-2">
           <AppstoreOutlined className="text-blue-600" />
           <span>Program Performance</span>
+          {programStats.length > 0 && (
+            <Tag color="blue" style={{ marginLeft: 4 }}>{programStats.length}</Tag>
+          )}
         </div>
       }
       className="shadow-sm"
 
     >
       <Row gutter={[16, 16]}>
-        {programStats.slice(0, 4).map((program, index) => (
+        {/* All programs — previously capped at 4, which silently hid the rest */}
+        {programStats.map((program, index) => (
           <Col xs={24} sm={12} lg={6} key={index}>
             <div className="p-4 hover:bg-gray-50 rounded-lg transition-colors border border-gray-100">
               <div className="flex justify-between items-start mb-3">
