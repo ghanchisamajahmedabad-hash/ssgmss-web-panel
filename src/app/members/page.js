@@ -123,7 +123,7 @@ const Page = () => {
   })
 
   const [filters, setFilters] = useState({
-    search: '', programId: 'all', ageGroupIds: [], agentId: 'all',
+    search: '', programIds: [], ageGroupIds: [], agentId: 'all',
     status: 'all', paymentStatus: 'all',
     closingPaymentStatus: 'all', gender: 'all',
     fromDate: null, toDate: null,
@@ -232,23 +232,51 @@ const isSuperAdmin = (user) => user?.role === 'superadmin';
   const handleFilterChange = (changedValues) => {
     setFilters(prev => {
       const next = { ...prev, ...changedValues }
-      // Age groups are scoped to a program — switching programs invalidates any
-      // previously chosen groups, so clear them rather than filtering on ids that
-      // belong to a different yojna (which would return zero rows).
-      if ('programId' in changedValues) {
-        next.ageGroupIds = []
-        filterForm.setFieldValue('ageGroupIds', [])
+      // Age group ids are scoped to a program. When the program selection
+      // changes, drop any group that no longer belongs to a selected yojna —
+      // keeping them would filter on ids that can never match, returning zero
+      // rows with no obvious reason why.
+      if ('programIds' in changedValues) {
+        const stillValid = new Set(
+          (changedValues.programIds || [])
+            .flatMap(pid => (programList?.find(p => p.id === pid)?.ageGroups || []).map(g => g.id))
+        )
+        const kept = (next.ageGroupIds || []).filter(id => stillValid.has(id))
+        next.ageGroupIds = kept
+        filterForm.setFieldValue('ageGroupIds', kept)
       }
       return next
     })
   }
 
-  // Age groups available for the currently selected program
+  // Age groups across every selected yojna, grouped so identically-named groups
+  // from different programs stay distinguishable
+  const ageGroupOptions = useMemo(() => {
+    const ids = filters.programIds || []
+    if (!ids.length) return []
+    return ids
+      .map(pid => programList?.find(p => p.id === pid))
+      .filter(Boolean)
+      .map(prog => ({
+        label: prog.name,
+        options: (prog.ageGroups || []).map(g => ({
+          value: g.id,
+          label: `${g.ageGroupName || `${g.startAge}-${g.endAge}`}${
+            g.startAge != null && g.endAge != null ? ` (${g.startAge}–${g.endAge} yrs)` : ''
+          }`,
+        })),
+      }))
+      .filter(grp => grp.options.length > 0)
+  }, [filters.programIds, programList])
+
+  // Flat list — used for chip labels and the select-all helper
   const availableAgeGroups = useMemo(() => {
-    if (!filters.programId || filters.programId === 'all') return []
-    const prog = programList?.find(p => p.id === filters.programId)
-    return prog?.ageGroups || []
-  }, [filters.programId, programList])
+    const ids = filters.programIds || []
+    return ids
+      .map(pid => programList?.find(p => p.id === pid))
+      .filter(Boolean)
+      .flatMap(prog => (prog.ageGroups || []).map(g => ({ ...g, programName: prog.name })))
+  }, [filters.programIds, programList])
 
   const applyFilters = () => {
     setFilterModalVisible(false)
@@ -259,7 +287,7 @@ const isSuperAdmin = (user) => user?.role === 'superadmin';
 
   const resetFilters = () => {
     const reset = {
-      search: '', programId: 'all', ageGroupIds: [], agentId: 'all',
+      search: '', programIds: [], ageGroupIds: [], agentId: 'all',
       status: 'all', paymentStatus: 'all', closingPaymentStatus: 'all', gender: 'all',
       fromDate: null, toDate: null, sortField: 'createdAt', sortOrder: 'desc'
     }
@@ -296,7 +324,7 @@ const isSuperAdmin = (user) => user?.role === 'superadmin';
 
   const getActiveFilterCount = () => {
     let c = 0
-    if (filters.programId            !== 'all') c++
+    if (filters.programIds?.length)             c++
     if (filters.ageGroupIds?.length)            c++
     if (filters.agentId              !== 'all') c++
     if (filters.status               !== 'all') c++
@@ -382,8 +410,7 @@ const isSuperAdmin = (user) => user?.role === 'superadmin';
       }
     });
     // Fallback only — used for members whose program couldn't be resolved
-    const memberProgram = programList?.find(p => p.id === filters.programId) ||
-      programList?.find(p => p.id === membersArray[0]?.programId) || {}
+    const memberProgram = programList?.find(p => p.id === membersArray[0]?.programId) || {}
     try {
       const response = await fetch('/api/certificate-send', {
         method: 'POST',
@@ -874,7 +901,8 @@ const handleDeleteMember = (member) => {
     try {
       let q = collection(db, 'members')
       const constraints = []
-      if (filters.programId !== 'all') constraints.push(where('programId', '==', filters.programId))
+      if (filters.programIds?.length === 1) constraints.push(where('programId', '==', filters.programIds[0]))
+      else if (filters.programIds?.length > 1) constraints.push(where('programId', 'in', filters.programIds.slice(0, 30)))
       if (filters.ageGroupIds?.length === 1) constraints.push(where('ageGroupId', '==', filters.ageGroupIds[0]))
       else if (filters.ageGroupIds?.length > 1) constraints.push(where('ageGroupId', 'in', filters.ageGroupIds.slice(0, 30)))
       if (filters.status === 'active') constraints.push(where('active_flag', '==', true))
@@ -884,9 +912,11 @@ const handleDeleteMember = (member) => {
       else if (filters.paymentStatus === 'partial') constraints.push(where('paymentPercentage', '>', 0), where('paymentPercentage', '<', 100))
       else if (filters.paymentStatus === 'pending') constraints.push(where('paymentPercentage', '==', 0))
       if (filters.agentId !== 'all') constraints.push(where('agentId', '==', filters.agentId))
-      if (filters.fromDate) constraints.push(where('createdAt', '>=', dayjs(filters.fromDate).startOf('day').toDate()))
-      if (filters.toDate) constraints.push(where('createdAt', '<=', dayjs(filters.toDate).endOf('day').toDate()))
-      constraints.push(orderBy('createdAt', 'desc'))
+      // Join date, not record-creation date — must match the table's filter.
+      // A range filter also requires its field to lead the orderBy.
+      if (filters.fromDate) constraints.push(where('joinDateTs', '>=', dayjs(filters.fromDate).startOf('day').toDate()))
+      if (filters.toDate) constraints.push(where('joinDateTs', '<=', dayjs(filters.toDate).endOf('day').toDate()))
+      constraints.push(orderBy(filters.fromDate || filters.toDate ? 'joinDateTs' : 'createdAt', 'desc'))
       q = query(q, ...constraints)
       let snap = await getDocs(q)
       let data = snap.docs.map(d => ({ id: d.id, ...d.data() }))
@@ -923,7 +953,8 @@ const handleDeleteMember = (member) => {
         where("delete_flag", "==", false),
         where("status",      "==", "active")
       ]
-      if (filters.programId !== 'all') constraints.push(where('programId', '==', filters.programId))
+      if (filters.programIds?.length === 1) constraints.push(where('programId', '==', filters.programIds[0]))
+      else if (filters.programIds?.length > 1) constraints.push(where('programId', 'in', filters.programIds.slice(0, 30)))
       if (filters.ageGroupIds?.length === 1) constraints.push(where('ageGroupId', '==', filters.ageGroupIds[0]))
       else if (filters.ageGroupIds?.length > 1) constraints.push(where('ageGroupId', 'in', filters.ageGroupIds.slice(0, 30)))
       if (filters.status === 'active') constraints.push(where('active_flag', '==', true))
@@ -933,9 +964,11 @@ const handleDeleteMember = (member) => {
       else if (filters.paymentStatus === 'partial') constraints.push(where('paymentPercentage', '>', 0), where('paymentPercentage', '<', 100))
       else if (filters.paymentStatus === 'pending') constraints.push(where('paymentPercentage', '==', 0))
       if (filters.agentId !== 'all') constraints.push(where('agentId', '==', filters.agentId))
-      if (filters.fromDate) constraints.push(where('createdAt', '>=', dayjs(filters.fromDate).startOf('day').toDate()))
-      if (filters.toDate) constraints.push(where('createdAt', '<=', dayjs(filters.toDate).endOf('day').toDate()))
-      constraints.push(orderBy('createdAt', 'desc'))
+      // Join date, not record-creation date — must match the table's filter.
+      // A range filter also requires its field to lead the orderBy.
+      if (filters.fromDate) constraints.push(where('joinDateTs', '>=', dayjs(filters.fromDate).startOf('day').toDate()))
+      if (filters.toDate) constraints.push(where('joinDateTs', '<=', dayjs(filters.toDate).endOf('day').toDate()))
+      constraints.push(orderBy(filters.fromDate || filters.toDate ? 'joinDateTs' : 'createdAt', 'desc'))
       q = query(q, ...constraints)
       let snap = await getDocs(q)
       let data = snap.docs.map(d => ({ id: d.id, ...d.data() }))
@@ -987,7 +1020,7 @@ const handleDeleteMember = (member) => {
     if (data.length < before) message.info(`Printing ${data.length} accepted members (${before - data.length} pending skipped)`)
 
     const filterParts = []
-    if (filters.programId !== 'all') filterParts.push(`Yojna: ${programList?.find(p => p.id === filters.programId)?.name || filters.programId}`)
+    if (filters.programIds?.length) filterParts.push(`Yojna: ${filters.programIds.map(id => programList?.find(p => p.id === id)?.name || id).join(', ')}`)
     if (filters.agentId !== 'all') filterParts.push(`Agent: ${getAgentName(filters.agentId)}`)
     if (filters.status !== 'all') filterParts.push(`Status: ${filters.status}`)
     if (filters.paymentStatus !== 'all') filterParts.push(`Payment: ${filters.paymentStatus}`)
@@ -1263,12 +1296,24 @@ ${filterHtml}
               {getActiveFilterCount()} active:
             </span>
 
-            {filters.programId !== 'all' && (
-              <Tag color="magenta" closable style={{ margin: 0 }}
-                onClose={() => clearFilter({ programId: 'all', ageGroupIds: [] })}>
-                Yojna: {programList?.find(p => p.id === filters.programId)?.name || filters.programId}
+            {/* One chip per selected yojna. Removing one also drops any age
+                group belonging to it, since those ids can't match anything else */}
+            {filters.programIds?.map(pid => (
+              <Tag key={pid} color="magenta" closable style={{ margin: 0 }}
+                onClose={() => {
+                  const nextPrograms = filters.programIds.filter(x => x !== pid)
+                  const stillValid = new Set(
+                    nextPrograms.flatMap(id =>
+                      (programList?.find(p => p.id === id)?.ageGroups || []).map(g => g.id))
+                  )
+                  clearFilter({
+                    programIds:  nextPrograms,
+                    ageGroupIds: (filters.ageGroupIds || []).filter(id => stillValid.has(id)),
+                  })
+                }}>
+                Yojna: {programList?.find(p => p.id === pid)?.name || pid}
               </Tag>
-            )}
+            ))}
             {/* One chip per selected group, each removable on its own */}
             {filters.ageGroupIds?.map(id => (
               <Tag key={id} color="purple" closable style={{ margin: 0 }}
@@ -1724,11 +1769,47 @@ ${filterHtml}
               YOJNA
             </div>
 
-            <Form.Item label="Yojna" name="programId" style={{ marginBottom: 12 }}>
-              <Select placeholder="All Yojna" showSearch optionFilterProp="children">
-                <Option value="all">All Yojna</Option>
-                {programList?.map(p => <Option key={p.id} value={p.id}>{p.name}</Option>)}
-              </Select>
+            <Form.Item
+              label={
+                <div className="flex items-center justify-between w-full" style={{ minWidth: 220 }}>
+                  <span>Yojna</span>
+                  <span className="flex gap-2">
+                    <a
+                      style={{ fontSize: 11 }}
+                      onClick={() => {
+                        const all = (programList || []).map(p => p.id)
+                        filterForm.setFieldValue('programIds', all)
+                        handleFilterChange({ programIds: all })
+                      }}
+                    >
+                      Select all
+                    </a>
+                    {filters.programIds?.length > 0 && (
+                      <a
+                        style={{ fontSize: 11, color: '#9ca3af' }}
+                        onClick={() => {
+                          filterForm.setFieldsValue({ programIds: [], ageGroupIds: [] })
+                          handleFilterChange({ programIds: [] })
+                        }}
+                      >
+                        Clear
+                      </a>
+                    )}
+                  </span>
+                </div>
+              }
+              name="programIds"
+              style={{ marginBottom: 12 }}
+            >
+              <Select
+                mode="multiple"
+                allowClear
+                placeholder="All Yojna"
+                showSearch
+                optionFilterProp="label"
+                maxTagCount="responsive"
+                options={(programList || []).map(p => ({ value: p.id, label: p.name }))}
+              />
             </Form.Item>
 
             {/* Age groups are defined per yojna, so this stays locked until one is chosen */}
@@ -1769,25 +1850,22 @@ ${filterHtml}
               <Select
                 mode="multiple"
                 allowClear
-                placeholder={filters.programId === 'all' ? 'Select a Yojna first' : 'All Age Groups'}
-                disabled={filters.programId === 'all'}
+                placeholder={!filters.programIds?.length ? 'Select a Yojna first' : 'All Age Groups'}
+                disabled={!filters.programIds?.length}
                 showSearch
                 optionFilterProp="label"
                 maxTagCount="responsive"
-                options={availableAgeGroups.map(g => ({
-                  value: g.id,
-                  label: `${g.ageGroupName || `${g.startAge}-${g.endAge}`}${
-                    g.startAge != null && g.endAge != null ? ` (${g.startAge}–${g.endAge} yrs)` : ''
-                  }`,
-                }))}
+                // Grouped by yojna — several programs use the same group names
+                // (M3, M4…), so a flat list would be ambiguous
+                options={ageGroupOptions}
               />
             </Form.Item>
 
             <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 6 }}>
-              {filters.programId === 'all'
-                ? 'Age groups are defined per yojna — pick one to filter by group.'
+              {!filters.programIds?.length
+                ? 'Age groups are defined per yojna — pick one or more to filter by group.'
                 : filters.ageGroupIds?.length
-                  ? `Showing ${filters.ageGroupIds.length} of ${availableAgeGroups.length} groups`
+                  ? `Showing ${filters.ageGroupIds.length} of ${availableAgeGroups.length} groups across ${filters.programIds.length} yojna`
                   : 'Leave empty to include every age group.'}
             </div>
           </div>
@@ -1875,11 +1953,11 @@ ${filterHtml}
                 ACTIVE FILTERS
               </div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                {filters.programId !== 'all' && (
-                  <Tag color="magenta" style={{ margin: 0 }}>
-                    {programList?.find(p => p.id === filters.programId)?.name || filters.programId}
+                {filters.programIds?.map(pid => (
+                  <Tag key={pid} color="magenta" style={{ margin: 0 }}>
+                    {programList?.find(p => p.id === pid)?.name || pid}
                   </Tag>
-                )}
+                ))}
                 {filters.ageGroupIds?.map(id => (
                   <Tag key={id} color="purple" style={{ margin: 0 }}>
                     {availableAgeGroups.find(g => g.id === id)?.ageGroupName || 'Age group'}

@@ -21,7 +21,7 @@ import { db } from "../../../../lib/firbase-client";
 export const buildMembersQuery = (filters = {}) => {
   const {
     search              = "",
-    programId           = null,
+    programIds          = [],
     ageGroupIds         = [],
     agentId             = null,
     status              = "all",
@@ -41,9 +41,12 @@ export const buildMembersQuery = (filters = {}) => {
     where("status",      "==", "active")
   ];
 
-  // ── Program filter (flat field, not array-contains) ───────────────────────
-  if (programId && programId !== "all") {
-    conditions.push(where("programId", "==", programId));
+  // ── Program filter (multi-select, flat field) ─────────────────────────────
+  const progIds = Array.isArray(programIds) ? programIds.filter(Boolean) : [];
+  if (progIds.length === 1) {
+    conditions.push(where("programId", "==", progIds[0]));
+  } else if (progIds.length > 1) {
+    conditions.push(where("programId", "in", progIds.slice(0, 30)));
   }
 
   // ── Age group filter (multi-select) ───────────────────────────────────────
@@ -79,9 +82,13 @@ export const buildMembersQuery = (filters = {}) => {
   }
   // "partial" handled client-side
 
-  // ── Date range ────────────────────────────────────────────────────────────
-  if (fromDate) conditions.push(where("createdAt", ">=", Timestamp.fromDate(new Date(fromDate))));
-  if (toDate)   conditions.push(where("createdAt", "<=", Timestamp.fromDate(new Date(toDate))));
+  // ── Join date range ───────────────────────────────────────────────────────
+  // Queries joinDateTs, NOT createdAt. createdAt is when the record was made,
+  // so editing a member's join date had no effect on this filter at all.
+  // dateJoin/programJoinDate are DD-MM-YYYY strings and don't sort
+  // chronologically, hence the dedicated Timestamp field.
+  if (fromDate) conditions.push(where("joinDateTs", ">=", Timestamp.fromDate(new Date(fromDate))));
+  if (toDate)   conditions.push(where("joinDateTs", "<=", Timestamp.fromDate(new Date(toDate))));
 
   // ── Search ────────────────────────────────────────────────────────────────
   if (search && search.trim()) {
@@ -90,19 +97,33 @@ export const buildMembersQuery = (filters = {}) => {
   }
 
   // ── Sort ──────────────────────────────────────────────────────────────────
-  let orderByClause;
-  switch (sortField) {
-    case "registrationNumber":
-      orderByClause = orderBy("search_registrationNumber", sortOrder); break;
-    case "payment":
-      orderByClause = orderBy("paymentPercentage", sortOrder); break;
-    case "dateJoin":
-      orderByClause = orderBy("createdAt", sortOrder); break;
-    default:
-      orderByClause = orderBy(sortField, sortOrder);
+  // Firestore requires the FIRST orderBy to be the field carrying a range
+  // filter. With a join-date range applied we must lead on joinDateTs or the
+  // query is rejected outright.
+  const hasDateRange = !!(fromDate || toDate);
+
+  const orderByClauses = [];
+  if (hasDateRange) {
+    orderByClauses.push(orderBy("joinDateTs", sortOrder));
   }
 
-  const queryConstraints = [...conditions, orderByClause, limit(pageSize)];
+  switch (sortField) {
+    case "registrationNumber":
+      orderByClauses.push(orderBy("search_registrationNumber", sortOrder)); break;
+    case "payment":
+      orderByClauses.push(orderBy("paymentPercentage", sortOrder)); break;
+    case "dateJoin":
+      // Already ordered by joinDateTs above when a range is active
+      if (!hasDateRange) orderByClauses.push(orderBy("joinDateTs", sortOrder));
+      break;
+    default:
+      // Skip a duplicate clause if the caller is already sorting by join date
+      if (!(hasDateRange && sortField === "joinDateTs")) {
+        orderByClauses.push(orderBy(sortField, sortOrder));
+      }
+  }
+
+  const queryConstraints = [...conditions, ...orderByClauses, limit(pageSize)];
   if (lastDoc) queryConstraints.push(startAfter(lastDoc));
 
   return query(membersRef, ...queryConstraints);
@@ -114,7 +135,7 @@ export const buildMembersQuery = (filters = {}) => {
 export const getTotalMembersCount = async (filters = {}) => {
   const {
     search        = "",
-    programId     = null,
+    programIds    = [],
     ageGroupIds   = [],
     agentId       = null,
     status        = "all",
@@ -134,8 +155,11 @@ export const getTotalMembersCount = async (filters = {}) => {
     where("status",      "==", "active")
   ];
 
-  if (programId && programId !== "all")
-    conditions.push(where("programId", "==", programId));   // ← flat field
+  const progIdsForCount = Array.isArray(programIds) ? programIds.filter(Boolean) : [];
+  if (progIdsForCount.length === 1)
+    conditions.push(where("programId", "==", progIdsForCount[0]));
+  else if (progIdsForCount.length > 1)
+    conditions.push(where("programId", "in", progIdsForCount.slice(0, 30)));
 
   const ageIdsForCount = Array.isArray(ageGroupIds) ? ageGroupIds.filter(Boolean) : [];
   if (ageIdsForCount.length === 1)
@@ -153,8 +177,9 @@ export const getTotalMembersCount = async (filters = {}) => {
   if (paymentStatus === "paid")    conditions.push(where("paymentPercentage", "==", 100));
   if (paymentStatus === "pending") conditions.push(where("paymentPercentage", "==", 0));
 
-  if (fromDate) conditions.push(where("createdAt", ">=", Timestamp.fromDate(new Date(fromDate))));
-  if (toDate)   conditions.push(where("createdAt", "<=", Timestamp.fromDate(new Date(toDate))));
+  // Join date, not record-creation date — see buildMembersQuery
+  if (fromDate) conditions.push(where("joinDateTs", ">=", Timestamp.fromDate(new Date(fromDate))));
+  if (toDate)   conditions.push(where("joinDateTs", "<=", Timestamp.fromDate(new Date(toDate))));
 
   if (search && search.trim()) {
     const normalized = search.trim().toLowerCase().replace(/[^a-z0-9]/g, "");

@@ -58,6 +58,62 @@ export async function GET(req) {
       });
     }
 
+    // ── Search ────────────────────────────────────────────────────────────
+    // Previously the page slice happened BEFORE the search was applied, so only
+    // the current page of groups was ever examined. With a single agent
+    // selected everything fit on page one and search appeared to work; with
+    // "All Agents" the matching UTR usually sat on a later page and was never
+    // looked at, so the search returned nothing.
+    //
+    // Now the matching groups are resolved up front — via targeted Firestore
+    // queries rather than scanning every group's transactions, which would mean
+    // one read per group across the whole collection.
+    if (search) {
+      const raw = search.trim();
+
+      // Firestore has no substring operator; prefix ranges are the closest
+      // equivalent and suit UTR / registration numbers, which are searched
+      // from the start.
+      const prefixQuery = (coll, field, value) =>
+        db.collection(coll)
+          .where(field, '>=', value)
+          .where(field, '<=', value + '')
+          .limit(200)
+          .get();
+
+      // Transaction ids are stored as entered (usually upper-case), while
+      // search_keyword is lower-cased at write time — so try both forms.
+      const variants = [...new Set([raw, raw.toUpperCase(), raw.toLowerCase()])];
+
+      const lookups = [];
+      for (const v of variants) {
+        lookups.push(prefixQuery('paymentGroups', 'transactionId', v));
+        for (const coll of ['memberJoinFees', 'memberClosingFees']) {
+          lookups.push(prefixQuery(coll, 'transactionId', v));
+          lookups.push(prefixQuery(coll, 'memberRegNo', v));
+          lookups.push(prefixQuery(coll, 'registrationNumber', v));
+        }
+      }
+      // Member name / phone live in the lower-cased keyword blob
+      for (const coll of ['memberJoinFees', 'memberClosingFees']) {
+        lookups.push(prefixQuery(coll, 'search_keyword', raw.toLowerCase()));
+      }
+
+      const settled = await Promise.allSettled(lookups);
+
+      const matchedGroupIds = new Set();
+      settled.forEach(r => {
+        if (r.status !== 'fulfilled') return;
+        r.value.docs.forEach(d => {
+          const data = d.data();
+          // paymentGroups matches are the group itself; fee docs carry groupId
+          matchedGroupIds.add(data.groupId || d.id);
+        });
+      });
+
+      allGroups = allGroups.filter(g => matchedGroupIds.has(g.id));
+    }
+
     const totalGroups = allGroups.length;
     const totalPages = Math.ceil(totalGroups / pageSize);
     const targetGroups = isExport ? allGroups : allGroups.slice((page - 1) * pageSize, page * pageSize);

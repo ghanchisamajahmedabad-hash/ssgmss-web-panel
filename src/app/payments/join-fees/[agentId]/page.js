@@ -1,7 +1,7 @@
 "use client";
 import { fetchMembersByAgent } from '@/app/members/components/firebase-helpers';
 import { useParams, useSearchParams } from 'next/navigation';
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useRef } from 'react';
 import { useSelector } from 'react-redux';
 import { useAuth } from '@/components/Base/AuthProvider';
 import {
@@ -153,6 +153,11 @@ const MemberPaymentPage = () => {
   const [uploadedFile,               setUploadedFile]               = useState(null);
   const [uploading,                  setUploading]                  = useState(false);
   const [processingPayments,         setProcessingPayments]         = useState([]);
+
+  // Idempotency key for the in-flight payment. Survives re-renders so a retry
+  // of the same submission reuses it; cleared once the payment succeeds or the
+  // drawer is closed, so the next payment gets a fresh key.
+  const idempotencyKeyRef = useRef(null);
 
   // ── Derived ──────────────────────────────────────────────────────────────
   const membersMap = useMemo(() => Object.fromEntries(members.map(m => [m.id, m])), [members]);
@@ -371,6 +376,16 @@ const MemberPaymentPage = () => {
     try {
       if (!auth.currentUser) { message.error('No authenticated user'); return; }
       setUploading(true);
+
+      // Stable per-attempt key so a double-click, a browser retry, or a second
+      // click after a slow response can't create a second payment group.
+      // Held in a ref: retrying the SAME payment must reuse the same key, while
+      // a new payment (drawer reopened) gets a fresh one.
+      if (!idempotencyKeyRef.current) {
+        idempotencyKeyRef.current =
+          `jf_${agentId}_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+      }
+
       let fileUrl = null;
       if (uploadedFile) {
         const result = await uploadFile(uploadedFile, `memberpayments/JoinFees/${agentId}/${Date.now()}_${uploadedFile.name}`);
@@ -386,8 +401,23 @@ const MemberPaymentPage = () => {
         totalAmount: totalAmt,
         agentId,
         programId: selectedProgram !== 'all' ? selectedProgram : null,
+        idempotencyKey: idempotencyKeyRef.current,
       });
+
+      // Server recognised this as a replay — the payment already exists
+      if (res.alreadyProcessed) {
+        message.warning(res.message || 'This payment was already recorded.');
+        setIsPaymentDrawerVisible(false);
+        fetchMember();
+        setSelectedMembers([]);
+        setMemberPayments({});
+        setGlobalPaymentAmount('');
+        idempotencyKeyRef.current = null;
+        return;
+      }
+
       if (res.success) {
+        idempotencyKeyRef.current = null;   // this payment is done
         // Deduct from advance balance if payment method is advance
         if (paymentMethod === 'advance') {
           const deductResult = await deductFromAdvance(totalAmt, `Join Fees — ${processingPayments.length} member(s)`);
@@ -880,7 +910,12 @@ const MemberPaymentPage = () => {
       />
       <PaymentConfirmationDrawer
         visible={isPaymentDrawerVisible}
-        onClose={() => setIsPaymentDrawerVisible(false)}
+        onClose={() => {
+          // Abandoning the drawer ends this attempt — the next payment must
+          // get a fresh key, or it would be rejected as a duplicate.
+          idempotencyKeyRef.current = null;
+          setIsPaymentDrawerVisible(false);
+        }}
         onConfirm={confirmPayment}
         uploading={uploading}
         processingPayments={processingPayments}

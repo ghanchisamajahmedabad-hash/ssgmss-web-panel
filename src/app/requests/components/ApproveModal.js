@@ -200,6 +200,8 @@ const ApproveModal = ({ open, setOpen, selectedMember, setSelectedMember, fetchA
         joinYear:      finalJoinDate.year(),
         joinMonth:     finalJoinDate.month() + 1,
         joinYearMonth: finalJoinDate.format('YYYY-MM'),
+        // Sortable copy — DD-MM-YYYY strings can't be range-queried
+        joinDateTs:    finalJoinDate.startOf('day').toDate(),
         isPendingApproval: false,
         registrationNumber: finalRegNumber,
         search_registrationNumber: finalRegNumber,

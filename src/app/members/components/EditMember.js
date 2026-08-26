@@ -399,6 +399,9 @@ const EditMember = ({ open, setOpen, programs, agents, currentUser, memberId, on
         joinYear:      joinDate.year(),
         joinMonth:     joinDate.month() + 1,
         joinYearMonth: joinDate.format('YYYY-MM'),
+        // Sortable copy — this is what the date-range filter queries, so it
+        // must be rewritten whenever the join date is edited
+        joinDateTs:    joinDate.startOf('day').toDate(),
         dobDate:      dobDate?.format('DD-MM-YYYY') || '',
         age,
 

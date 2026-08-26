@@ -1,7 +1,7 @@
 "use client"
-import { App, Button, Drawer, Form, Spin, Checkbox, Space } from 'antd'
+import { App, Button, Drawer, Form, Spin, Checkbox, Space, Input, Row, Col, Tooltip } from 'antd'
 import React, { useState, useEffect, useCallback } from 'react'
-import { LoadingOutlined } from '@ant-design/icons'
+import { LoadingOutlined, ReloadOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import isBetween from 'dayjs/plugin/isBetween'
 import { collection, getDocs, query, where } from 'firebase/firestore'
@@ -16,7 +16,7 @@ import AddedByForm      from './components/AddedByForm'
 import FeesForm         from './components/FeesForm'
 import PhotoUploads     from './components/PhotoUploads'
 import DocumentUploads  from './components/DocumentUploads'
-import { checkAadhaarDuplicate, handleSubmit } from './components/firebaseUtils'
+import { checkAadhaarDuplicate, handleSubmit, generateRegistrationNumber, isRegistrationNumberAvailable } from './components/firebaseUtils'
 
 dayjs.extend(isBetween)
 
@@ -75,6 +75,43 @@ const AddMember = ({ open, setOpen, programs, agents, currentUser, onSuccess }) 
   // ── Notification options ───────────────────────────────────────────────────
   // WhatsApp sends are opt-in — messages cost money and go to real people, so
   // they should be a deliberate choice rather than something that fires by default
+  // ── Registration number ────────────────────────────────────────────────────
+  // Auto-filled when a yojna is picked (the prefix comes from the program), but
+  // editable so an admin can enter a specific number.
+  const [regNoLoading, setRegNoLoading]   = useState(false)
+  const [regNoStatus,  setRegNoStatus]    = useState(null)  // { ok, message }
+
+  const generateRegNo = useCallback(async (programId) => {
+    if (!programId) return
+    setRegNoLoading(true)
+    setRegNoStatus(null)
+    try {
+      const regNo = await generateRegistrationNumber(programId)
+      form.setFieldValue('registrationNumber', regNo)
+      setRegNoStatus({ ok: true, message: 'Auto-generated' })
+    } catch (e) {
+      console.error('Failed to generate registration number:', e)
+      setRegNoStatus({ ok: false, message: 'Could not generate — enter one manually' })
+    } finally {
+      setRegNoLoading(false)
+    }
+  }, [form])
+
+  // Verify a manually typed number is still free
+  const checkRegNo = useCallback(async (value) => {
+    const v = String(value || '').trim().toUpperCase()
+    if (!v) { setRegNoStatus(null); return }
+    setRegNoLoading(true)
+    try {
+      const res = await isRegistrationNumberAvailable(v)
+      setRegNoStatus(res.available
+        ? { ok: true,  message: res.unchecked ? 'Could not verify — will be checked on save' : 'Available' }
+        : { ok: false, message: res.reason })
+    } finally {
+      setRegNoLoading(false)
+    }
+  }, [])
+
   const [sendWhatsApp, setSendWhatsApp] = useState(false)
   const [sendAgentWhatsApp, setSendAgentWhatsApp] = useState(false)
   const [sendNotification, setSendNotification] = useState(true)
@@ -192,7 +229,15 @@ const AddMember = ({ open, setOpen, programs, agents, currentUser, onSuccess }) 
   const handleProgramChange = (programId) => {
     setSelectedProgram(programId || '')
     setSelectedMemberGroup(null)
-    if (!programId) setProgramDetail(null)
+    if (!programId) {
+      setProgramDetail(null)
+      form.setFieldValue('registrationNumber', '')
+      setRegNoStatus(null)
+      return
+    }
+    // The prefix comes from the yojna, so the number is generated once one is
+    // chosen — and regenerated if the yojna changes.
+    generateRegNo(programId)
   }
 
   const handleMemberGroupChange = (groupId) => {
@@ -291,8 +336,9 @@ const AddMember = ({ open, setOpen, programs, agents, currentUser, onSuccess }) 
     setJoinFeesDone(false); setPaymentMode('cash'); setPaidAmount(0)
     setAddedByRole('admin'); setSelectedAgent(null)
     setExistingMember(null)
-    setSendWhatsApp(true)
+    setSendWhatsApp(false)
     setSendNotification(true)
+    setRegNoStatus(null); setRegNoLoading(false)
     form.resetFields()
   }
 
@@ -353,6 +399,65 @@ const AddMember = ({ open, setOpen, programs, agents, currentUser, onSuccess }) 
               selectedMemberGroup={selectedMemberGroup}
               handleMemberGroupChange={handleMemberGroupChange}
             />
+
+            {/* ── Registration number ─────────────────────────────────────── */}
+            <div className="border rounded-lg p-4">
+              <div className="mb-3">
+                <h4 className="text-sm font-semibold text-gray-700 mb-1">Registration Number</h4>
+                <p className="text-xs text-gray-500">
+                  Generated automatically from the yojna prefix — edit it if you need a specific number.
+                </p>
+              </div>
+
+              <Row gutter={12}>
+                <Col xs={24} md={12}>
+                  <Form.Item
+                    name="registrationNumber"
+                    rules={[
+                      { required: true, message: 'Registration number is required' },
+                      {
+                        validator: (_, value) => {
+                          const v = String(value || '').trim()
+                          if (!v) return Promise.resolve()
+                          if (!/^[A-Z0-9-]{3,}$/i.test(v)) {
+                            return Promise.reject(new Error('Use letters, digits or hyphens (min 3 characters)'))
+                          }
+                          return Promise.resolve()
+                        },
+                      },
+                    ]}
+                    validateStatus={regNoStatus && !regNoStatus.ok ? 'error' : undefined}
+                    help={regNoStatus && !regNoStatus.ok ? regNoStatus.message : undefined}
+                    style={{ marginBottom: 4 }}
+                  >
+                    <Input
+                      placeholder={selectedProgram ? 'e.g. MEM548217' : 'Select a yojna first'}
+                      disabled={!selectedProgram || loading}
+                      className="font-mono uppercase"
+                      onChange={(e) => {
+                        // Keep stored numbers consistently upper-case
+                        form.setFieldValue('registrationNumber', e.target.value.toUpperCase())
+                        setRegNoStatus(null)
+                      }}
+                      onBlur={(e) => checkRegNo(e.target.value)}
+                      suffix={regNoLoading ? <LoadingOutlined /> : null}
+                      addonAfter={
+                        <Tooltip title="Generate a new number">
+                          <ReloadOutlined
+                            style={{ cursor: selectedProgram && !loading ? 'pointer' : 'not-allowed' }}
+                            onClick={() => selectedProgram && !loading && generateRegNo(selectedProgram)}
+                          />
+                        </Tooltip>
+                      }
+                    />
+                  </Form.Item>
+
+                  {regNoStatus?.ok && (
+                    <span className="text-xs text-green-600">✓ {regNoStatus.message}</span>
+                  )}
+                </Col>
+              </Row>
+            </div>
 
             <AddedByForm
               addedByRole={addedByRole}

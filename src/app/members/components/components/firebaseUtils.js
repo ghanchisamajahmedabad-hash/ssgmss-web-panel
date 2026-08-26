@@ -129,6 +129,66 @@ const REG_NO_MIN      = 100000;
 const REG_NO_RANGE    = 900000;   // 100000–999999 → 900,000 values
 const REG_NO_ATTEMPTS = 15;
 
+// Is this registration number free? Checks both existing members and the
+// reservation collection, so a number claimed by an in-flight registration
+// isn't handed out again.
+export const isRegistrationNumberAvailable = async (regNo) => {
+  const candidate = String(regNo || '').trim().toUpperCase()
+  if (!candidate) return { available: false, reason: 'Registration number is required' }
+
+  try {
+    const taken = await getDocs(query(
+      collection(db, 'members'),
+      where('registrationNumber', '==', candidate),
+      limit(1)
+    ))
+    if (!taken.empty) {
+      const m = taken.docs[0].data()
+      return {
+        available: false,
+        reason: `Already used by ${m.displayName || 'another member'}`,
+      }
+    }
+
+    const reserved = await getDoc(doc(db, 'registrationNumbers', candidate))
+    if (reserved.exists()) {
+      return { available: false, reason: 'This number is already reserved' }
+    }
+
+    return { available: true }
+  } catch (err) {
+    console.error('isRegistrationNumberAvailable failed:', err)
+    // Don't block registration on a failed check — the reserve step is authoritative
+    return { available: true, unchecked: true }
+  }
+}
+
+// Reserve a manually-entered registration number. Returns false if someone
+// else claimed it first, so the caller can prompt for a different one.
+export const reserveRegistrationNumber = async (regNo, programId) => {
+  const candidate = String(regNo || '').trim().toUpperCase()
+  if (!candidate) return false
+  try {
+    return await runTransaction(db, async (txn) => {
+      const ref  = doc(db, 'registrationNumbers', candidate)
+      const snap = await txn.get(ref)
+      if (snap.exists()) return false
+      txn.set(ref, {
+        registrationNumber: candidate,
+        programId: programId || null,
+        manual: true,
+        createdAt: serverTimestamp(),
+      })
+      return true
+    })
+  } catch (err) {
+    // Reservations collection may not be writable (rules) — fall back to
+    // allowing it; the members-collection check above already ran.
+    console.warn('reserveRegistrationNumber failed (continuing):', err)
+    return true
+  }
+}
+
 export const generateRegistrationNumber = async (programId) => {
   try {
     // ── Resolve the prefix from the program (falls back to 'MEM') ───────────
@@ -491,8 +551,29 @@ export const handleSubmit = async (values, context, message) => {
       return false
     }
 
-    // Generate registration number — use program-specific prefix & sequence
-    const registrationNumber = await generateRegistrationNumber(selectedProgramId)
+    // Registration number: use the one shown/typed in the form if present,
+    // otherwise generate. A manually entered number still has to be reserved so
+    // two admins can't submit the same one.
+    let registrationNumber
+    const typedRegNo = String(values.registrationNumber || '').trim().toUpperCase()
+
+    if (typedRegNo) {
+      const check = await isRegistrationNumberAvailable(typedRegNo)
+      if (!check.available) {
+        message.error(`Registration number ${typedRegNo} can't be used — ${check.reason}`)
+        setLoading(false)
+        return false
+      }
+      const reserved = await reserveRegistrationNumber(typedRegNo, selectedProgramId)
+      if (!reserved) {
+        message.error(`Registration number ${typedRegNo} was just taken by another entry. Please generate a new one.`)
+        setLoading(false)
+        return false
+      }
+      registrationNumber = typedRegNo
+    } else {
+      registrationNumber = await generateRegistrationNumber(selectedProgramId)
+    }
 
     // Atomically assign a global Sr. No. to this member
     const srNo = await getNextMemberSrNo()
@@ -639,6 +720,9 @@ export const handleSubmit = async (values, context, message) => {
       joinYear: joinDate.year(),
       joinMonth: joinDate.month() + 1,
       joinYearMonth: joinDate.format('YYYY-MM'),
+      // Sortable copy of the join date. dateJoin/programJoinDate are DD-MM-YYYY
+      // strings, which don't sort chronologically, so range filters need this.
+      joinDateTs: joinDate.startOf('day').toDate(),
       ageGroup: age < 18 ? 'minor' : age < 60 ? 'adult' : 'senior',
       hasPendingPayments: pendingAmount > 0,
       hasDocuments: !!(fileUrls.photoURL && fileUrls.documentFrontURL),
