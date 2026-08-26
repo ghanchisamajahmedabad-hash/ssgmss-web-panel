@@ -1,25 +1,27 @@
 // POST /api/members/backfill-join-date
 //
-// One-time migration: populates `joinDateTs` (a sortable Timestamp) on every
-// member that doesn't have it yet.
+// Populates `joinDateTs` (a sortable Timestamp) on members that don't have it.
 //
 // The join date has always been stored as `dateJoin` / `programJoinDate` in
 // DD-MM-YYYY form. Those strings don't sort chronologically ("05-01-2026" is
 // alphabetically less than "10-12-2025"), so they can't back a range filter.
-// The members page now filters on `joinDateTs`, which means any member without
-// the field silently drops out of date-filtered results until this has run.
+// The members page filters on `joinDateTs` — and Firestore range queries
+// SILENTLY SKIP documents that lack the field, so any member without it simply
+// never appears in a date range.
 //
-// Safe to run repeatedly — members that already have the field are skipped
-// unless `force` is set.
+// Runs in resumable chunks: an earlier version read the whole members
+// collection in one go, which timed out on large datasets and left nothing
+// written. The client calls this repeatedly, passing back `nextCursor`, until
+// `hasMore` is false.
 //
-// Body: { force?: boolean, dryRun?: boolean }
+// Body: { cursor?: string, batchSize?: number, force?: boolean, dryRun?: boolean }
 
 import { NextResponse } from 'next/server';
 import admin from '../../db/firebaseAdmin';
 import { checkRole, verifyToken } from '../../../../../middleware/authMiddleware';
 
 export const runtime = 'nodejs';
-export const maxDuration = 300;
+export const maxDuration = 60;
 
 const db = admin.firestore();
 
@@ -38,22 +40,38 @@ export async function POST(req) {
     const authResult = await verifyToken(req);
     if (!authResult.success)
       return NextResponse.json({ success: false, message: authResult.error }, { status: authResult.status });
-    if (!checkRole(['superadmin'], authResult.user.role))
-      return NextResponse.json({ success: false, message: 'Only superadmin can run this migration' }, { status: 403 });
+    // Admins too: this runs automatically for whoever opens the members page,
+    // and it only derives an existing date into a queryable form — it never
+    // changes a member's actual join date.
+    if (!checkRole(['superadmin', 'admin'], authResult.user.role))
+      return NextResponse.json({ success: false, message: 'Insufficient permissions' }, { status: 403 });
 
-    const { force = false, dryRun = false } = await req.json().catch(() => ({}));
+    const {
+      cursor = null,
+      batchSize = 400,
+      force = false,
+      dryRun = false,
+    } = await req.json().catch(() => ({}));
 
-    const snap = await db.collection('members').get();
+    // Ordering by document id gives stable pagination that can't skip or repeat
+    // rows as documents are written during the run.
+    let q = db.collection('members')
+      .orderBy(admin.firestore.FieldPath.documentId())
+      .limit(Math.min(Number(batchSize) || 400, 500));
+
+    if (cursor) q = q.startAfter(cursor);
+
+    const snap = await q.get();
 
     let scanned = 0, updated = 0, skipped = 0, unparseable = 0;
     const problems = [];
-
-    // Firestore caps a batch at 500 writes
-    let batch = db.batch();
+    const batch = db.batch();
     let pending = 0;
+    let lastId = cursor;
 
     for (const docSnap of snap.docs) {
       scanned++;
+      lastId = docSnap.id;
       const m = docSnap.data();
 
       if (m.joinDateTs && !force) { skipped++; continue; }
@@ -62,57 +80,53 @@ export async function POST(req) {
       let date = parseJoinDate(m.dateJoin) || parseJoinDate(m.programJoinDate);
 
       // Fall back to createdAt so the member still appears in date filters
-      // rather than disappearing entirely
+      // rather than dropping out entirely
       if (!date && m.createdAt?.toDate) {
         date = m.createdAt.toDate();
+        unparseable++;
         problems.push({
           id: docSnap.id,
           registrationNumber: m.registrationNumber || '',
           reason: 'No parseable join date — used createdAt',
           dateJoin: m.dateJoin || null,
         });
-        unparseable++;
       }
 
       if (!date) {
+        unparseable++;
         problems.push({
           id: docSnap.id,
           registrationNumber: m.registrationNumber || '',
           reason: 'No join date and no createdAt — skipped',
           dateJoin: m.dateJoin || null,
         });
-        unparseable++;
         continue;
       }
 
       if (!dryRun) {
         batch.update(docSnap.ref, { joinDateTs: admin.firestore.Timestamp.fromDate(date) });
         pending++;
-        if (pending >= 450) {
-          await batch.commit();
-          batch = db.batch();
-          pending = 0;
-        }
       }
       updated++;
     }
 
     if (!dryRun && pending > 0) await batch.commit();
 
-    console.log(`[BackfillJoinDate] scanned=${scanned} updated=${updated} skipped=${skipped} problems=${problems.length}${dryRun ? ' (dry run)' : ''}`);
+    // A short page means we've reached the end of the collection
+    const hasMore = snap.size === Math.min(Number(batchSize) || 400, 500);
+
+    console.log(`[BackfillJoinDate] chunk scanned=${scanned} updated=${updated} skipped=${skipped} hasMore=${hasMore}${dryRun ? ' (dry run)' : ''}`);
 
     return NextResponse.json({
       success: true,
       dryRun,
-      message: dryRun
-        ? `Dry run: ${updated} member(s) would be updated, ${skipped} already had the field`
-        : `Backfilled ${updated} member(s); ${skipped} already had the field`,
       scanned,
       updated,
       skipped,
       unparseable,
-      // Cap the payload — the counts above tell the real story
-      problems: problems.slice(0, 50),
+      hasMore,
+      nextCursor: hasMore ? lastId : null,
+      problems: problems.slice(0, 20),
     });
 
   } catch (error) {

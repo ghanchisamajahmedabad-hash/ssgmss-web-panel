@@ -28,7 +28,7 @@ import {
   fetchAllMembersForSearch
 } from './components/firebase-helpers'
 import { auth, db } from '../../../lib/firbase-client'
-import { doc, updateDoc, query, where, orderBy, collection, getDocs, getDoc } from 'firebase/firestore'
+import { doc, updateDoc, query, where, orderBy, collection, getDocs, getDoc, getCountFromServer } from 'firebase/firestore'
 import { BlobProvider, PDFDownloadLink } from '@react-pdf/renderer'
 import CertificateCom from './components/MemberPdf/CertificateCom'
 import MemberListPdf from './components/MemberPdf/MemberListPdf'
@@ -310,6 +310,115 @@ const isSuperAdmin = (user) => user?.role === 'superadmin';
     // nothing before.
     setTimeout(() => fetchMembers(1, true, reset), 0)
   }
+
+  // ── One-time migration: populate joinDateTs on older members ──────────────
+  // The join-date range filter queries joinDateTs. Firestore range queries skip
+  // documents that don't have the field at all, so members created before it
+  // existed vanish from date-filtered results until this is run.
+  const [backfillLoading, setBackfillLoading] = useState(false)
+  const [backfillProgress, setBackfillProgress] = useState(null)
+  const backfillCheckedRef = useRef(false)
+
+  const runJoinDateBackfill = async ({ silent = false } = {}) => {
+    setBackfillLoading(true)
+    setBackfillProgress({ scanned: 0, updated: 0 })
+
+    // The server processes a chunk per request and hands back a cursor. Looping
+    // here means the migration completes regardless of collection size instead
+    // of dying on a single long-running request.
+    const totals = { scanned: 0, updated: 0, skipped: 0, unparseable: 0 }
+    let cursor = null
+    let guard = 0   // hard stop so a server bug can't spin forever
+
+    try {
+      const token = await auth.currentUser?.getIdToken()
+
+      while (guard++ < 500) {
+        const res = await fetch('/api/members/backfill-join-date', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ cursor, batchSize: 400 }),
+        })
+        const data = await res.json()
+
+        if (!data.success) {
+          // Silent runs stay quiet — the user didn't ask for this, and a failure
+          // just means the date filter keeps behaving as it did before.
+          if (!silent) message.error(data.message || 'Backfill failed')
+          else console.warn('[JoinDate auto-repair] stopped:', data.message)
+          return
+        }
+
+        totals.scanned     += data.scanned || 0
+        totals.updated     += data.updated || 0
+        totals.skipped     += data.skipped || 0
+        totals.unparseable += data.unparseable || 0
+        setBackfillProgress({ scanned: totals.scanned, updated: totals.updated })
+
+        if (!data.hasMore) break
+        cursor = data.nextCursor
+      }
+
+      if (silent) {
+        console.log(`[JoinDate auto-repair] ${totals.updated} member(s) prepared for date filtering`)
+        // Refresh only if a date filter is currently applied, so the user sees
+        // the now-complete result set without an unexpected reload otherwise.
+        if (filters.fromDate || filters.toDate) fetchMembers(1, true)
+      } else {
+        Modal.success({
+          title: 'Join dates updated',
+          content: (
+            <div style={{ fontSize: 13 }}>
+              <p style={{ marginBottom: 8 }}>
+                All members can now be filtered by join date.
+              </p>
+              <div style={{ color: '#6b7280', fontSize: 12 }}>
+                Scanned {totals.scanned} · Updated {totals.updated} · Already set {totals.skipped}
+                {totals.unparseable > 0 && ` · ${totals.unparseable} had no usable join date (fell back to created date)`}
+              </div>
+            </div>
+          ),
+          onOk: () => fetchMembers(1, true),
+        })
+      }
+    } catch (e) {
+      console.error(e)
+      if (!silent) message.error('Backfill failed: ' + e.message)
+    } finally {
+      setBackfillLoading(false)
+      setBackfillProgress(null)
+    }
+  }
+
+  // ── Auto-repair on load ───────────────────────────────────────────────────
+  // Compares the member count against the count of members that actually have
+  // joinDateTs. Firestore's orderBy() excludes documents missing the field, so
+  // a gap between the two means some members would be invisible to the date
+  // filter. Two count queries are cheap (server-side aggregation, not reads of
+  // every document), and this runs once per page load.
+  useEffect(() => {
+    if (!user || backfillCheckedRef.current) return
+    if (!(isSuperAdmin(user) || user.role === 'admin')) return
+    backfillCheckedRef.current = true
+
+    ;(async () => {
+      try {
+        const membersRef = collection(db, 'members')
+        const [totalSnap, withTsSnap] = await Promise.all([
+          getCountFromServer(membersRef),
+          getCountFromServer(query(membersRef, orderBy('joinDateTs'))),
+        ])
+        const missing = totalSnap.data().count - withTsSnap.data().count
+        if (missing > 0) {
+          console.log(`[JoinDate auto-repair] ${missing} member(s) missing joinDateTs — repairing`)
+          await runJoinDateBackfill({ silent: true })
+        }
+      } catch (e) {
+        // Never let this break the page — the filter simply behaves as before
+        console.warn('[JoinDate auto-repair] check skipped:', e?.message)
+      }
+    })()
+  }, [user])
 
   // Clear one filter (used by the chip close buttons). Same stale-closure trap
   // as resetFilters — the new values must be handed to fetchMembers directly.
@@ -1944,6 +2053,19 @@ ${filterHtml}
                 <DatePicker format="DD-MM-YYYY" style={{ width: '100%' }} placeholder="Any" />
               </Form.Item>
             </div>
+
+            <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 8 }}>
+              Filters on the member&apos;s join date — editing a join date moves the
+              member into the matching range.
+            </div>
+
+            {/* Shown only while the one-off auto-repair is running */}
+            {backfillLoading && (
+              <div style={{ fontSize: 11, color: '#92400e', marginTop: 6 }}>
+                Preparing older members for date filtering
+                {backfillProgress ? ` — ${backfillProgress.scanned} processed…` : '…'}
+              </div>
+            )}
           </div>
 
           {/* ── Active filter chips ────────────────────────────────────────── */}
