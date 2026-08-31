@@ -164,6 +164,7 @@ const buildMenuItems = (user, pendingCount, collapsed) => {
           ],
         },
         { key: '/settings/commission', label: 'Commission', module: 'settings' },
+        { key: '/settings/payment-details', label: 'Payment Details', module: 'settings' },
       ],
     },
     {
