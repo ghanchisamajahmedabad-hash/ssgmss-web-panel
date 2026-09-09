@@ -46,12 +46,15 @@ const styles = StyleSheet.create({
   summaryDate: { fontSize: 8, color: '#999' },
 
   table: { borderWidth: 1, borderColor: BORDER, marginTop: 2 },
-  thRow: { flexDirection: 'row', backgroundColor: BLUE, borderBottomWidth: 1, borderBottomColor: BORDER },
-  thCell: { fontSize: 8, fontWeight: 'bold', color: '#fff', padding: 3, textAlign: 'center' },
-  tr: { flexDirection: 'row', borderBottomWidth: 0.5, borderBottomColor: BORDER },
+  thRow: { flexDirection: 'row', backgroundColor: BLUE, borderBottomWidth: 1, borderBottomColor: BORDER, height: 16, alignItems: 'center' },
+  thCell: { fontSize: 8, fontWeight: 'bold', color: '#fff', paddingHorizontal: 3, textAlign: 'center' },
+  // Fixed row height + single-line cells. Without this, a long yojana or
+  // village name wrapped to a second line and the row's text bled into the
+  // rows around it.
+  tr: { flexDirection: 'row', borderBottomWidth: 0.5, borderBottomColor: BORDER, height: 14, alignItems: 'center' },
   trEven: { backgroundColor: '#f8fafc' },
-  td: { fontSize: 7, padding: 3, textAlign: 'center' },
-  tdL: { fontSize: 7, padding: 3, textAlign: 'left' },
+  td: { fontSize: 7, paddingHorizontal: 3, textAlign: 'center' },
+  tdL: { fontSize: 7, paddingHorizontal: 3, textAlign: 'left' },
 
   footer: { borderTopWidth: 1, borderTopColor: RED, paddingTop: 4, marginTop: 6, alignItems: 'center' },
   footerText: { fontSize: 8, fontWeight: 'bold', color: RED, textAlign: 'center' },
@@ -62,6 +65,9 @@ const styles = StyleSheet.create({
 // migration — so several likely spellings are accepted and the first non-empty
 // one wins. Add to this list if your data uses a different key.
 export const OLD_REG_FIELDS = [
+  // Actual field used by the migration
+  'legacyApplicationNo',
+  // Other spellings kept as fallbacks
   'oldRegistrationNumber', 'oldRegNo', 'old_reg_no', 'oldRegno', 'old_registration_number',
   'previousRegistrationNumber', 'previousRegNo', 'prevRegNo',
   'legacyRegistrationNumber', 'legacyRegNo', 'oldMemberId', 'oldId',
@@ -78,6 +84,16 @@ export const getOldRegNo = (m) => {
 
 // Marriage/closing date. Written as an ISO string on the member doc when the
 // closing is recorded; `member_closed_at` is the server timestamp fallback.
+// Cells are a single fixed-height line, so anything longer than its column has
+// to be cut here — otherwise react-pdf wraps it and the row overlaps its
+// neighbours. Limits are approximate character counts for each column width
+// at 7pt.
+const clip = (value, max) => {
+  const s = String(value ?? '').trim();
+  if (!s) return '';
+  return s.length > max ? s.slice(0, Math.max(1, max - 1)) + '…' : s;
+};
+
 export const getClosedDate = (m) => {
   if (!m) return '';
   const raw = m.closed_date || m.marriageDate || m.member_closed_at;
@@ -111,13 +127,15 @@ const MemberListPdf = ({ members, filters, programList, agentList }) => {
     return (
       <View key={m.id} style={[styles.tr, i % 2 === 1 && styles.trEven]} wrap={false}>
         <Text style={[styles.td, { width: 22 }]}>{i + 1}</Text>
-        <Text style={[styles.td, { width: 60, fontWeight: 'bold', color: BLUE }]}>{m.registrationNumber || ''}</Text>
-        <Text style={[styles.td, { width: 58, color: '#6b7280' }]}>{oldReg || '-'}</Text>
-        <Text style={[styles.tdL, { flex: 1 }]}>{m.displayName}{m.fatherName ? ` / ${m.fatherName}` : ''}</Text>
-        <Text style={[styles.td, { width: 65 }]}>{m.phone || '-'}</Text>
-        <Text style={[styles.td, { width: 80 }]}>{progName}</Text>
-        <Text style={[styles.td, { width: 55 }]}>{ageGroup}</Text>
-        <Text style={[styles.td, { width: 55 }]}>{m.village || '-'}</Text>
+        <Text style={[styles.td, { width: 76, fontWeight: 'bold', color: BLUE }]}>{clip(m.registrationNumber, 18)}</Text>
+        <Text style={[styles.td, { width: 68, color: '#6b7280' }]}>{clip(oldReg, 16) || '-'}</Text>
+        <Text style={[styles.tdL, { flex: 1 }]}>
+          {clip(`${m.displayName || ''}${m.fatherName ? ` / ${m.fatherName}` : ''}`, 46)}
+        </Text>
+        <Text style={[styles.td, { width: 62 }]}>{clip(m.phone, 14) || '-'}</Text>
+        <Text style={[styles.td, { width: 88 }]}>{clip(progName, 22)}</Text>
+        <Text style={[styles.td, { width: 48 }]}>{clip(ageGroup, 12)}</Text>
+        <Text style={[styles.td, { width: 62 }]}>{clip(m.village, 15) || '-'}</Text>
         <Text style={[styles.td, { width: 52, color: statusText === 'Closed' ? RED : statusText === 'Active' ? '#16a34a' : '#888' }]}>{statusText}</Text>
         {showClosedCol && (
           <Text style={[styles.td, { width: 58, color: RED }]}>{getClosedDate(m) || '-'}</Text>
@@ -168,13 +186,13 @@ const MemberListPdf = ({ members, filters, programList, agentList }) => {
           <View style={styles.table}>
             <View style={styles.thRow}>
               <Text style={[styles.thCell, { width: 22 }]}>#</Text>
-              <Text style={[styles.thCell, { width: 60 }]}>Reg No</Text>
-              <Text style={[styles.thCell, { width: 58 }]}>Old Reg No</Text>
+              <Text style={[styles.thCell, { width: 76 }]}>Reg No</Text>
+              <Text style={[styles.thCell, { width: 68 }]}>Old Reg No</Text>
               <Text style={[styles.thCell, { flex: 1 }]}>नाम / पिता</Text>
-              <Text style={[styles.thCell, { width: 65 }]}>फोन</Text>
-              <Text style={[styles.thCell, { width: 80 }]}>योजना</Text>
-              <Text style={[styles.thCell, { width: 55 }]}>आयु वर्ग</Text>
-              <Text style={[styles.thCell, { width: 55 }]}>गाँव</Text>
+              <Text style={[styles.thCell, { width: 62 }]}>फोन</Text>
+              <Text style={[styles.thCell, { width: 88 }]}>योजना</Text>
+              <Text style={[styles.thCell, { width: 48 }]}>आयु वर्ग</Text>
+              <Text style={[styles.thCell, { width: 62 }]}>गाँव</Text>
               <Text style={[styles.thCell, { width: 52 }]}>Status</Text>
               {showClosedCol && <Text style={[styles.thCell, { width: 58 }]}>Closed Date</Text>}
             </View>
