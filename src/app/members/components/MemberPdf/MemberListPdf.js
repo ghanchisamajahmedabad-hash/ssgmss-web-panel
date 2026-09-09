@@ -57,8 +57,41 @@ const styles = StyleSheet.create({
   footerText: { fontSize: 8, fontWeight: 'bold', color: RED, textAlign: 'center' },
 });
 
+// Old/legacy registration number carried over from the previous system.
+// The field name isn't written anywhere in this codebase — it comes from the
+// migration — so several likely spellings are accepted and the first non-empty
+// one wins. Add to this list if your data uses a different key.
+export const OLD_REG_FIELDS = [
+  'oldRegistrationNumber', 'oldRegNo', 'old_reg_no', 'oldRegno', 'old_registration_number',
+  'previousRegistrationNumber', 'previousRegNo', 'prevRegNo',
+  'legacyRegistrationNumber', 'legacyRegNo', 'oldMemberId', 'oldId',
+];
+
+export const getOldRegNo = (m) => {
+  if (!m) return '';
+  for (const key of OLD_REG_FIELDS) {
+    const v = m[key];
+    if (v !== undefined && v !== null && String(v).trim() !== '') return String(v).trim();
+  }
+  return '';
+};
+
+// Marriage/closing date. Written as an ISO string on the member doc when the
+// closing is recorded; `member_closed_at` is the server timestamp fallback.
+export const getClosedDate = (m) => {
+  if (!m) return '';
+  const raw = m.closed_date || m.marriageDate || m.member_closed_at;
+  if (!raw) return '';
+  const d = raw?.toDate ? dayjs(raw.toDate()) : dayjs(raw);
+  return d.isValid() ? d.format('DD-MM-YYYY') : '';
+};
+
 const MemberListPdf = ({ members, filters, programList, agentList }) => {
   const getAgentName = (id) => agentList?.find(a => a.id === id)?.name || id
+
+  // Only widen the table with a closing column when the export actually
+  // contains closed members — otherwise every normal list loses space to it.
+  const showClosedCol = members?.some(m => m.member_closed && getClosedDate(m))
 
   const filterParts = []
   if (filters.programId && filters.programId !== 'all') filterParts.push(`Yojna: ${programList?.find(p => p.id === filters.programId)?.name || filters.programId}`)
@@ -74,16 +107,21 @@ const MemberListPdf = ({ members, filters, programList, agentList }) => {
     const progName = m.programName || (programList?.find(p => p.id === m.programId)?.name || '-')
     const ageGroup = m.ageGroupName || m.memberGroupName || m.ageGroup || '-'
     const statusText = m.member_closed ? 'Closed' : m.active_flag ? 'Active' : 'Inactive'
+    const oldReg = getOldRegNo(m)
     return (
       <View key={m.id} style={[styles.tr, i % 2 === 1 && styles.trEven]} wrap={false}>
         <Text style={[styles.td, { width: 22 }]}>{i + 1}</Text>
         <Text style={[styles.td, { width: 60, fontWeight: 'bold', color: BLUE }]}>{m.registrationNumber || ''}</Text>
+        <Text style={[styles.td, { width: 58, color: '#6b7280' }]}>{oldReg || '-'}</Text>
         <Text style={[styles.tdL, { flex: 1 }]}>{m.displayName}{m.fatherName ? ` / ${m.fatherName}` : ''}</Text>
         <Text style={[styles.td, { width: 65 }]}>{m.phone || '-'}</Text>
         <Text style={[styles.td, { width: 80 }]}>{progName}</Text>
         <Text style={[styles.td, { width: 55 }]}>{ageGroup}</Text>
         <Text style={[styles.td, { width: 55 }]}>{m.village || '-'}</Text>
         <Text style={[styles.td, { width: 52, color: statusText === 'Closed' ? RED : statusText === 'Active' ? '#16a34a' : '#888' }]}>{statusText}</Text>
+        {showClosedCol && (
+          <Text style={[styles.td, { width: 58, color: RED }]}>{getClosedDate(m) || '-'}</Text>
+        )}
       </View>
     )
   })
@@ -131,12 +169,14 @@ const MemberListPdf = ({ members, filters, programList, agentList }) => {
             <View style={styles.thRow}>
               <Text style={[styles.thCell, { width: 22 }]}>#</Text>
               <Text style={[styles.thCell, { width: 60 }]}>Reg No</Text>
+              <Text style={[styles.thCell, { width: 58 }]}>Old Reg No</Text>
               <Text style={[styles.thCell, { flex: 1 }]}>नाम / पिता</Text>
               <Text style={[styles.thCell, { width: 65 }]}>फोन</Text>
               <Text style={[styles.thCell, { width: 80 }]}>योजना</Text>
               <Text style={[styles.thCell, { width: 55 }]}>आयु वर्ग</Text>
               <Text style={[styles.thCell, { width: 55 }]}>गाँव</Text>
               <Text style={[styles.thCell, { width: 52 }]}>Status</Text>
+              {showClosedCol && <Text style={[styles.thCell, { width: 58 }]}>Closed Date</Text>}
             </View>
             {rows}
           </View>

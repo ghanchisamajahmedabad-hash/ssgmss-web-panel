@@ -31,7 +31,7 @@ import { auth, db } from '../../../lib/firbase-client'
 import { doc, updateDoc, query, where, orderBy, collection, getDocs, getDoc, getCountFromServer } from 'firebase/firestore'
 import { BlobProvider, PDFDownloadLink } from '@react-pdf/renderer'
 import CertificateCom from './components/MemberPdf/CertificateCom'
-import MemberListPdf from './components/MemberPdf/MemberListPdf'
+import MemberListPdf, { getOldRegNo, getClosedDate } from './components/MemberPdf/MemberListPdf'
 import RasidDrawer from './components/RasidCom/RasidDrawer'
 import PaymentDetailsDrawer from './components/PaymentDetailsDrawer'
 
@@ -968,10 +968,12 @@ const handleDeleteMember = (member) => {
     // numbers. The ="…" form pins them as text.
     const num = (v) => (v ? `="${String(v).replace(/["=]/g, '')}"` : '""')
 
-    const headers = ['Registration No','Name','Father Name','Phone','Aadhaar','Village','City','Program','Age Group','Join Date','Status','Payment %','Paid Amount','Pending Amount','Agent Name']
+    const headers = ['Registration No','Old Registration No','Name','Father Name','Phone','Aadhaar','Village','City','Program','Age Group','Join Date','Status','Closed Date','Payment %','Paid Amount','Pending Amount','Agent Name']
 
     const rows = list.map(m => [
       q(m.registrationNumber),
+      // Legacy number from the previous system — blank for members registered here
+      q(getOldRegNo(m)),
       q(m.displayName),
       q(m.fatherName),
       num(m.phone),
@@ -981,7 +983,9 @@ const handleDeleteMember = (member) => {
       q(m.programName || (programList?.find(p => p.id === m.programId)?.name || '')),
       q(m.ageGroupName || m.memberGroupName || m.ageGroup || ''),
       q(m.dateJoin),
-      q(m.active_flag ? 'Active' : 'Inactive'),
+      q(m.member_closed ? 'Closed' : m.active_flag ? 'Active' : 'Inactive'),
+      // Marriage/closing date — blank for members who aren't closed
+      q(m.member_closed ? getClosedDate(m) : ''),
       m.paymentPercentage || 0,
       m.paidAmount || 0,
       Math.max(0, (m.joinFees || 0) - (m.paidAmount || 0)),
@@ -1146,13 +1150,17 @@ const handleDeleteMember = (member) => {
       return `
       <tr>
         <td class="c">${i + 1}</td>
-        <td class="reg">${m.registrationNumber || ''}</td>
+        <td class="reg">${m.registrationNumber || ''}
+          ${getOldRegNo(m) ? `<div class="sub">Old: ${getOldRegNo(m)}</div>` : ''}
+        </td>
         <td class="l"><b>${m.displayName || ''}</b><div class="sub">${m.fatherName || ''}</div></td>
         <td class="c">${m.phone || '-'}</td>
         <td class="c mono">${m.aadhaarNo || '-'}</td>
         <td class="c">${progName}</td>
         <td class="c">${ageGroup}</td>
-        <td class="c">${m.village || '-'}</td>
+        <td class="c">${m.village || '-'}
+          ${m.member_closed && getClosedDate(m) ? `<div class="sub" style="color:#D3292F">Closed: ${getClosedDate(m)}</div>` : ''}
+        </td>
         <td class="amt">₹${(m.payAmount || 0).toLocaleString()}</td>
       </tr>`
     }).join('')

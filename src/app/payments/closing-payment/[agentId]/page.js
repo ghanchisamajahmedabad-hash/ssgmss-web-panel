@@ -987,6 +987,7 @@ const ClosingMemberPaymentPage = () => {
         setOpen={setOpenRasidDrawer}
         agentId={agentId}
         programList={programList}
+        agent={currentAgent}
       />
     </ConfigProvider>
   );

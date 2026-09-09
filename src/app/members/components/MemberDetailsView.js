@@ -487,24 +487,41 @@ const MemberDetailDrawer = ({ member: memberProp, visible, onClose, programList,
     },
   ]
 
+  // Shaped for ClosingRasidPdf, which mirrors the join-fees rasid layout:
+  // header block describes the PAYING member, the table lists the closed
+  // members this receipt covers.
   const buildPdfData = (entries) => entries.map(entry => ({
     id: entry.id,
-    displayName: entry.closing_Name || member?.displayName || '',
-    fatherName: entry.closing_fatherName || member?.fatherName || '',
-    surname: member?.surname || '',
-    registrationNumber: entry.closing_registrationNumber || member?.registrationNumber || '',
-    phone: entry.closingPhone || member?.phone || '',
-    village: entry.closing_village || member?.village || '',
-    programName: entry.programName || member?.programName || '',
-    ageGroupName: member?.ageGroupName || '',
-    totalAmount: entry.totalAmount || 0,
-    date: entry.date,
-    status: entry.status,
-    closingGroupId:   entry.closingGroupId   || '',
-    closingGroupName: entry.closingGroupName || '',
-    entries: entry.closingDetails || [],
-    closing_registrationNumber: entry.closing_registrationNumber || null,
-    closingPhone: entry.closingPhone || null,
+
+    // ── Receipt header ──
+    serialNo:     entry.serialNo || entry.receiptNo || entry.id?.slice(-6)?.toUpperCase() || '',
+    date:         entry.date,
+    name:         `${member?.registrationNumber || ''} ${member?.displayName || ''}${member?.fatherName ? ' / ' + member.fatherName : ''}`.trim(),
+    phone:        member?.phone || '',
+    address:      [member?.village, member?.district, member?.state, member?.currentAddress]
+                    .filter(Boolean).join(', '),
+    yojana:       entry.programName || member?.programName || '',
+    ageGroup:     member?.memberGroupName || member?.ageGroupName || '',
+    sahyogRashi:  entry.perMemberAmount ?? entry.amount ?? '',
+    totalAmount:  entry.totalAmount || 0,
+    worker:       entry.agentName
+                    ? `${entry.agentCode ? `(${entry.agentCode}) ` : ''}${entry.agentName}${entry.agentPhone ? ' ' + entry.agentPhone : ''}`
+                    : (member?.addedByName || ''),
+    note:         entry.note
+                    || `${entry.date ? dayjs(entry.date).format('MMMM-YYYY') + ' ' : ''}सहयोग राशि ( "यह सहयोग राशि स्वैच्छिक है एवं गैर-वापसीयोग्य है।" )`,
+    status:       entry.status,
+
+    // ── Table rows: the closed members covered by this receipt ──
+    entries: (entry.closingDetails || []).map(d => ({
+      code:   d.closed_registrationNumber || d.closing_registrationNumber || '',
+      name:   [d.closed_memberName || d.closing_Name || d.name,
+               d.closed_fatherName || d.closing_fatherName]
+                .filter(Boolean).join(' / '),
+      // Village rides along with the name — the receipt has no गाँव column
+      village: d.closed_village || d.closing_village || '',
+      date:   d.closed_date || d.marriageDate || entry.date,
+      mobile: d.closingPhone || d.phone || '',
+    })),
   }))
 
   return (

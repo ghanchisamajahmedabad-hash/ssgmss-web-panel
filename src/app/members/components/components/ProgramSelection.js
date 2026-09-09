@@ -16,15 +16,19 @@ const ProgramSelection = ({
   selectedMemberGroup,
   handleMemberGroupChange,
   currentUserRole,
+  blockedProgramId,        // yojna the person already belongs to (e.g. when copying)
 }) => {
   const isSuperAdmin = currentUserRole === 'superadmin'
   const joinDateLocked = isEditMode && !isSuperAdmin
 
-  const programOptions = programs?.map(p => ({
-    label: p.name,
-    value: p.id,
-    disabled: existingMember?.programId === p.id
-  })) || []
+  const programOptions = programs?.map(p => {
+    const blocked = existingMember?.programId === p.id || blockedProgramId === p.id
+    return {
+      label: blocked ? `${p.name} — already registered` : p.name,
+      value: p.id,
+      disabled: blocked,
+    }
+  }) || []
 
   const groups = programDetail?.memberGroups || []
   const showGroupSelect = groups.length > 1

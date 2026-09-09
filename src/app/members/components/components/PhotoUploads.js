@@ -16,27 +16,35 @@ const PhotoUploads = ({
   const [memberFileList, setMemberFileList] = useState([])
   const [guardianFileList, setGuardianFileList] = useState([])
 
-  // Convert existing photos to fileList format
+  // Convert existing photos to fileList format.
+  //
+  // The photo state holds EITHER a File the user just picked, OR an https URL
+  // carried over from an edited/copied member. The previous guard was
+  // `!memberPhoto`, which meant a URL sitting in that state suppressed its own
+  // preview — copied photos appeared to vanish. Only a real File should
+  // override the existing preview.
   React.useEffect(() => {
-    if (existingMemberPhoto && !memberPhoto) {
+    const url = (typeof memberPhoto === 'string' && memberPhoto) || existingMemberPhoto
+    if (url && !(memberPhoto instanceof File)) {
       setMemberFileList([{
         uid: '-1',
         name: 'existing_member.jpg',
         status: 'done',
-        url: existingMemberPhoto,
-        preview: existingMemberPhoto
+        url,
+        preview: url
       }])
     }
   }, [existingMemberPhoto, memberPhoto])
 
   React.useEffect(() => {
-    if (existingGuardianPhoto && !guardianPhoto) {
+    const url = (typeof guardianPhoto === 'string' && guardianPhoto) || existingGuardianPhoto
+    if (url && !(guardianPhoto instanceof File)) {
       setGuardianFileList([{
         uid: '-2',
         name: 'existing_guardian.jpg',
         status: 'done',
-        url: existingGuardianPhoto,
-        preview: existingGuardianPhoto
+        url,
+        preview: url
       }])
     }
   }, [existingGuardianPhoto, guardianPhoto])

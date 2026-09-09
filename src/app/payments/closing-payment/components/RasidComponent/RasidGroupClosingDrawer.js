@@ -57,16 +57,36 @@ function openHtmlWindow(html) {
 function openPrintWindow(rasidList) {
   const win = window.open('', '_blank');
   if (!win) { message.error('Popup blocked! Please allow popups.'); return; }
+  // Padded row count. Rows are a fixed 30px (see .main-table td), so
+  // 20 rows + header ≈ 640px, which fills the space left on an A4 page below
+  // the header block without overflowing it — the same 20 rows as the printed
+  // receipt. Raising the row height or font means lowering this.
   const ROWS = 20;
 
-  const pages = rasidList.map(d => {
-    const filled = [...d.entries, ...Array(Math.max(0, ROWS - d.entries.length)).fill(null)];
+  // Split each receipt's members across as many pages as needed. Without this a
+  // closing with more than ROWS members produced one over-long table whose extra
+  // rows were simply clipped and lost.
+  const pageData = rasidList.flatMap(d => {
+    const list = d.entries || [];
+    const chunkCount = Math.max(1, Math.ceil(list.length / ROWS));
+    return Array.from({ length: chunkCount }, (_, i) => ({
+      d,
+      chunk: list.slice(i * ROWS, (i + 1) * ROWS),
+      startIndex: i * ROWS,
+      pageNo: i + 1,
+      pageTotal: chunkCount,
+    }));
+  });
+
+  const pages = pageData.map(({ d, chunk, startIndex, pageNo, pageTotal }) => {
+    const filled = [...chunk, ...Array(Math.max(0, ROWS - chunk.length)).fill(null)];
+    // No गाँव column — the village is appended to the name, matching the
+    // printed receipt where a row reads "नाम / पिता  गाँव - तहसील".
     const rows = filled.map((e, i) => `
       <tr>
-        <td class="c">${i+1}</td>
+        <td class="c">${e ? startIndex + i + 1 : ''}</td>
         <td class="c">${e ? e.code : ''}</td>
-        <td class="l">${e ? e.name : ''}</td>
-        <td class="c">${e ? e.village : ''}</td>
+        <td class="l">${e ? [e.name, e.village].filter(Boolean).join('&nbsp;&nbsp;') : ''}</td>
         <td class="c">${e ? e.date : ''}</td>
         <td class="c">${e ? e.mobile : ''}</td>
       </tr>`).join('');
@@ -89,10 +109,10 @@ function openPrintWindow(rasidList) {
         </div>
         <div class="center-block">
           <div class="org-title">श्री क्षत्रिय घांची मोदी समाज सेवा संस्थान ट्रस्ट</div>
-          <div class="org-sub">अहमदाबाद, गुजरात</div>
+          <div class="org-sub">अहमदाबाद,गुजरात</div>
           <div class="org-addr">
-            <b>हेड ऑफिस :</b> 68, वृंदावन शॉपिंग सेंटर, गुजरात हाउसिंग बोर्ड बी. एस. स्कूल के पास,
-            चांदखेडा, साबरमती, अहमदाबाद - 382424 &nbsp; (O) 9898535345
+            <b>हेड ऑफिस :</b> 68, वृंदावन शॉपिंग सेंटर, गुजरात हाउसिंग बोर्ड बी. एस. स्कूल के पास,<br>
+            चांदखेडा, साबरमती, अहमदाबाद&nbsp; 382424 (O) 9898535345
           </div>
           <div class="org-contact">
             <b>संपर्क सूत्र :</b>
@@ -163,14 +183,14 @@ function openPrintWindow(rasidList) {
           <span class="sep"> : </span>
           <span class="val">${d.yojana}</span>
           &nbsp;&nbsp;
-          <span class="lbl">ग्रुप</span>
+          <span class="lbl">Group</span>
           <span class="sep"> : </span>
           <span class="val">${d.ageGroup || '—'}</span>
         </div>
         <div class="info-item right">
           <span class="lbl">सहयोग राशि</span>
           <span class="sep"> : </span>
-          <span class="val val-amt">₹${d.sahyogRashi.toLocaleString()}</span>
+          <span class="val val-amt">${d.sahyogRashi.toLocaleString()}</span>
         </div>
       </div>
 
@@ -179,35 +199,37 @@ function openPrintWindow(rasidList) {
         <table class="main-table">
           <thead>
             <tr>
-              <th style="width:30px">#</th>
-              <th style="width:100px">कोड</th>
+              <th style="width:34px">#</th>
+              <th style="width:118px">कोड</th>
               <th>नाम</th>
-              <th style="width:80px">गाँव</th>
-              <th style="width:100px">दिनांक</th>
-              <th style="width:82px">मोबाइल न.</th>
+              <th style="width:96px">दिनांक</th>
+              <th style="width:92px">मोबाइल न.</th>
             </tr>
           </thead>
           <tbody>${rows}</tbody>
         </table>
-             <div class="total-row">
-        <span class="total-lbl">कुल राशि रु. :</span>
-        <span class="total-amt">₹${d.totalAmount.toLocaleString()}</span>
-        <span class="total-words-lbl">शब्दों में रूपये :</span>
-        <span class="total-words">${d.totalInWords}</span>
-      </div>
       </div>
 
       <!-- total -->
- 
-
-      <!-- sign + note -->
-      <div class="sign-note-row">
-        <div class="note">Note : ${d.note}</div>
-        <div class="sign-box">
-          <div class="sign-line"></div>
-          <div class="sign-lbl">संस्थापक हस्ताक्षर</div>
-        </div>
+      <div class="total-row">
+        <span class="total-lbl">कुल राशि रु.:</span>
+        <span class="total-amt">${d.totalAmount.toLocaleString()}</span>
+        <span class="total-words-lbl">शब्दों में रूपये :</span>
+        <span class="total-words">${d.totalInWords}</span>
       </div>
+
+      <!-- worker + signature -->
+      <div class="worker-row">
+        <div class="worker">
+          <span class="lbl">कार्यकर्ता</span>
+          <span class="sep"> : </span>
+          <span class="worker-val">${d.worker || '—'}</span>
+        </div>
+        <div class="sign-lbl">संस्थापक हस्ताक्षर</div>
+      </div>
+
+      <!-- note -->
+      <div class="note">Note : ${d.note}</div>
 
       <!-- footer -->
       <div class="footer">
@@ -264,17 +286,17 @@ win.document.write(`<!DOCTYPE html><html lang="hi"><head>
     /* ── blessings ── */
     .bless{
       display:flex;justify-content:space-between;align-items:center;
-      margin-bottom:8px;padding:6px 10px;
+      margin-bottom:2px;padding:2px 8px;
     }
-    .bless span{font-size:11px;color:#D3292F;font-weight:700;font-family:'Noto Serif Devanagari',serif;letter-spacing:.5px}
+    .bless span{font-size:10.5px;color:#D3292F;font-weight:700;font-family:'Noto Serif Devanagari',serif;letter-spacing:.3px}
 
     /* ── header ── */
     .hdr{
       display:flex;align-items:center;justify-content:space-between;
       gap:12px;
     }
-    .logo-box{width:100px;flex-shrink:0;display:flex;flex-direction:column;align-items:center;justify-content:center}
-    .logo{width:90px;height:90px;border-radius:6px;object-fit:cover;}
+    .logo-box{width:78px;flex-shrink:0;display:flex;flex-direction:column;align-items:center;justify-content:center}
+    .logo{width:74px;height:74px;border-radius:6px;object-fit:cover;}
     .logo-fb{
       width:70px;height:65px;border-radius:6px;
       background:linear-gradient(135deg,#E8EFF7,#d0dcec);
@@ -285,10 +307,10 @@ win.document.write(`<!DOCTYPE html><html lang="hi"><head>
     }
     .logo-fb2{background:linear-gradient(135deg,#f5ece0,#ede0cc)!important;border-color:#c9a87a!important;color:#7a4a1e!important}
     .center-block{flex:1;text-align:center;padding:0 8px;display:flex;flex-direction:column;align-items:center;justify-content:center}
-    .org-title{font-size:26px;font-weight:700;color:#1B385A;font-family:'Noto Serif Devanagari',serif;letter-spacing:.5px;margin-bottom:0px;line-height:1.3}
-    .org-sub{font-size:18px;font-weight:700;color:#1B385A;margin-bottom:0px;text-align:center}
-    .org-addr{font-size:11px;color:#000;line-height:1.6;margin-bottom:3px;text-align:center}
-    .org-contact{font-size:11px;color:#000;line-height:1.6;text-align:center}
+    .org-title{font-size:23px;font-weight:700;color:#1B385A;font-family:'Noto Serif Devanagari',serif;letter-spacing:.3px;margin-bottom:0;line-height:1.25}
+    .org-sub{font-size:15px;font-weight:700;color:#1B385A;margin-bottom:2px;text-align:center}
+    .org-addr{font-size:10px;color:#000;line-height:1.45;margin-bottom:1px;text-align:center}
+    .org-contact{font-size:10px;color:#000;line-height:1.45;text-align:center}
     .org-contact .blue{color:#1B385A;font-weight:700}
     .org-contact b{color:#000;font-weight:700}
 
@@ -296,81 +318,94 @@ win.document.write(`<!DOCTYPE html><html lang="hi"><head>
     .since-bar{
       display:flex;justify-content:space-between;align-items:center;
       border-bottom:1.5px solid #1B385A;
-      padding:6px 4px;margin-bottom:4px;
+      padding:3px 2px;margin-bottom:2px;
     }
     .since-bar span{font-size:11px;font-weight:700;color:#1B385A;letter-spacing:.6px}
 
     /* ── badge ── */
-    .badge-wrap{text-align:center;margin:10px 0}
+    .badge-wrap{text-align:center;margin:6px 0 8px}
     .badge{
-      display:inline-block;border:2px solid #D3292F;border-radius:6px;
-      padding:6px 28px;
-      font-size:14px;font-weight:700;color:#D3292F;
-      font-family:'Noto Serif Devanagari',serif;letter-spacing:1px;
+      display:inline-block;border:1.5px solid #D3292F;border-radius:5px;
+      padding:3px 22px;
+      font-size:13px;font-weight:700;color:#D3292F;
+      font-family:'Noto Serif Devanagari',serif;letter-spacing:.5px;
     }
 
     /* ── info rows ── */
-    .info-row{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px}
+    .info-row{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px}
     .info-row:last-of-type{margin-bottom:0}
-    .info-item{display:flex;align-items:baseline;gap:6px;flex:1}
+    .info-item{display:flex;align-items:baseline;gap:4px;flex:1}
     .info-item.right{justify-content:flex-end;text-align:right}
-    .lbl{font-size:13px;font-weight:700;color:#D3292F;white-space:nowrap}
-    .sep{font-size:13px;color:#D3292F;font-weight:700}
-    .val{font-size:13px;color:#111;font-weight:500}
-    .val-amt{font-size:13px;color:#111;font-weight:700}
+    .lbl{font-size:14px;font-weight:700;color:#D3292F;white-space:nowrap}
+    .sep{font-size:14px;color:#D3292F;font-weight:700}
+    .val{font-size:14px;color:#111;font-weight:500}
+    .val-amt{font-size:14px;color:#111;font-weight:700}
 
     /* ── table ── */
-    .table-wrap{flex:1;display:flex;flex-direction:column;min-height:0;margin-top:8px}
+    /* overflow:hidden is a safety net — if the table ever exceeds the space
+       left on the page it gets clipped rather than painting over the total,
+       कार्यकर्ता and note rows below it. */
+    .table-wrap{flex:1;display:flex;flex-direction:column;min-height:0;margin-top:8px;overflow:hidden}
+    /* No height:100% — that stretched the rows to fill the page, so a receipt
+       with only 2 members produced enormous rows. Rows are a fixed compact
+       height instead, exactly like the printed receipt. */
     .main-table{
       width:100%;border-collapse:collapse;
       border:1.5px solid #999;
-      height:100%;table-layout:fixed;
+      table-layout:fixed;
     }
     .main-table thead tr{background:#ffffff26}
     .main-table th{
-      padding:8px 5px;font-size:13px;font-weight:700;color:#1B385A;
-      text-align:center;border:1px solid #999;letter-spacing:.5px;
+      padding:5px 4px;font-size:14px;font-weight:700;color:#1B385A;
+      text-align:center;border:1px solid #999;letter-spacing:.3px;
       font-family:'Noto Serif Devanagari',serif;
     }
-    .main-table tbody{height:100%}
     .main-table td{
-      padding:6px 5px;font-size:12px;color:#111;
+      height:29px;padding:2px 4px;font-size:13px;color:#111;
       border:0.8px solid #c0c8d4;vertical-align:middle;
+      overflow:hidden;white-space:nowrap;
     }
+    /* Codes must never be cut — the receipt is a legal record of who paid */
+    .main-table td.c:nth-child(2){font-size:12.5px;letter-spacing:-.2px}
     .main-table tbody tr:nth-child(odd){background:#ffffff26}
     .main-table tbody tr:nth-child(even){background:#fff8f533}
     td.c{text-align:center}
     td.l{text-align:left;padding-left:8px}
 
     /* ── total ── */
+    /* Total sits directly under the table on one line, no tinted band —
+       matches the printed receipt. */
     .total-row{
-      display:flex;align-items:center;flex-wrap:wrap;gap:8px;
-      margin:8px 0 4px;padding:6px 4px;
-      background:#f9f9f9;
-      
-      border-radius:4px;
+      display:flex;align-items:baseline;flex-wrap:wrap;
+      margin:5px 0 1px;padding:0 2px;
     }
-    .total-lbl{font-size:13px;font-weight:700;color:#111;margin-right:6px}
-    .total-amt{font-size:16px;font-weight:700;color:#D3292F;margin-right:20px;font-family:'Noto Serif Devanagari',serif}
-    .total-words-lbl{font-size:13px;font-weight:700;color:#111}
-    .total-words{font-size:13px;color:#111;font-weight:500;margin-left:6px}
+    .total-lbl{font-size:15px;font-weight:700;color:#111;margin-right:12px}
+    .total-amt{font-size:15px;font-weight:700;color:#111;margin-right:30px}
+    .total-words-lbl{font-size:14px;font-weight:700;color:#111}
+    .total-words{font-size:14px;color:#111;font-weight:400;margin-left:8px}
 
-    /* ── sign + note ── */
-    .sign-note-row{display:flex;justify-content:space-between;align-items:flex-end;margin:8px 0 4px;gap:15px}
-    .note{font-size:11px;color:#444;line-height:1.6;flex:1;font-style:italic}
-    .sign-box{text-align:center;min-width:140px;flex-shrink:0}
-    .sign-line{border-bottom:1.5px dashed #999;height:35px;margin-bottom:5px}
-    .sign-lbl{font-size:12px;font-weight:700;color:#1B385A}
+    /* ── worker + signature ── */
+    .worker-row{
+      display:flex;justify-content:space-between;align-items:baseline;
+      margin:1px 0;padding:0 2px;
+    }
+    .worker .lbl{font-size:14px}
+    .worker .sep{font-size:14px}
+    .worker-val{font-size:14px;color:#1B385A;font-weight:500}
+    .sign-lbl{font-size:13px;font-weight:700;color:#111}
+
+    /* ── note ── */
+    .note{font-size:13px;color:#111;line-height:1.5;padding:0 2px;margin-bottom:2px}
 
     /* ── footer ── */
     .footer{
-      border-top:1.5px solid #D3292F;padding-top:8px;margin-top:8px;
+      border-top:1.5px solid #D3292F;padding-top:4px;margin-top:4px;
       display:flex;justify-content:space-between;align-items:center;gap:10px;
     }
     .footer-spacer{width:60px}
     .footer-center{flex:1;text-align:center}
-    .footer-contacts{font-size:11px;font-weight:700;color:#D3292F;margin-bottom:2px;letter-spacing:.4px}
-    .footer-sub{font-size:11px;font-weight:700;color:#1B385A;letter-spacing:.3px}
+    .footer-contacts{font-size:12px;font-weight:700;color:#D3292F;margin-bottom:1px;letter-spacing:.3px}
+    .footer-sub{font-size:12px;font-weight:700;color:#1B385A;letter-spacing:.2px}
     .footer-eoe{font-size:12px;font-weight:700;color:#111;width:60px;text-align:right;white-space:nowrap}
 
     @media print{
@@ -394,7 +429,7 @@ win.document.write(`<!DOCTYPE html><html lang="hi"><head>
 }
 
 // ─── Main Component ────────────────────────────────────────────────────────────
-const RasidGroupClosingDrawer = ({ open, setOpen, agentId, preselectedGroupId }) => {
+const RasidGroupClosingDrawer = ({ open, setOpen, agentId, preselectedGroupId, agent }) => {
 
   // ── State ──────────────────────────────────────────────────────────────────
   const [step, setStep]                   = useState(1);
@@ -661,19 +696,32 @@ const RasidGroupClosingDrawer = ({ open, setOpen, agentId, preselectedGroupId })
     const closingDs  = selectedGroup.closedAt?.toDate
       ? dayjs(selectedGroup.closedAt.toDate()).format('DD-MM-YYYY')
       : rasidDate.format('DD-MM-YYYY');
+    // Printed receipt reads "अप्रैल-2026 सहयोग राशि (…)" — Hindi month name,
+    // not dayjs's English abbreviation.
+    const HINDI_MONTHS = ['जनवरी','फरवरी','मार्च','अप्रैल','मई','जून',
+                          'जुलाई','अगस्त','सितंबर','अक्टूबर','नवंबर','दिसंबर'];
+    const noteMonth = `${HINDI_MONTHS[rasidDate.month()]}-${rasidDate.format('YYYY')}`;
     const note = rasidNote ||
-      `${rasidDate.format('MMM YYYY')}-सहयोग राशि ("यह सहयोग राशि स्वैच्छिक है एवं गैर-वापसीयोग्य है।")`;
+      `${noteMonth} सहयोग राशि ( "यह सहयोग राशि स्वैच्छिक है एवं गैर-वापसीयोग्य है।" )`;
 
     const entries = selectedGroup.members
       .filter(m => selClosingMembers.has(m.id))
       .map(m => ({
         code:   m.registrationNumber || '',
         name:   [m.displayName, m.fatherName ? '/ '+m.fatherName : ''].filter(Boolean).join(' '),
-        village: m.village || '',
+        // Printed receipt shows place after the name as "गाँव - जिला" /
+        // "गाँव-जिला-राज्य", so village, district and state are joined here
+        // rather than each getting a column.
+        village: [m.village, m.district, m.state].filter(Boolean).join(' - '),
         ageGroup: m.ageGroupName || m.memberGroupName || m.ageGroup || '',
         date:   closingDs,
         mobile: m.phone || m.phoneNo || '',
       }));
+
+    // "Group : B" on the receipt is the age group of the members being CLOSED,
+    // not the closing batch name (which reads like "july-26") and not the
+    // paying member's own group.
+    const closingAgeGroup = entries.find(e => e.ageGroup)?.ageGroup || '';
 
     let serial = 10000 + (Date.now() % 9000);
 
@@ -685,17 +733,27 @@ const RasidGroupClosingDrawer = ({ open, setOpen, agentId, preselectedGroupId })
         return {
           serialNo:     String(serial++),
           date:         dateStr,
-          name:         [am.displayName, am.fatherName ? '/ '+am.fatherName : ''].filter(Boolean).join(' '),
+          // Printed receipt shows the code ahead of the name:
+          // "V100151 महेश / राजुभाई"
+          name:         [am.registrationNumber, am.displayName, am.fatherName ? '/ '+am.fatherName : '']
+                          .filter(Boolean).join(' '),
           phone:        am.phone || '',
           address:      [am.village, am.city, am.state].filter(Boolean).join(', '),
           village:      am.village || '',
           yojana:       selectedGroup.yojanaName || 'Shadi Sahyog Yojna',
           group:        selectedGroup.groupName || '',
-          ageGroup:     am.ageGroupName || am.memberGroupName || am.ageGroup || '',
+          ageGroup:     closingAgeGroup || am.ageGroupName || am.memberGroupName || am.ageGroup || '',
           sahyogRashi:  payAmt,
           entries,
           totalAmount:  total,
           totalInWords: toWords(total),
+          // "कार्यकर्ता : (100018) Vikash Borana 9427212990"
+          worker:       agent
+                          ? [agent.agentCode ? `(${agent.agentCode})` : '',
+                             agent.name || '',
+                             agent.phone1 || agent.phone || '']
+                              .filter(Boolean).join(' ')
+                          : '',
           note,
         };
       });

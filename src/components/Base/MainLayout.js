@@ -7,7 +7,7 @@ import SideBar from './SideBar';
 import TopBar from './TopBar';
 import { Provider, useDispatch } from 'react-redux';
 import store from '@/Redux/store';
-import { db } from '../../../lib/firbase-client';
+import { db, auth } from '../../../lib/firbase-client';
 import { collection, getDocs } from 'firebase/firestore';
 import { setAgentList, setProgramList } from '@/Redux/Slice/commonSlice';
 import { PinLockProvider } from './PinLockContext';
@@ -24,51 +24,73 @@ const MainLayout = ({ children }) => {
   const dispatch=useDispatch()
    const programsCollectionRef = collection(db, 'programs');
  const agentsCollectionRef = collection(db, 'agents');
- const fetchPrograms = async () => {
+  // These run immediately after sign-in, when the ID token can still be
+  // propagating — the first read then fails with permission-denied and the
+  // program/agent lists come back empty ("Failed to fetch programs"). One
+  // retry after a forced token refresh clears that.
+  const withRetry = async (label, run) => {
     try {
+      return await run();
+    } catch (firstErr) {
+      console.warn(`${label}: first attempt failed, retrying after token refresh`, firstErr?.code || firstErr);
+      try {
+        await auth.currentUser?.getIdToken(true);
+        await new Promise(r => setTimeout(r, 400));
+        return await run();
+      } catch (secondErr) {
+        console.error(`${label} failed:`, secondErr);
+        message.error(`Failed to fetch ${label}`);
+        return null;
+      }
+    }
+  };
+
+  const fetchPrograms = async () => {
+    await withRetry('programs', async () => {
       const querySnapshot = await getDocs(programsCollectionRef);
       const programsData = querySnapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
       }));
-      
+
       // Sort by creation date
       programsData.sort((a, b) => b.created_at?.toDate() - a.created_at?.toDate());
-      
-   dispatch(setProgramList(programsData))
 
-    } catch (error) {
-      console.error('Error fetching programs:', error);
-      message.error('Failed to fetch programs');
-    } finally {
-    }
+      dispatch(setProgramList(programsData));
+      return programsData;
+    });
   };
-   
-  const fetchAgents=async()=>{
-  try {
+
+  const fetchAgents = async () => {
+    await withRetry('agents', async () => {
       const querySnapshot = await getDocs(agentsCollectionRef);
       const agentsData = querySnapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
       }));
-    
-   dispatch(setAgentList(agentsData))
 
-    } catch (error) {
-      console.error('Error fetching programs:', error);
-      message.error('Failed to fetch programs');
-    } finally {
-    }
+      dispatch(setAgentList(agentsData));
+      return agentsData;
+    });
   };
+
+  // Redirect guard — AuthProvider has its own; this one covers the layout.
   useEffect(() => {
     if (!loading && !user && !withoutLayout.includes(pathname)) {
       router.replace("/auth/login");
     }
-     if(user && dispatch){
-      fetchAgents()
+  }, [user, loading, pathname, router]);
+
+  // Load reference data once per signed-in user. Previously this also depended
+  // on `pathname` and `router`, so it refetched every collection on every
+  // navigation.
+  useEffect(() => {
+    if (user?.uid && dispatch) {
+      fetchAgents();
       fetchPrograms();
     }
-  }, [user, loading, pathname, router,dispatch]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.uid, dispatch]);
 
   // If the current route should not have layout, render children only
   if (withoutLayout.includes(pathname)) {

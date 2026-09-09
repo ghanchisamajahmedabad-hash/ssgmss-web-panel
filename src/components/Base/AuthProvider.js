@@ -75,7 +75,16 @@ function AuthProviderInner({ children }) {
   const pathname = usePathname();
 
   useEffect(() => {
+    // Each auth change gets a generation number. The callback is async, so a
+    // logout firing while a login's Firestore read is still in flight would
+    // otherwise let the older result land last and resurrect the signed-out
+    // user (or vice versa). Stale generations bail out before touching state.
+    let generation = 0;
+
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      const myGeneration = ++generation;
+      const isStale = () => myGeneration !== generation;
+
       // Always set loading=true before any async work so the redirect guard
       // never sees user=null + loading=false while Firestore is still fetching.
       setLoading(true);
@@ -133,19 +142,88 @@ function AuthProviderInner({ children }) {
             mergedUser.permissions = DEFAULT_PERMISSIONS;
           }
 
+          // A newer auth change happened while we were reading Firestore —
+          // that result is authoritative, so drop this one.
+          if (isStale()) return;
+
           setUser(mergedUser);
           dispatch(setReduxUser(mergedUser));
         } else {
+          if (isStale()) return;
           setUser(null);
           dispatch(clearUser());
         }
       } catch (error) {
+        if (isStale()) return;
         console.error("AuthProvider error:", error);
-        messageApi.error("Failed to load user data");
-        setUser(null);
-        dispatch(clearUser());
+
+        // A failed profile read must NOT sign the user out.
+        //
+        // Right after login the ID token can take a moment to propagate, so the
+        // first users/{uid} read sometimes returns permission-denied. Nulling
+        // the user here made the redirect guard bounce straight back to the
+        // login page — "login succeeded, then returned to login". Clearing site
+        // data appeared to fix it only because it changed the timing.
+        //
+        // Firebase Auth is the source of truth for *whether* someone is signed
+        // in; Firestore only enriches the profile. So on failure, keep them
+        // signed in with whatever the token can tell us and let a later render
+        // pick up the full profile.
+        if (firebaseUser) {
+          try {
+            // Force-refresh the token, then retry with a short backoff. A
+            // single immediate retry isn't always enough — the token can take
+            // a beat to be accepted by Firestore right after sign-in.
+            await firebaseUser.getIdToken(true);
+
+            let retrySnap = null;
+            for (const waitMs of [150, 500, 1200]) {
+              if (isStale()) return;
+              try {
+                retrySnap = await getDoc(doc(db, "users", firebaseUser.uid));
+                break;
+              } catch (attemptErr) {
+                console.warn(`Profile read retry failed, waiting ${waitMs}ms`, attemptErr?.code);
+                await new Promise(r => setTimeout(r, waitMs));
+              }
+            }
+            if (!retrySnap) throw new Error('Profile unreadable after retries');
+
+            let recovered;
+            if (retrySnap.exists()) {
+              recovered = { tokens: firebaseUser?.stsTokenManager, ...retrySnap.data() };
+            } else {
+              const claims = (await firebaseUser.getIdTokenResult()).claims || {};
+              recovered = {
+                tokens: firebaseUser?.stsTokenManager,
+                uid: firebaseUser.uid,
+                name: firebaseUser.displayName || '',
+                email: firebaseUser.email || '',
+                photoURL: firebaseUser.photoURL || '',
+                role: claims.role || 'member',
+                permissions: DEFAULT_PERMISSIONS,
+              };
+            }
+            if (!recovered.permissions) recovered.permissions = DEFAULT_PERMISSIONS;
+
+            if (isStale()) return;
+            setUser(recovered);
+            dispatch(setReduxUser(recovered));
+            console.warn('AuthProvider recovered after a failed profile read');
+          } catch (retryErr) {
+            console.error('AuthProvider retry also failed:', retryErr);
+            messageApi.error('Could not load your profile. Some pages may be limited.');
+            // Still signed in — do not force a logout
+          }
+        } else {
+          setUser(null);
+          dispatch(clearUser());
+        }
       } finally {
-        setLoading(false);
+        // Only the newest generation may release the loading gate — otherwise a
+        // stale callback finishing late would let the redirect guard run
+        // against half-applied state.
+        if (!isStale()) setLoading(false);
       }
     });
 

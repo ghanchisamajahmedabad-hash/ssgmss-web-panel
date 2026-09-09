@@ -182,20 +182,16 @@ const styles = StyleSheet.create({
     paddingHorizontal: 4, paddingVertical: 3,
     justifyContent: 'center',
   },
-  cellVillage: {
-    width: 60,
-    borderRightWidth: 0.5, borderRightColor: BORDER,
-    paddingHorizontal: 2, paddingVertical: 3,
-    alignItems: 'center', justifyContent: 'center',
-  },
+  // Village column removed — merged into the name cell, which now gets the
+  // freed width via flex: 1
   cellDate: {
-    width: 66,
+    width: 72,
     borderRightWidth: 0.5, borderRightColor: BORDER,
     paddingHorizontal: 3, paddingVertical: 3,
     alignItems: 'center', justifyContent: 'center',
   },
   cellMobile: {
-    width: 76,
+    width: 82,
     paddingHorizontal: 3, paddingVertical: 3,
     alignItems: 'center', justifyContent: 'center',
   },
@@ -352,14 +348,6 @@ const RasidPage = ({ data }) => {
           </Text>
         </View>
 
-        {/* ══ Village ══ */}
-        <View style={styles.infoRow}>
-          <Text>
-            <Text style={styles.infoLabel}>गाँव : </Text>
-            <Text style={styles.infoValue}>{data.village || '—'}</Text>
-          </Text>
-        </View>
-
         {/* ══ Yojana + Sahyog Rashi ══ */}
         <View style={styles.infoRow}>
           <View style={styles.infoLeft}>
@@ -389,9 +377,6 @@ const RasidPage = ({ data }) => {
             <View style={styles.cellName}>
               <Text style={[styles.headerCellText, { textAlign: 'center' }]}>नाम</Text>
             </View>
-            <View style={styles.cellVillage}>
-              <Text style={styles.headerCellText}>गाँव</Text>
-            </View>
             <View style={styles.cellDate}>
               <Text style={styles.headerCellText}>दिनांक</Text>
             </View>
@@ -410,10 +395,12 @@ const RasidPage = ({ data }) => {
                 <Text style={styles.cellTextCenter}>{entry ? entry.code : ''}</Text>
               </View>
               <View style={styles.cellName}>
-                <Text style={styles.cellTextLeft}>{entry ? entry.name : ''}</Text>
-              </View>
-              <View style={styles.cellVillage}>
-                <Text style={styles.cellTextCenter}>{entry ? entry.village || '' : ''}</Text>
+                {/* Village is appended to the name rather than given its own
+                    column — matches the printed receipt, and leaves the name
+                    column wide enough for "नाम / पिता  गाँव - तहसील". */}
+                <Text style={styles.cellTextLeft}>
+                  {entry ? [entry.name, entry.village].filter(Boolean).join('  ') : ''}
+                </Text>
               </View>
               <View style={styles.cellDate}>
                 <Text style={styles.cellTextCenter}>{entry ? entry.date : ''}</Text>

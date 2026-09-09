@@ -1,0 +1,129 @@
+rules_version = '2';
+
+// SSGMS Web Panel — Firestore security rules
+//
+// Deploy:  firebase deploy --only firestore:rules
+//
+// Collections written only by the server (Admin SDK) need NO rule — the Admin
+// SDK bypasses rules entirely, and the catch-all at the bottom correctly denies
+// client access to them. That applies to:
+//   paymentIdempotency, whatsappLogs, registrationNumbers (writes)
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── Helpers ───────────────────────────────────────────────────────────
+    // Custom claim first (free), falling back to the users doc for accounts
+    // whose claims were never set. `||` short-circuits, so the get() only runs
+    // when the claim is absent.
+    function isAdmin() {
+      return request.auth != null && (
+        request.auth.token.get('role', '') in ['superadmin', 'admin'] ||
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role
+          in ['superadmin', 'admin']
+      );
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // ── Users & sessions ──────────────────────────────────────────────────
+    match /users/{userId} {
+      allow read, write: if isSignedIn();
+
+      match /sessions/{sessionId} {
+        allow read: if isSignedIn();
+        allow write: if isSignedIn() && request.auth.uid == userId;
+      }
+    }
+
+    // ── Registration number reservations ──────────────────────────────────
+    // Claimed by the client when generating a number. Never reused or edited.
+    match /registrationNumbers/{regNo} {
+      allow read, create: if isSignedIn();
+      allow update, delete: if false;
+    }
+
+    // ── Organisation settings (contact, about, payment details) ───────────
+    match /settings/{docId} {
+      // Members need to read payment details in order to pay
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    match /contact/{contactId} { allow read, write: if isSignedIn(); }
+    match /about/{aboutId}     { allow read, write: if isSignedIn(); }
+
+    // ── Master data ───────────────────────────────────────────────────────
+    match /states/{id}    { allow read, write: if isSignedIn(); }
+    match /districts/{id} { allow read, write: if isSignedIn(); }
+    match /cities/{id}    { allow read, write: if isSignedIn(); }
+    match /castes/{id}    { allow read, write: if isSignedIn(); }
+    match /relations/{id} { allow read, write: if isSignedIn(); }
+    match /categories/{id}{ allow read, write: if isSignedIn(); }
+
+    // ── Programs (yojnas) ─────────────────────────────────────────────────
+    match /programs/{programId} { allow read, write: if isSignedIn(); }
+
+    // ── Agents ────────────────────────────────────────────────────────────
+    match /agents/{agentId} {
+      allow read, write: if isSignedIn();
+      match /sessions/{sessionId} {
+        allow read, write: if isSignedIn() && request.auth.uid == agentId;
+      }
+    }
+
+    // ── Members ───────────────────────────────────────────────────────────
+    match /members/{memberId} {
+      allow read, write: if isSignedIn();
+      match /memberPrograms/{id} { allow read, write: if isSignedIn(); }
+      match /sessions/{sessionId} {
+        allow read, write: if isSignedIn() && request.auth.uid == memberId;
+      }
+    }
+
+    // ── Payments & fees ───────────────────────────────────────────────────
+    match /memberJoinFees/{id}          { allow read, write: if isSignedIn(); }
+    match /memberClosingFees/{id}       { allow read, write: if isSignedIn(); }
+    match /paymentGroups/{id}           { allow read, write: if isSignedIn(); }
+    match /closing_payment/{id}         { allow read, write: if isSignedIn(); }
+    match /memberPaymentSummaries/{id}  { allow read, write: if isSignedIn(); }
+    match /commissionTransactions/{id}  { allow read, write: if isSignedIn(); }
+    match /agentAdvancePayments/{id}    { allow read, write: if isSignedIn(); }
+
+    // ── Closings ──────────────────────────────────────────────────────────
+    match /groupClosings/{id}  { allow read, write: if isSignedIn(); }
+    match /memberClosings/{id} { allow read, write: if isSignedIn(); }
+
+    // ── Expenses & stats ──────────────────────────────────────────────────
+    match /expenses/{id}          { allow read, write: if isSignedIn(); }
+    match /organizationStats/{id} { allow read, write: if isSignedIn(); }
+
+    // ── WhatsApp inbox ────────────────────────────────────────────────────
+    // Written exclusively by the server; the client only reads and clears the
+    // unread badge.
+    match /whatsappChats/{phone} {
+      allow read: if isAdmin();
+      allow update: if isAdmin()
+                    && request.resource.data.diff(resource.data)
+                         .affectedKeys().hasOnly(['unreadCount']);
+      allow create, delete: if false;
+
+      match /messages/{messageId} {
+        allow read: if isAdmin();
+        allow write: if false;
+      }
+    }
+
+    // ── Public app info ───────────────────────────────────────────────────
+    match /appInfo/{appInfoId} {
+      allow read: if true;
+      allow write: if isSignedIn();
+    }
+
+    // ── Deny everything else ──────────────────────────────────────────────
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

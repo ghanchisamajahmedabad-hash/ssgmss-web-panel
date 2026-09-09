@@ -22,42 +22,50 @@ const DocumentUploads = ({
   const [memberBackFileList, setMemberBackFileList] = useState([])
   const [guardianFileList, setGuardianFileList] = useState([])
 
-  // Initialize file lists from existing documents
+  // Initialize file lists from existing documents.
+  //
+  // Each doc state holds EITHER a File the user just picked, OR an https URL
+  // carried over from an edited/copied member. The old guard (`!memberDocFront`)
+  // meant a URL in that state suppressed its own preview, so copied documents
+  // looked like they hadn't come across. Only a real File should take over.
   React.useEffect(() => {
-    if (existingMemberDocFront && !memberDocFront) {
+    const url = (typeof memberDocFront === 'string' && memberDocFront) || existingMemberDocFront
+    if (url && !(memberDocFront instanceof File)) {
       setMemberFrontFileList([{
         uid: '-1',
-        name: 'member_front.jpg',
+        name: url.includes('.pdf') ? 'member_front.pdf' : 'member_front.jpg',
         status: 'done',
-        url: existingMemberDocFront,
-        preview: existingMemberDocFront,
-        isImage: existingMemberDocFront.includes('image')
+        url,
+        preview: url,
+        isImage: !url.includes('.pdf')
       }])
     }
   }, [existingMemberDocFront, memberDocFront])
 
   React.useEffect(() => {
-    if (existingMemberDocBack && !memberDocBack) {
+    const url = (typeof memberDocBack === 'string' && memberDocBack) || existingMemberDocBack
+    if (url && !(memberDocBack instanceof File)) {
       setMemberBackFileList([{
         uid: '-2',
-        name: 'member_back.jpg',
+        name: url.includes('.pdf') ? 'member_back.pdf' : 'member_back.jpg',
         status: 'done',
-        url: existingMemberDocBack,
-        preview: existingMemberDocBack,
-        isImage: existingMemberDocBack.includes('image')
+        url,
+        preview: url,
+        isImage: !url.includes('.pdf')
       }])
     }
   }, [existingMemberDocBack, memberDocBack])
 
   React.useEffect(() => {
-    if (existingGuardianDoc && !guardianDoc) {
+    const url = (typeof guardianDoc === 'string' && guardianDoc) || existingGuardianDoc
+    if (url && !(guardianDoc instanceof File)) {
       setGuardianFileList([{
         uid: '-3',
-        name: existingGuardianDoc.includes('.pdf') ? 'guardian_document.pdf' : 'guardian_document.jpg',
+        name: url.includes('.pdf') ? 'guardian_document.pdf' : 'guardian_document.jpg',
         status: 'done',
-        url: existingGuardianDoc,
-        preview: existingGuardianDoc,
-        isImage: !existingGuardianDoc.includes('.pdf')
+        url,
+        preview: url,
+        isImage: !url.includes('.pdf')
       }])
     }
   }, [existingGuardianDoc, guardianDoc])

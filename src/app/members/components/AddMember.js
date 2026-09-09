@@ -1,7 +1,7 @@
 "use client"
-import { App, Button, Drawer, Form, Spin, Checkbox, Space, Input, Row, Col, Tooltip } from 'antd'
-import React, { useState, useEffect, useCallback } from 'react'
-import { LoadingOutlined, ReloadOutlined } from '@ant-design/icons'
+import { App, Button, Drawer, Form, Spin, Checkbox, Space, Input, Row, Col, Tooltip, Modal, Alert, Tag } from 'antd'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
+import { LoadingOutlined, ReloadOutlined, CopyOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import isBetween from 'dayjs/plugin/isBetween'
 import { collection, getDocs, query, where } from 'firebase/firestore'
@@ -63,6 +63,117 @@ const AddMember = ({ open, setOpen, programs, agents, currentUser, onSuccess }) 
   // ── Aadhaar duplicate check ────────────────────────────────────────────────
   const [existingMember, setExistingMember] = useState(null)
 
+  // ── Copy from an existing member ───────────────────────────────────────────
+  // Registering the same person into a second yojna shouldn't mean retyping
+  // every personal field. Copies identity/address/guardian details only —
+  // the yojna, registration number and payment are always entered fresh.
+  const [copyOpen,     setCopyOpen]     = useState(false)
+  const [copySearch,   setCopySearch]   = useState('')
+  const [copyResults,  setCopyResults]  = useState([])
+  const [copySearching, setCopySearching] = useState(false)
+  const [copiedFrom,   setCopiedFrom]   = useState(null)   // the source member
+
+  const searchMembersToCopy = async (term) => {
+    const t = String(term || '').trim()
+    if (t.length < 2) { setCopyResults([]); return }
+    setCopySearching(true)
+    try {
+      const normalized = t.toLowerCase().replace(/[^a-z0-9]/g, '')
+      const snap = await getDocs(query(
+        collection(db, 'members'),
+        where('search_keywords', 'array-contains', normalized),
+        where('delete_flag', '==', false),
+      ))
+      setCopyResults(snap.docs.map(d => ({ id: d.id, ...d.data() })).slice(0, 25))
+    } catch (e) {
+      console.error('Member search failed:', e)
+      message.error('Search failed — try a registration number or phone')
+    } finally {
+      setCopySearching(false)
+    }
+  }
+
+  const applyCopiedMember = async (m) => {
+    // Location dropdowns cascade, so districts/cities must be loaded before
+    // their values can be set — otherwise the Select shows a blank.
+    if (m.stateId) {
+      setSelectedState(m.stateId)
+      try {
+        const dSnap = await getDocs(query(collection(db, 'districts'), where('stateId', '==', m.stateId)))
+        setDistricts(dSnap.docs.filter(d => d.data().status === 'active').map(d => ({ id: d.id, ...d.data() })))
+      } catch (e) { console.error(e) }
+    }
+    if (m.districtId) {
+      setSelectedDistrict(m.districtId)
+      try {
+        const cSnap = await getDocs(query(collection(db, 'cities'), where('districtId', '==', m.districtId)))
+        setCities(cSnap.docs.filter(c => c.data().status === 'active').map(c => ({ id: c.id, ...c.data() })))
+      } catch (e) { console.error(e) }
+    }
+
+    const dob = m.dobDate ? dayjs(m.dobDate, 'DD-MM-YYYY') : null
+    if (dob?.isValid()) {
+      setDobDate(dob)
+      setAge(dayjs().diff(dob, 'year'))
+    }
+
+    form.setFieldsValue({
+      name:              m.displayName || '',
+      fatherName:        m.fatherName || '',
+      surname:           m.surname || '',
+      gender:            m.gender || undefined,
+      caste:             m.casteId || undefined,
+      phone:             m.phone || '',
+      phoneAlt:          m.phoneAlt || '',
+      aadhaarNo:         m.aadhaarNo || '',
+      currentAddress:    m.currentAddress || '',
+      village:           m.village || '',
+      pinCode:           m.pinCode || '',
+      state:             m.stateId || undefined,
+      district:          m.districtId || undefined,
+      city:              m.cityId || undefined,
+      guardian:          m.guardian || '',
+      guardianRelation:  m.guardianRelationId || undefined,
+      // The form field is spelled `bobDate` (typo in BasicInfoForm) while the
+      // member doc stores `dobDate` — setting the wrong key left the date, and
+      // the age derived from it, blank.
+      bobDate:           dob?.isValid() ? dob : undefined,
+      // Deliberately NOT copied: registrationNumber (a new one is generated),
+      // programId, join fees and payment — those define the new membership.
+      password:          generatePassword(m.displayName, m.dobDate),
+    })
+
+    // Photos & documents — set the upload state to the existing https URL.
+    // uploadFile() returns such a value unchanged, so the new member reuses the
+    // same images instead of re-uploading them, and the previews render via the
+    // components' existing* props.
+    if (m.photoURL)            setMemberPhoto(m.photoURL)
+    if (m.guardianPhotoURL)    setGuardianPhoto(m.guardianPhotoURL)
+    if (m.documentFrontURL)    setMemberDocFront(m.documentFrontURL)
+    if (m.documentBackURL)     setMemberDocBack(m.documentBackURL)
+    if (m.guardianDocumentURL) setGuardianDoc(m.guardianDocumentURL)
+
+    setCopiedFrom({
+      id: m.id,
+      displayName: m.displayName || '',
+      registrationNumber: m.registrationNumber || '',
+      programName: m.programName || '',
+      programId: m.programId || '',
+      aadhaarNo: m.aadhaarNo || '',
+      docs: {
+        photoURL:            m.photoURL || '',
+        guardianPhotoURL:    m.guardianPhotoURL || '',
+        documentFrontURL:    m.documentFrontURL || '',
+        documentBackURL:     m.documentBackURL || '',
+        guardianDocumentURL: m.guardianDocumentURL || '',
+      },
+    })
+    setCopyOpen(false)
+    setCopySearch('')
+    setCopyResults([])
+    message.success(`Details copied from ${m.displayName || 'member'} — now choose the new yojna`)
+  }
+
   // ── Location ───────────────────────────────────────────────────────────────
   const [states,           setStates]           = useState([])
   const [districts,        setDistricts]        = useState([])
@@ -81,16 +192,24 @@ const AddMember = ({ open, setOpen, programs, agents, currentUser, onSuccess }) 
   const [regNoLoading, setRegNoLoading]   = useState(false)
   const [regNoStatus,  setRegNoStatus]    = useState(null)  // { ok, message }
 
+  // generateRegistrationNumber() RESERVES the number it hands back. That
+  // reservation is ours, so the availability check must not treat it as a
+  // clash — otherwise the auto-filled number rejects itself on save with
+  // "already reserved". Remember what we generated so it can be recognised.
+  const autoRegNoRef = useRef(null)
+
   const generateRegNo = useCallback(async (programId) => {
     if (!programId) return
     setRegNoLoading(true)
     setRegNoStatus(null)
     try {
       const regNo = await generateRegistrationNumber(programId)
+      autoRegNoRef.current = regNo
       form.setFieldValue('registrationNumber', regNo)
-      setRegNoStatus({ ok: true, message: 'Auto-generated' })
+      setRegNoStatus({ ok: true, message: 'Auto-generated & reserved' })
     } catch (e) {
       console.error('Failed to generate registration number:', e)
+      autoRegNoRef.current = null
       setRegNoStatus({ ok: false, message: 'Could not generate — enter one manually' })
     } finally {
       setRegNoLoading(false)
@@ -101,6 +220,13 @@ const AddMember = ({ open, setOpen, programs, agents, currentUser, onSuccess }) 
   const checkRegNo = useCallback(async (value) => {
     const v = String(value || '').trim().toUpperCase()
     if (!v) { setRegNoStatus(null); return }
+
+    // Our own auto-generated number is already reserved by us — nothing to check
+    if (v === autoRegNoRef.current) {
+      setRegNoStatus({ ok: true, message: 'Auto-generated & reserved' })
+      return
+    }
+
     setRegNoLoading(true)
     try {
       const res = await isRegistrationNumberAvailable(v)
@@ -227,6 +353,21 @@ const AddMember = ({ open, setOpen, programs, agents, currentUser, onSuccess }) 
   }
 
   const handleProgramChange = (programId) => {
+    // A member can join several yojnas, but not the same one twice. Block the
+    // source yojna outright when copying — otherwise you'd create a duplicate
+    // membership rather than a new one.
+    if (programId && copiedFrom?.programId && programId === copiedFrom.programId) {
+      message.error(
+        `${copiedFrom.displayName} is already registered in this yojna (${copiedFrom.registrationNumber}). Choose a different one.`
+      )
+      setSelectedProgram('')
+      setProgramDetail(null)
+      form.setFieldValue('programId', undefined)
+      form.setFieldValue('registrationNumber', '')
+      setRegNoStatus(null)
+      return
+    }
+
     setSelectedProgram(programId || '')
     setSelectedMemberGroup(null)
     if (!programId) {
@@ -312,6 +453,9 @@ const AddMember = ({ open, setOpen, programs, agents, currentUser, onSuccess }) 
         joinFeesDone, paymentMode, paidAmount,
         memberPhoto, guardianPhoto, memberDocFront, memberDocBack, guardianDoc,
         currentUser, form, setOpen, setLoading,
+        // Already reserved by generateRegistrationNumber — must not be
+        // re-validated against the reservation it created itself
+        autoGeneratedRegNo: autoRegNoRef.current,
         // Pass notification options
         sendWhatsApp,
         sendAgentWhatsApp,
@@ -339,8 +483,20 @@ const AddMember = ({ open, setOpen, programs, agents, currentUser, onSuccess }) 
     setSendWhatsApp(false)
     setSendNotification(true)
     setRegNoStatus(null); setRegNoLoading(false)
+    autoRegNoRef.current = null
+    setCopiedFrom(null); setCopyOpen(false); setCopySearch(''); setCopyResults([])
     form.resetFields()
   }
+
+  // Start clean every time the drawer opens.
+  // `destroyOnHidden` unmounts the Form, but this component keeps its own state
+  // — photos, documents, copied member, selected program — so cancelling and
+  // reopening previously showed the last entry's data still filled in.
+  // resetLocalState only ran after a successful save.
+  useEffect(() => {
+    if (open) resetLocalState()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open])
 
   return (
     <Drawer
@@ -352,6 +508,15 @@ const AddMember = ({ open, setOpen, programs, agents, currentUser, onSuccess }) 
       maskClosable={false}
       destroyOnHidden
       closable={!loading}
+      extra={
+        <Button
+          icon={<CopyOutlined />}
+          onClick={() => setCopyOpen(true)}
+          disabled={loading}
+        >
+          Copy from existing member
+        </Button>
+      }
     >
       <Spin spinning={loading} indicator={<LoadingOutlined style={{ fontSize: 24 }} spin />}>
         <Form
@@ -362,6 +527,32 @@ const AddMember = ({ open, setOpen, programs, agents, currentUser, onSuccess }) 
           disabled={loading}
         >
           <div className="flex flex-col gap-2">
+
+            {/* Banner shown once details have been copied in */}
+            {copiedFrom && (
+              <Alert
+                type="info"
+                showIcon
+                style={{ marginBottom: 4 }}
+                message={
+                  <span style={{ fontSize: 13 }}>
+                    Details copied from <strong>{copiedFrom.displayName}</strong>
+                    {copiedFrom.registrationNumber && <> ({copiedFrom.registrationNumber})</>}
+                    {copiedFrom.programName && <> · {copiedFrom.programName}</>}
+                  </span>
+                }
+                description={
+                  <span style={{ fontSize: 12 }}>
+                    Personal details, address, guardian and uploaded photos/documents
+                    have been carried over. Choose the new yojna below — a fresh
+                    registration number is generated and the original member is not changed.
+                  </span>
+                }
+                action={
+                  <Button size="small" onClick={() => setCopiedFrom(null)}>Dismiss</Button>
+                }
+              />
+            )}
 
             <BasicInfoForm
               handleDobChange={handleDobChange}
@@ -398,6 +589,7 @@ const AddMember = ({ open, setOpen, programs, agents, currentUser, onSuccess }) 
               existingMember={existingMember}
               selectedMemberGroup={selectedMemberGroup}
               handleMemberGroupChange={handleMemberGroupChange}
+              blockedProgramId={copiedFrom?.programId}
             />
 
             {/* ── Registration number ─────────────────────────────────────── */}
@@ -489,15 +681,22 @@ const AddMember = ({ open, setOpen, programs, agents, currentUser, onSuccess }) 
               }}
             />
 
+            {/* existing* props render previews for images carried over by
+                "Copy from existing member" */}
             <PhotoUploads
               memberPhoto={memberPhoto}     setMemberPhoto={setMemberPhoto}
               guardianPhoto={guardianPhoto} setGuardianPhoto={setGuardianPhoto}
+              existingMemberPhoto={copiedFrom?.docs?.photoURL || ''}
+              existingGuardianPhoto={copiedFrom?.docs?.guardianPhotoURL || ''}
             />
 
             <DocumentUploads
               memberDocFront={memberDocFront} setMemberDocFront={setMemberDocFront}
               memberDocBack={memberDocBack}   setMemberDocBack={setMemberDocBack}
               guardianDoc={guardianDoc}       setGuardianDoc={setGuardianDoc}
+              existingMemberDocFront={copiedFrom?.docs?.documentFrontURL || ''}
+              existingMemberDocBack={copiedFrom?.docs?.documentBackURL || ''}
+              existingGuardianDoc={copiedFrom?.docs?.guardianDocumentURL || ''}
             />
 
             {/* Notification Options Section */}
@@ -567,6 +766,79 @@ const AddMember = ({ open, setOpen, programs, agents, currentUser, onSuccess }) 
           </div>
         </Form>
       </Spin>
+
+      {/* ── Copy-from-member search ─────────────────────────────────────── */}
+      <Modal
+        title={<Space><CopyOutlined />Copy details from an existing member</Space>}
+        open={copyOpen}
+        onCancel={() => { setCopyOpen(false); setCopySearch(''); setCopyResults([]) }}
+        footer={null}
+        width={640}
+      >
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 12, fontSize: 12 }}
+          message="Copies name, father, DOB, phone, Aadhaar, address and guardian"
+          description="Yojna, registration number and payment are entered fresh. The original member stays exactly as it is."
+        />
+
+        <Input.Search
+          autoFocus
+          placeholder="Search by name, registration no, phone or Aadhaar"
+          value={copySearch}
+          onChange={e => {
+            setCopySearch(e.target.value)
+            if (e.target.value.trim().length >= 2) searchMembersToCopy(e.target.value)
+            else setCopyResults([])
+          }}
+          onSearch={searchMembersToCopy}
+          loading={copySearching}
+          allowClear
+        />
+
+        <div style={{ maxHeight: 380, overflowY: 'auto', marginTop: 12 }}>
+          {copySearching ? (
+            <div style={{ textAlign: 'center', padding: 30 }}><Spin /></div>
+          ) : copyResults.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: 30, color: '#9ca3af', fontSize: 13 }}>
+              {copySearch.trim().length >= 2
+                ? 'No members found'
+                : 'Type at least 2 characters to search'}
+            </div>
+          ) : copyResults.map(m => (
+            <div
+              key={m.id}
+              onClick={() => applyCopiedMember(m)}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 10,
+                padding: '10px 12px', borderBottom: '1px solid #f0f0f0',
+                cursor: 'pointer', borderRadius: 6,
+              }}
+              onMouseEnter={e => (e.currentTarget.style.background = '#fafafa')}
+              onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+            >
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 600, fontSize: 13 }}>
+                  {m.displayName || '—'}
+                  {m.fatherName && <span style={{ fontWeight: 400, color: '#6b7280' }}> · s/o {m.fatherName}</span>}
+                </div>
+                <div style={{ fontSize: 11, color: '#6b7280', marginTop: 2 }}>
+                  <span style={{ fontFamily: 'monospace', color: '#db2777' }}>
+                    {m.registrationNumber || '—'}
+                  </span>
+                  {m.phone && <> · {m.phone}</>}
+                  {m.village && <> · {m.village}</>}
+                </div>
+              </div>
+              {m.programName && (
+                <Tag color="geekblue" style={{ fontSize: 10, margin: 0 }}>{m.programName}</Tag>
+              )}
+              <Button size="small" type="link">Use</Button>
+            </div>
+          ))}
+        </div>
+      </Modal>
     </Drawer>
   )
 }

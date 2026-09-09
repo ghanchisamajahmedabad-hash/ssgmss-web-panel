@@ -5,8 +5,10 @@ import { signInWithEmailAndPassword, sendPasswordResetEmail } from 'firebase/aut
 import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { auth, db } from '../../../../lib/firbase-client';
 import { message } from 'antd';
+import { useRouter } from 'next/navigation';
 
 const LoginPage = () => {
+  const router = useRouter();
   const [view, setView] = useState('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -65,6 +67,53 @@ const LoginPage = () => {
       console.error('Email check error:', error);
       showMessage('error', error.message || 'Error checking email');
       return { exists: false, firestore: false, auth: false, status: null };
+    }
+  };
+
+  // ── Trusted device ─────────────────────────────────────────────────────────
+  // A browser that has already passed OTP for this email skips it next time.
+  // The deviceId is just an opaque handle — the authoritative record is
+  // server-side, so editing localStorage alone doesn't get you past OTP.
+  const getDeviceId = () => {
+    try {
+      let id = localStorage.getItem('device_id');
+      if (!id) {
+        id = `dev_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 12)}`;
+        localStorage.setItem('device_id', id);
+      }
+      return id;
+    } catch {
+      return null;   // private mode / storage blocked → always ask for OTP
+    }
+  };
+
+  const isDeviceTrusted = async (emailAddr) => {
+    const deviceId = getDeviceId();
+    if (!deviceId) return false;
+    try {
+      const res = await fetch('/api/auth/trusted-device', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'check', email: emailAddr, deviceId }),
+      });
+      const data = await res.json();
+      return data?.trusted === true;
+    } catch {
+      return false;  // any failure → fall back to OTP
+    }
+  };
+
+  const rememberDevice = async (emailAddr) => {
+    const deviceId = getDeviceId();
+    if (!deviceId) return;
+    try {
+      await fetch('/api/auth/trusted-device', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'register', email: emailAddr, deviceId }),
+      });
+    } catch (e) {
+      console.warn('Could not remember this device (non-critical):', e);
     }
   };
 
@@ -127,7 +176,11 @@ const LoginPage = () => {
       
       if (data.success) {
         setIsOtpVerified(true);
-        showMessage('success', 'OTP verified successfully!');
+        // Remember this browser so the next login goes straight to password.
+        // Must happen here — the server only accepts registration while the
+        // OTP for this email is in a verified state.
+        await rememberDevice(email);
+        showMessage('success', 'OTP verified — this device will skip OTP next time');
         return true;
       } else {
         showMessage('error', 'Invalid OTP. Please try again.');
@@ -208,9 +261,20 @@ const LoginPage = () => {
         return; // STOP HERE - Don't send OTP
       }
 
+      // Already verified on this browser? Skip OTP and go straight to password.
+      // The password step is the 'loginOtp' view with isOtpVerified set — there
+      // is no separate password view.
+      if (await isDeviceTrusted(email)) {
+        setIsOtpVerified(true);
+        setView('loginOtp');
+        showMessage('success', 'Welcome back — enter your password');
+        setLoading(false);
+        return;
+      }
+
       // Send OTP only if account is active
       const otpSent = await sendOtp();
-      
+
       if (otpSent) {
         setView('loginOtp');
       }
@@ -244,19 +308,31 @@ const LoginPage = () => {
       const userCredential = await signInWithEmailAndPassword(auth, email, password);
       const user = userCredential.user;
 
-      // Double-check user status from Firestore after login
-      const userRef = doc(db, 'users', user.uid); // Assuming users are stored by UID
-      const userDoc = await getDoc(userRef);
-      
-      if (userDoc.exists()) {
-        const userData = userDoc.data();
-        if (userData.status && userData.status.toLowerCase() !== 'active') {
-          // Log out user if account is not active
-          await auth.signOut();
-          showMessage('error', `Your account is ${userData.status}. Please contact administrator.`);
-          setLoading(false);
-          return;
+      // Double-check user status from Firestore.
+      //
+      // This runs moments after sign-in, when the ID token may still be
+      // propagating, so the read can fail with permission-denied. It used to
+      // throw into the outer catch, which reported "login failed" even though
+      // the user WAS signed in — the classic "first attempt fails, second
+      // works" (by then the token is warm). It's an extra safety check, not
+      // the thing that authenticates, so a failure here must not abort login.
+      try {
+        const userRef = doc(db, 'users', user.uid);
+        const userDoc = await getDoc(userRef);
+
+        if (userDoc.exists()) {
+          const userData = userDoc.data();
+          if (userData.status && userData.status.toLowerCase() !== 'active') {
+            // Genuinely blocked account — this one DOES stop the login
+            await auth.signOut();
+            showMessage('error', `Your account is ${userData.status}. Please contact administrator.`);
+            setLoading(false);
+            return;
+          }
         }
+      } catch (statusErr) {
+        console.warn('Post-login status check skipped:', statusErr?.code || statusErr);
+        // AuthProvider re-reads the profile and enforces access anyway
       }
 
       // Generate or get session token
@@ -266,13 +342,20 @@ const LoginPage = () => {
         localStorage.setItem("session_token", sessionToken);
       }
 
-      // Save session info
-      await saveSession(user.uid, sessionToken);
+      // Session bookkeeping — also non-fatal for the same reason
+      try {
+        await saveSession(user.uid, sessionToken);
+      } catch (sessErr) {
+        console.warn('Could not save session record:', sessErr?.code || sessErr);
+      }
 
       showMessage('success', 'Login successful! Redirecting...');
-      // Do NOT navigate here — AuthProvider's onAuthStateChanged will fire,
-      // load user data, and then the redirect guard will push to "/" automatically.
-      // Using a manual router.push races against that async load and causes loops.
+
+      // Navigate explicitly. AuthProvider's guard also redirects once its
+      // profile load finishes, but relying on that alone meant any hiccup in
+      // that async path left the user stranded on the login screen.
+      // router.replace is idempotent, so both firing is harmless.
+      router.replace('/');
 
     } catch (error) {
       console.error('Login error:', error);
