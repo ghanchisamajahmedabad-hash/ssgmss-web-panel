@@ -222,9 +222,60 @@ const styles = StyleSheet.create({
 });
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
+// Closing dates reach us in three shapes and each needs different handling:
+//   • Firestore Timestamp        → .toDate()
+//   • "DD-MM-YYYY" string        → dayjs() reads this as MM-DD (or fails), and
+//                                  dayjs(s, 'DD-MM-YYYY') only parses correctly
+//                                  with the customParseFormat plugin, which is
+//                                  not loaded — so the components are rebuilt
+//                                  manually instead of round-tripping dayjs.
+//   • ISO string ("…T18:30:00Z") → written with .toISOString() from a local
+//                                  date, so the UTC instant is the day BEFORE
+//                                  when the local time was before 05:30 IST.
+//                                  Taking the calendar date directly avoids
+//                                  the off-by-one.
 const fmtDate = (d) => {
   if (!d) return '';
-  const parsed = d?.toDate ? dayjs(d.toDate()) : dayjs(d);
+
+  // Firestore Timestamp
+  if (d?.toDate) {
+    const t = dayjs(d.toDate());
+    return t.isValid() ? t.format('DD-MM-YYYY') : '';
+  }
+
+  if (typeof d === 'string') {
+    const s = d.trim();
+
+    // Already DD-MM-YYYY — rebuild the components directly (no dayjs parsing,
+    // so a day/month swap is impossible) and zero-pad for a uniform look.
+    if (/^\d{1,2}-\d{1,2}-\d{4}$/.test(s)) {
+      const [da, mo, y] = s.split('-').map(Number);
+      if (da >= 1 && da <= 31 && mo >= 1 && mo <= 12 && y > 0) {
+        return (
+          String(da).padStart(2, '0') +
+          '-' + String(mo).padStart(2, '0') +
+          '-' + y
+        );
+      }
+      return s;
+    }
+
+    // ISO with a time component: read the calendar date from the string itself
+    // so the printed day matches the day that was picked, whatever timezone
+    // the PDF happens to be rendered in.
+    const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})T/);
+    if (iso) {
+      const [, y, mo, da] = iso;
+      const local = dayjs(`${y}-${mo}-${da}`);
+      // A UTC instant before ~05:30 means the local date was the next day
+      const hour = Number(s.slice(11, 13));
+      return hour >= 18
+        ? local.add(1, 'day').format('DD-MM-YYYY')
+        : local.format('DD-MM-YYYY');
+    }
+  }
+
+  const parsed = dayjs(d);
   return parsed.isValid() ? parsed.format('DD-MM-YYYY') : String(d);
 };
 

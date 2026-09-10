@@ -519,7 +519,11 @@ const MemberDetailDrawer = ({ member: memberProp, visible, onClose, programList,
                 .filter(Boolean).join(' / '),
       // Village rides along with the name — the receipt has no गाँव column
       village: d.closed_village || d.closing_village || '',
-      date:   d.closed_date || d.marriageDate || entry.date,
+      // The MARRIAGE/closing date only. Deliberately no fallback to entry.date —
+      // that's the closing_payment record's createdAt, so an older row missing
+      // closed_date would silently print the payment date and look wrong. Blank
+      // is honest; a wrong date isn't.
+      date:   d.closed_date || d.marriageDate || '',
       mobile: d.closingPhone || d.phone || '',
     })),
   }))

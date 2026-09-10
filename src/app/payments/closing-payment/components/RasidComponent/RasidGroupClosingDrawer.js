@@ -45,6 +45,47 @@ function toWords(n) {
   return s.trim() + ' रुपये मात्र';
 }
 
+// ─── Closing date formatting ──────────────────────────────────────────────────
+// Mirrors ClosingRasidPdf.fmtDate — a closing date may be a Firestore Timestamp,
+// an ISO string ("…T18:30:00Z", written from a local midnight) or an already
+// formatted "DD-MM-YYYY" string. The DD branch is rebuilt by hand because
+// dayjs(s, 'DD-MM-YYYY') swaps day/month without the customParseFormat plugin.
+const fmtDate = (d) => {
+  if (!d) return '';
+
+  if (d?.toDate) {
+    const t = dayjs(d.toDate());
+    return t.isValid() ? t.format('DD-MM-YYYY') : '';
+  }
+
+  if (typeof d === 'string') {
+    const s = d.trim();
+    if (/^\d{1,2}-\d{1,2}-\d{4}$/.test(s)) {
+      const [da, mo, y] = s.split('-').map(Number);
+      if (da >= 1 && da <= 31 && mo >= 1 && mo <= 12 && y > 0) {
+        return (
+          String(da).padStart(2, '0') +
+          '-' + String(mo).padStart(2, '0') +
+          '-' + y
+        );
+      }
+      return s;
+    }
+    const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})T/);
+    if (iso) {
+      const [, y, mo, da] = iso;
+      const local = dayjs(`${y}-${mo}-${da}`);
+      const hour = Number(s.slice(11, 13));
+      return hour >= 18
+        ? local.add(1, 'day').format('DD-MM-YYYY')
+        : local.format('DD-MM-YYYY');
+    }
+  }
+
+  const parsed = dayjs(d);
+  return parsed.isValid() ? parsed.format('DD-MM-YYYY') : String(d);
+};
+
 // ─── Raw HTML print window ────────────────────────────────────────────────────
 function openHtmlWindow(html) {
   const win = window.open('', '_blank');
@@ -714,7 +755,11 @@ const RasidGroupClosingDrawer = ({ open, setOpen, agentId, preselectedGroupId, a
         // rather than each getting a column.
         village: [m.village, m.district, m.state].filter(Boolean).join(' - '),
         ageGroup: m.ageGroupName || m.memberGroupName || m.ageGroup || '',
-        date:   closingDs,
+        // The row's closing date is the CLOSED MEMBER's own closed_date (the
+        // marriage/closing event date), not the group's closedAt (when the
+        // closing batch was recorded). Fall back to the group date only when
+        // the member has no closed_date.
+        date:   fmtDate(m.closed_date || m.marriageDate) || closingDs,
         mobile: m.phone || m.phoneNo || '',
       }));
 
