@@ -470,7 +470,7 @@ win.document.write(`<!DOCTYPE html><html lang="hi"><head>
 }
 
 // ─── Main Component ────────────────────────────────────────────────────────────
-const RasidGroupClosingDrawer = ({ open, setOpen, agentId, preselectedGroupId, agent }) => {
+const RasidGroupClosingDrawer = ({ open, setOpen, agentId, preselectedGroupId, agent, programList }) => {
 
   // ── State ──────────────────────────────────────────────────────────────────
   const [step, setStep]                   = useState(1);
@@ -637,10 +637,14 @@ const RasidGroupClosingDrawer = ({ open, setOpen, agentId, preselectedGroupId, a
 
     const rows = previewList.map((r, i) => {
       const am = agentMembers.find(m => m.id === selectedMemberIds[i]) || {};
+      // The summary table already has its own रजि. नं. column, so the name is
+      // shown WITHOUT the reg-no prefix that buildRasid adds for the receipt.
+      const name = [am.displayName, am.fatherName ? '/ ' + am.fatherName : '']
+                      .filter(Boolean).join(' ') || r.name;
       return `
         <tr>
           <td class="c">${r.serialNo}</td>
-          <td class="l">${r.name}</td>
+          <td class="l">${name}</td>
           <td class="c">${am.registrationNumber || '—'}</td>
           <td class="c">${r.phone || '—'}</td>
           <td class="c">${r.entries?.length || 0}</td>
@@ -698,7 +702,7 @@ const RasidGroupClosingDrawer = ({ open, setOpen, agentId, preselectedGroupId, a
         </div>
         <div class="info-row">
           <span><b>ग्रुप :</b> ${selectedGroup.groupName || '—'}</span>
-          <span><b>योजना :</b> ${selectedGroup.yojanaName || '—'}</span>
+          <span><b>योजना :</b> ${selectedGroup.yojanaName || ((programList || []).find(p => p.id === selectedGroup.programId)?.hindiName || (programList || []).find(p => p.id === selectedGroup.programId)?.name) || '—'}</span>
           <span><b>कुल सदस्य :</b> ${totalMembers}</span>
           <span><b>दिनांक :</b> ${dateStr}</span>
         </div>
@@ -728,7 +732,7 @@ const RasidGroupClosingDrawer = ({ open, setOpen, agentId, preselectedGroupId, a
         </div>
       </div>
     </body></html>`;
-  }, [agentMembers, selAgentMembers, selectedGroup, rasidDate, previewList]);
+  }, [agentMembers, selAgentMembers, selectedGroup, rasidDate, previewList, programList]);
 
   // ── Build rasid list ───────────────────────────────────────────────────────
   const buildRasid = useCallback(() => {
@@ -737,6 +741,10 @@ const RasidGroupClosingDrawer = ({ open, setOpen, agentId, preselectedGroupId, a
     const closingDs  = selectedGroup.closedAt?.toDate
       ? dayjs(selectedGroup.closedAt.toDate()).format('DD-MM-YYYY')
       : rasidDate.format('DD-MM-YYYY');
+    // The group doc stores only programId — the yojana name has to be resolved
+    // from the programs list (hindiName preferred for the Hindi receipt).
+    const prog       = (programList || []).find(p => p.id === selectedGroup.programId) || {};
+    const yojanaName = prog.hindiName || prog.name || selectedGroup.yojanaName || '';
     // Printed receipt reads "अप्रैल-2026 सहयोग राशि (…)" — Hindi month name,
     // not dayjs's English abbreviation.
     const HINDI_MONTHS = ['जनवरी','फरवरी','मार्च','अप्रैल','मई','जून',
@@ -785,7 +793,7 @@ const RasidGroupClosingDrawer = ({ open, setOpen, agentId, preselectedGroupId, a
           phone:        am.phone || '',
           address:      [am.village, am.city, am.state].filter(Boolean).join(', '),
           village:      am.village || '',
-          yojana:       selectedGroup.yojanaName || 'Shadi Sahyog Yojna',
+          yojana:       yojanaName,
           group:        selectedGroup.groupName || '',
           ageGroup:     closingAgeGroup || am.ageGroupName || am.memberGroupName || am.ageGroup || '',
           sahyogRashi:  payAmt,
@@ -802,7 +810,7 @@ const RasidGroupClosingDrawer = ({ open, setOpen, agentId, preselectedGroupId, a
           note,
         };
       });
-  }, [selectedGroup, selClosingMembers, selAgentMembers, agentMembers, rasidDate, rasidNote]);
+  }, [selectedGroup, selClosingMembers, selAgentMembers, agentMembers, rasidDate, rasidNote, programList]);
 
   // ── Step nav ───────────────────────────────────────────────────────────────
   const goToStep2 = () => {
