@@ -18,7 +18,7 @@ import { db } from "../../../../lib/firbase-client";
    BUILD MEMBERS QUERY (SEARCH + FILTER + PAGINATION)
    Program is now a flat field (programId) on member doc
 ===================================================== */
-export const buildMembersQuery = (filters = {}) => {
+export const buildMembersConstraints = (filters = {}) => {
   const {
     search              = "",
     programIds          = [],
@@ -29,8 +29,6 @@ export const buildMembersQuery = (filters = {}) => {
     closingPaymentStatus = "all",
     fromDate            = null,
     toDate              = null,
-    pageSize            = 10,
-    lastDoc             = null,
     sortField           = "createdAt",
     sortOrder           = "desc"
   } = filters;
@@ -123,10 +121,57 @@ export const buildMembersQuery = (filters = {}) => {
       }
   }
 
+  return { membersRef, conditions, orderByClauses };
+};
+
+export const buildMembersQuery = (filters = {}) => {
+  const { pageSize = 10, lastDoc = null } = filters;
+  const { membersRef, conditions, orderByClauses } = buildMembersConstraints(filters);
+
   const queryConstraints = [...conditions, ...orderByClauses, limit(pageSize)];
   if (lastDoc) queryConstraints.push(startAfter(lastDoc));
 
   return query(membersRef, ...queryConstraints);
+};
+
+/* =====================================================
+   FETCH ALL MEMBERS FOR EXPORT (no pagination)
+   Mirrors the table exactly: the same query constraints as
+   buildMembersQuery plus the same client-side filters, so an
+   exported CSV/PDF contains precisely the filtered set on screen.
+===================================================== */
+export const fetchAllFilteredMembers = async (filters = {}) => {
+  const { membersRef, conditions, orderByClauses } = buildMembersConstraints(filters);
+  const snap = await getDocs(query(membersRef, ...conditions, ...orderByClauses));
+
+  let data = snap.docs.map(doc => ({
+    id: doc.id,
+    ...doc.data(),
+    createdAt:  doc.data().createdAt?.toDate?.()  || null,
+    updated_at: doc.data().updated_at?.toDate?.() || null
+  }));
+
+  // Client-side filters — identical to fetchMembersPaginated
+  if (filters.paymentStatus === "partial") {
+    data = data.filter(m => (m.paymentPercentage || 0) > 0 && (m.paymentPercentage || 0) < 100);
+  }
+
+  if (filters.gender && filters.gender !== "all") {
+    data = data.filter(m => (m.gender || "").toLowerCase() === filters.gender);
+  }
+
+  if (filters.closingPaymentStatus === "closedPaid") {
+    data = data.filter(m => (m.closing_paymentPercentage || 0) === 100 || ((m.closing_totalAmount || 0) > 0 && (m.closing_pendingAmount || 0) === 0));
+  } else if (filters.closingPaymentStatus === "closedPending") {
+    data = data.filter(m => (m.closing_totalAmount || 0) > 0 && (m.closing_paidAmount || 0) === 0);
+  } else if (filters.closingPaymentStatus === "closedPartial") {
+    data = data.filter(m => {
+      const pct = m.closing_paymentPercentage || 0;
+      return pct > 0 && pct < 100;
+    });
+  }
+
+  return data;
 };
 
 /* =====================================================

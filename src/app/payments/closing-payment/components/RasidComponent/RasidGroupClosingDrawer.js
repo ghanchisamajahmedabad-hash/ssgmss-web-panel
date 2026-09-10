@@ -524,6 +524,12 @@ const RasidGroupClosingDrawer = ({ open, setOpen, agentId, preselectedGroupId, a
       const snap = await getDocs(query(collection(db,'groupClosings'), orderBy('closedAt','desc')));
       if (snap.empty) { setGroupClosings([]); return; }
       const closings = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      const progIds = [...new Set(closings.map(g => g.programId).filter(Boolean))];
+      const progMap = {};
+      for (let i = 0; i < progIds.length; i += 30) {
+        const s = await getDocs(query(collection(db,'programs'), where(documentId(),'in', progIds.slice(i,i+30))));
+        s.forEach(d => { progMap[d.id] = { id: d.id, ...d.data() }; });
+      }
       const allIds = [...new Set(closings.flatMap(g => g.closedMemberIds || []))];
       const map = {};
       for (let i = 0; i < allIds.length; i += 30) {
@@ -532,6 +538,9 @@ const RasidGroupClosingDrawer = ({ open, setOpen, agentId, preselectedGroupId, a
       }
       setGroupClosings(closings.map(g => ({
         ...g,
+        // Hindi yojana name straight from the programs doc, so the receipt
+        // doesn't depend on a possibly-stale redux programList.
+        yojanaName: progMap[g.programId]?.hindiName || progMap[g.programId]?.name || g.yojanaName || '',
         members: (g.closedMemberIds||[]).map(id => map[id]||{ id, displayName:'Unknown' }),
       })));
     } catch(e) { console.error(e); message.error('Group closings fetch failed'); }
@@ -702,7 +711,7 @@ const RasidGroupClosingDrawer = ({ open, setOpen, agentId, preselectedGroupId, a
         </div>
         <div class="info-row">
           <span><b>ग्रुप :</b> ${selectedGroup.groupName || '—'}</span>
-          <span><b>योजना :</b> ${selectedGroup.yojanaName || ((programList || []).find(p => p.id === selectedGroup.programId)?.hindiName || (programList || []).find(p => p.id === selectedGroup.programId)?.name) || '—'}</span>
+          <span><b>योजना :</b> ${(programList || []).find(p => p.id === selectedGroup.programId)?.name || (programList || []).find(p => p.id === selectedGroup.programId)?.name || '—'}</span>
           <span><b>कुल सदस्य :</b> ${totalMembers}</span>
           <span><b>दिनांक :</b> ${dateStr}</span>
         </div>
@@ -741,10 +750,11 @@ const RasidGroupClosingDrawer = ({ open, setOpen, agentId, preselectedGroupId, a
     const closingDs  = selectedGroup.closedAt?.toDate
       ? dayjs(selectedGroup.closedAt.toDate()).format('DD-MM-YYYY')
       : rasidDate.format('DD-MM-YYYY');
-    // The group doc stores only programId — the yojana name has to be resolved
-    // from the programs list (hindiName preferred for the Hindi receipt).
+    // The group doc stores only programId — the yojana name is resolved at
+    // fetch time from the programs doc (Hindi preferred).
     const prog       = (programList || []).find(p => p.id === selectedGroup.programId) || {};
-    const yojanaName = prog.hindiName || prog.name || selectedGroup.yojanaName || '';
+
+    const yojanaName =  prog.name || prog.hindiName || '';
     // Printed receipt reads "अप्रैल-2026 सहयोग राशि (…)" — Hindi month name,
     // not dayjs's English abbreviation.
     const HINDI_MONTHS = ['जनवरी','फरवरी','मार्च','अप्रैल','मई','जून',
@@ -753,8 +763,20 @@ const RasidGroupClosingDrawer = ({ open, setOpen, agentId, preselectedGroupId, a
     const note = rasidNote ||
       `${noteMonth} सहयोग राशि ( "यह सहयोग राशि स्वैच्छिक है एवं गैर-वापसीयोग्य है।" )`;
 
+    // Rows are listed date-wise: each member's closing date ascending.
+    const ddToNum = (s) => {
+      const m = /^(\d{2})-(\d{2})-(\d{4})$/.exec(s || '');
+      return m ? [Number(m[3]), Number(m[2]), Number(m[1])] : [0, 0, 0];
+    };
+
     const entries = selectedGroup.members
       .filter(m => selClosingMembers.has(m.id))
+      .sort((a, b) => {
+        const pa = ddToNum(fmtDate(a.closed_date || a.marriageDate));
+        const pb = ddToNum(fmtDate(b.closed_date || b.marriageDate));
+        for (let i = 0; i < 3; i++) if (pa[i] !== pb[i]) return pa[i] - pb[i];
+        return 0;
+      })
       .map(m => ({
         code:   m.registrationNumber || '',
         name:   [m.displayName, m.fatherName ? '/ '+m.fatherName : ''].filter(Boolean).join(' '),

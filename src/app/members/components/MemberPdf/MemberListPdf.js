@@ -110,7 +110,9 @@ const MemberListPdf = ({ members, filters, programList, agentList }) => {
   const showClosedCol = members?.some(m => m.member_closed && getClosedDate(m))
 
   const filterParts = []
-  if (filters.programId && filters.programId !== 'all') filterParts.push(`Yojna: ${programList?.find(p => p.id === filters.programId)?.name || filters.programId}`)
+  const progIds = filters.programIds?.length ? filters.programIds
+                : filters.programId && filters.programId !== 'all' ? [filters.programId] : []
+  if (progIds.length) filterParts.push(`Yojna: ${progIds.map(id => programList?.find(p => p.id === id)?.name || id).join(', ')}`)
   if (filters.agentId && filters.agentId !== 'all') filterParts.push(`Agent: ${getAgentName(filters.agentId)}`)
   if (filters.status && filters.status !== 'all') filterParts.push(`Status: ${filters.status}`)
   if (filters.paymentStatus && filters.paymentStatus !== 'all') filterParts.push(`Payment: ${filters.paymentStatus}`)
@@ -126,7 +128,7 @@ const MemberListPdf = ({ members, filters, programList, agentList }) => {
     const oldReg = getOldRegNo(m)
     return (
       <View key={m.id} style={[styles.tr, i % 2 === 1 && styles.trEven]} wrap={false}>
-        <Text style={[styles.td, { width: 22 }]}>{i + 1}</Text>
+        <Text style={[styles.td, { width: 22 }]}>{m.srNo ?? i + 1}</Text>
         <Text style={[styles.td, { width: 76, fontWeight: 'bold', color: BLUE }]}>{clip(m.registrationNumber, 18)}</Text>
         <Text style={[styles.td, { width: 68, color: '#6b7280' }]}>{clip(oldReg, 16) || '-'}</Text>
         <Text style={[styles.tdL, { flex: 1 }]}>

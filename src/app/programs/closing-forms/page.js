@@ -4,7 +4,8 @@ import { useSelector } from 'react-redux'
 import {
   Button, Card, Table, Space, Input, Tag, Avatar,
   message, Select, Row, Col, Statistic, Tabs, Modal,
-  Tooltip, Badge, Descriptions, List, Typography, Spin
+  Tooltip, Badge, Descriptions, List, Typography, Spin,
+  DatePicker
 } from 'antd'
 import {
   SearchOutlined, EyeOutlined, UserOutlined,
@@ -12,7 +13,7 @@ import {
   TeamOutlined, CalendarOutlined, FileTextOutlined,
   RollbackOutlined, ExclamationCircleOutlined,
   HeartFilled, ClockCircleOutlined, CheckCircleOutlined,
-  InfoCircleOutlined, WarningOutlined
+  InfoCircleOutlined, WarningOutlined, EditOutlined
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import relativeTime from 'dayjs/plugin/relativeTime'
@@ -166,6 +167,10 @@ const ClosingMembersPage = () => {
   const [programFilter,        setProgramFilter]        = useState('all')
   const [groupProgramFilter,   setGroupProgramFilter]   = useState('all')
   const [resetting,            setResetting]            = useState(false)
+  const [editDateMember,       setEditDateMember]       = useState(null)
+  const [editDateValue,        setEditDateValue]        = useState(null)
+  const [editingDate,          setEditingDate]          = useState(false)
+  const [markingActiveId,      setMarkingActiveId]      = useState(null)
 
   const programList = useSelector((s) => s.data.programList || [])
   const agentList   = useSelector((s) => s.data.agentList   || [])
@@ -299,6 +304,69 @@ const ClosingMembersPage = () => {
     })
   }
 
+  // ── Edit closing date (no payment) ─────────────────────────────────────────
+  const openEditDate = (member) => {
+    setEditDateValue(member.closed_date ? dayjs(member.closed_date) : dayjs())
+    setEditDateMember(member)
+  }
+
+  const handleSaveEditDate = async () => {
+    if (!editDateMember || !editDateValue) return
+    setEditingDate(true)
+    try {
+      const res = await paymentApi.updateClosingDate({
+        memberId: editDateMember.id,
+        closed_date: editDateValue.toISOString(),
+      })
+      if (res?.success) {
+        message.success('Closing date updated')
+        setEditDateMember(null)
+        await handleClosingComplete()
+      } else {
+        message.error(res?.message || 'Failed to update closing date')
+      }
+    } catch (e) {
+      console.error(e)
+      message.error('Update failed')
+    } finally {
+      setEditingDate(false)
+    }
+  }
+
+  // ── Mark already-closed member active again (status only, no payment) ──────
+  const handleMarkActive = (member) => {
+    confirm({
+      title: 'Mark member active?',
+      icon: <ExclamationCircleOutlined />,
+      content: (
+        <div>
+          <p>Un-close <strong>{member.displayName}</strong> ({member.registrationNumber || '—'})?</p>
+          <p style={{ color: colors.warning, fontSize: 12, marginTop: 8 }}>
+            Only the status changes — closing payment records and totals are left untouched.
+          </p>
+        </div>
+      ),
+      okText: 'Yes, Mark Active', okType: 'primary', cancelText: 'Cancel',
+      onOk: async () => {
+        setMarkingActiveId(member.id)
+        try {
+          const res = await paymentApi.markClosingMemberActive({ memberId: member.id })
+          if (res?.success) {
+            message.success('Member marked active')
+            await handleClosingComplete()
+          } else {
+            message.error(res?.message || 'Failed to mark active')
+          }
+        } catch (e) {
+          console.error(e)
+          message.error('Request failed')
+        } finally {
+          setMarkingActiveId(null)
+        }
+      },
+    })
+  }
+
   // ── Columns: Closed Members ────────────────────────────────────────────────
   const memberColumns = [
     { title: 'Reg. No.', dataIndex: 'registrationNumber', key: 'regNo', width: 120, render: t => <Tag color="blue">{t}</Tag> },
@@ -334,7 +402,16 @@ const ClosingMembersPage = () => {
       render: (_, r) => r.closed_invitation_url ? <Button type="link" size="small" onClick={() => viewInvitationCard(r.closed_invitation_url)}>View Card</Button> : <Tag color="warning">No Card</Tag>
     },
     { title: 'Note', key: 'note', width: 200, render: (_, r) => <span style={{ fontSize: 12, color: '#555' }}>{r.closed_note || '—'}</span> },
-    { title: 'Action', key: 'action', width: 80, render: (_, r) => <Button type="text" icon={<EyeOutlined />} onClick={() => handleViewMember(r)} /> },
+    {
+      title: 'Action', key: 'action', width: 120,
+      render: (_, r) => (
+        <Space size={0}>
+          <Tooltip title="View"><Button type="text" icon={<EyeOutlined />} onClick={() => handleViewMember(r)} /></Tooltip>
+          <Tooltip title="Edit Closing Date"><Button type="text" icon={<EditOutlined />} onClick={() => openEditDate(r)} /></Tooltip>
+          <Tooltip title="Mark Active"><Button type="text" danger icon={<RollbackOutlined />} loading={markingActiveId === r.id} onClick={() => handleMarkActive(r)} /></Tooltip>
+        </Space>
+      )
+    },
   ]
 
   // ── Columns: History ───────────────────────────────────────────────────────
@@ -473,6 +550,27 @@ const ClosingMembersPage = () => {
         onClose={() => { setGroupModalVisible(false); setSelectedGroup(null) }}
         programList={programList}
       />
+
+      <Modal
+        open={!!editDateMember}
+        title={<Space><CalendarOutlined />Edit Closing Date</Space>}
+        onCancel={() => setEditDateMember(null)}
+        onOk={handleSaveEditDate}
+        okText="Save Date"
+        confirmLoading={editingDate}
+        width={420}
+      >
+        {editDateMember && (
+          <div>
+            <Descriptions size="small" column={1} style={{ marginBottom: 12 }}>
+              <Descriptions.Item label="Member">{editDateMember.displayName}</Descriptions.Item>
+              {editDateMember.registrationNumber && <Descriptions.Item label="Reg. No.">{editDateMember.registrationNumber}</Descriptions.Item>}
+            </Descriptions>
+            <div style={{ marginBottom: 8, fontWeight: 600 }}>Closing Date <Tag style={{ marginLeft: 4 }} color="orange">no payment — date only</Tag></div>
+            <DatePicker style={{ width: '100%' }} value={editDateValue} onChange={setEditDateValue} picker="date" />
+          </div>
+        )}
+      </Modal>
 
       <MarriageClosingDrawer
         visible={closingFormVisible} onClose={() => setClosingFormVisible(false)}

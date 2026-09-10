@@ -329,6 +329,16 @@ export const paymentApi={
     apiRequest('/api/closing/reset', {
       method: 'POST',
     }),
+  updateClosingDate: (payload) =>
+    apiRequest('/api/closing/update-date', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  markClosingMemberActive: (payload) =>
+    apiRequest('/api/closing/mark-active', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
 }
 // Export both APIs
 export default {

@@ -500,7 +500,7 @@ const MemberDetailDrawer = ({ member: memberProp, visible, onClose, programList,
     phone:        member?.phone || '',
     address:      [member?.village, member?.district, member?.state, member?.currentAddress]
                     .filter(Boolean).join(', '),
-    yojana:       entry.programName || member?.programName || '',
+    yojana:       programData?.hindiName || programData?.name || entry.programName || member?.programName || '',
     ageGroup:     member?.memberGroupName || member?.ageGroupName || '',
     sahyogRashi:  entry.perMemberAmount ?? entry.amount ?? '',
     totalAmount:  entry.totalAmount || 0,

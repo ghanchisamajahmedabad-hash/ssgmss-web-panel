@@ -25,10 +25,11 @@ import CertificateViewer from './components/MemberPdf/CertificateViewer'
 import { 
   fetchMembersPaginated, 
   getTotalMembersCount,
-  fetchAllMembersForSearch
+  fetchAllMembersForSearch,
+  fetchAllFilteredMembers
 } from './components/firebase-helpers'
 import { auth, db } from '../../../lib/firbase-client'
-import { doc, updateDoc, query, where, orderBy, collection, getDocs, getDoc, getCountFromServer } from 'firebase/firestore'
+import { doc, updateDoc, query, orderBy, collection, getDoc, getCountFromServer } from 'firebase/firestore'
 import { BlobProvider, PDFDownloadLink } from '@react-pdf/renderer'
 import CertificateCom from './components/MemberPdf/CertificateCom'
 import MemberListPdf, { getOldRegNo, getClosedDate } from './components/MemberPdf/MemberListPdf'
@@ -968,9 +969,10 @@ const handleDeleteMember = (member) => {
     // numbers. The ="…" form pins them as text.
     const num = (v) => (v ? `="${String(v).replace(/["=]/g, '')}"` : '""')
 
-    const headers = ['Registration No','Old Registration No','Name','Father Name','Phone','Aadhaar','Village','City','Program','Age Group','Join Date','Status','Closed Date','Payment %','Paid Amount','Pending Amount','Agent Name']
+    const headers = ['Sr. No','Registration No','Old Registration No','Name','Father Name','Phone','Aadhaar','Village','City','Program','Age Group','Join Date','Status','Closed Date','Payment %','Paid Amount','Pending Amount','Agent Name']
 
     const rows = list.map(m => [
+      m.srNo ?? '',
       q(m.registrationNumber),
       // Legacy number from the previous system — blank for members registered here
       q(getOldRegNo(m)),
@@ -1012,39 +1014,9 @@ const handleDeleteMember = (member) => {
   const fetchAllMembersForExport = async () => {
     setAllMembersExportLoading(true)
     try {
-      let q = collection(db, 'members')
-      const constraints = []
-      if (filters.programIds?.length === 1) constraints.push(where('programId', '==', filters.programIds[0]))
-      else if (filters.programIds?.length > 1) constraints.push(where('programId', 'in', filters.programIds.slice(0, 30)))
-      if (filters.ageGroupIds?.length === 1) constraints.push(where('ageGroupId', '==', filters.ageGroupIds[0]))
-      else if (filters.ageGroupIds?.length > 1) constraints.push(where('ageGroupId', 'in', filters.ageGroupIds.slice(0, 30)))
-      if (filters.status === 'active') constraints.push(where('active_flag', '==', true))
-      else if (filters.status === 'inactive') constraints.push(where('active_flag', '==', false))
-      else if (filters.status === 'closed') constraints.push(where('member_closed', '==', true))
-      if (filters.paymentStatus === 'paid') constraints.push(where('paymentPercentage', '==', 100))
-      else if (filters.paymentStatus === 'partial') constraints.push(where('paymentPercentage', '>', 0), where('paymentPercentage', '<', 100))
-      else if (filters.paymentStatus === 'pending') constraints.push(where('paymentPercentage', '==', 0))
-      if (filters.agentId !== 'all') constraints.push(where('agentId', '==', filters.agentId))
-      // Join date, not record-creation date — must match the table's filter.
-      // A range filter also requires its field to lead the orderBy.
-      if (filters.fromDate) constraints.push(where('joinDateTs', '>=', dayjs(filters.fromDate).startOf('day').toDate()))
-      if (filters.toDate) constraints.push(where('joinDateTs', '<=', dayjs(filters.toDate).endOf('day').toDate()))
-      constraints.push(orderBy(filters.fromDate || filters.toDate ? 'joinDateTs' : 'createdAt', 'desc'))
-      q = query(q, ...constraints)
-      let snap = await getDocs(q)
-      let data = snap.docs.map(d => ({ id: d.id, ...d.data() }))
-
-      // Client-side closing payment filter
-      if (filters.closingPaymentStatus === 'closedPaid') {
-        data = data.filter(m => (m.closing_paymentPercentage || 0) === 100 || ((m.closing_totalAmount || 0) > 0 && (m.closing_pendingAmount || 0) === 0))
-      } else if (filters.closingPaymentStatus === 'closedPending') {
-        data = data.filter(m => (m.closing_totalAmount || 0) > 0 && (m.closing_paidAmount || 0) === 0)
-      } else if (filters.closingPaymentStatus === 'closedPartial') {
-        data = data.filter(m => {
-          const pct = m.closing_paymentPercentage || 0
-          return pct > 0 && pct < 100
-        })
-      }
+      // Same query + client-side filters the table uses (no pagination), so
+      // the export contains exactly the filtered set shown on screen.
+      const data = await fetchAllFilteredMembers({ ...filters })
       setAllMembersForExport(data)
       return data
     } catch (err) {
@@ -1056,81 +1028,22 @@ const handleDeleteMember = (member) => {
     }
   }
 
-  // Like fetchAllMembersForExport but with base filters (delete_flag, status)
-  // so it only fetches active/non-deleted members — faster & avoids network timeouts
-  const fetchFilteredMembersForExport = async () => {
-    setAllMembersExportLoading(true)
-    try {
-      let q = collection(db, 'members')
-      const constraints = [
-        where("delete_flag", "==", false),
-        where("status",      "==", "active")
-      ]
-      if (filters.programIds?.length === 1) constraints.push(where('programId', '==', filters.programIds[0]))
-      else if (filters.programIds?.length > 1) constraints.push(where('programId', 'in', filters.programIds.slice(0, 30)))
-      if (filters.ageGroupIds?.length === 1) constraints.push(where('ageGroupId', '==', filters.ageGroupIds[0]))
-      else if (filters.ageGroupIds?.length > 1) constraints.push(where('ageGroupId', 'in', filters.ageGroupIds.slice(0, 30)))
-      if (filters.status === 'active') constraints.push(where('active_flag', '==', true))
-      else if (filters.status === 'inactive') constraints.push(where('active_flag', '==', false))
-      else if (filters.status === 'closed') constraints.push(where('member_closed', '==', true))
-      if (filters.paymentStatus === 'paid') constraints.push(where('paymentPercentage', '==', 100))
-      else if (filters.paymentStatus === 'partial') constraints.push(where('paymentPercentage', '>', 0), where('paymentPercentage', '<', 100))
-      else if (filters.paymentStatus === 'pending') constraints.push(where('paymentPercentage', '==', 0))
-      if (filters.agentId !== 'all') constraints.push(where('agentId', '==', filters.agentId))
-      // Join date, not record-creation date — must match the table's filter.
-      // A range filter also requires its field to lead the orderBy.
-      if (filters.fromDate) constraints.push(where('joinDateTs', '>=', dayjs(filters.fromDate).startOf('day').toDate()))
-      if (filters.toDate) constraints.push(where('joinDateTs', '<=', dayjs(filters.toDate).endOf('day').toDate()))
-      constraints.push(orderBy(filters.fromDate || filters.toDate ? 'joinDateTs' : 'createdAt', 'desc'))
-      q = query(q, ...constraints)
-      let snap = await getDocs(q)
-      let data = snap.docs.map(d => ({ id: d.id, ...d.data() }))
-
-      // Client-side closing payment filter
-      if (filters.closingPaymentStatus === 'closedPaid') {
-        data = data.filter(m => (m.closing_paymentPercentage || 0) === 100 || ((m.closing_totalAmount || 0) > 0 && (m.closing_pendingAmount || 0) === 0))
-      } else if (filters.closingPaymentStatus === 'closedPending') {
-        data = data.filter(m => (m.closing_totalAmount || 0) > 0 && (m.closing_paidAmount || 0) === 0)
-      } else if (filters.closingPaymentStatus === 'closedPartial') {
-        data = data.filter(m => {
-          const pct = m.closing_paymentPercentage || 0
-          return pct > 0 && pct < 100
-        })
-      }
-
-      setAllMembersForExport(data)
-      return data
-    } catch (err) {
-      console.error('Error fetching filtered members:', err)
-      throw err
-    } finally {
-      setAllMembersExportLoading(false)
-    }
-  }
-
   const exportAllToCSV = async () => {
     const data = allMembersForExport || await fetchAllMembersForExport()
     if (data && data.length > 0) {
-      const active = data.filter(m => m.active_flag === true)
-      if (active.length === 0) { message.warning('No accepted members found to export'); return }
-      if (active.length < data.length) message.info(`Exporting ${active.length} accepted members (${data.length - active.length} pending skipped)`)
-      exportToCSV(active)
-      message.success(`Exported ${active.length} members to CSV`)
+      exportToCSV(data)
+      message.success(`Exported ${data.length} members to CSV`)
     } else {
       message.warning('No members found to export')
     }
   }
 
   const printMembers = async () => {
-    let data = allMembersForExport || await fetchAllMembersForExport()
+    const data = allMembersForExport || await fetchAllMembersForExport()
     if (!data || data.length === 0) {
       message.warning('No members found to print')
       return
     }
-    const before = data.length
-    data = data.filter(m => m.active_flag === true)
-    if (data.length === 0) { message.warning('No accepted members found to print'); return }
-    if (data.length < before) message.info(`Printing ${data.length} accepted members (${before - data.length} pending skipped)`)
 
     const filterParts = []
     if (filters.programIds?.length) filterParts.push(`Yojna: ${filters.programIds.map(id => programList?.find(p => p.id === id)?.name || id).join(', ')}`)
@@ -1149,7 +1062,7 @@ const handleDeleteMember = (member) => {
       const ageGroup = m.ageGroupName || m.memberGroupName || m.ageGroup || '-'
       return `
       <tr>
-        <td class="c">${i + 1}</td>
+        <td class="c">${m.srNo ?? i + 1}</td>
         <td class="reg">${m.registrationNumber || ''}
           ${getOldRegNo(m) ? `<div class="sub">Old: ${getOldRegNo(m)}</div>` : ''}
         </td>
@@ -1337,18 +1250,19 @@ ${filterHtml}
                     { key: 'csv_current', icon: <TableOutlined />, label: 'CSV (Current View)', onClick: () => exportToCSV() },
                     { key: 'csv_all', icon: <TableOutlined />, label: 'CSV (All Members)', onClick: exportAllToCSV, disabled: allMembersExportLoading },
                     { type: 'divider' },
+                    { key: 'pdf_current', icon: <FileTextOutlined />, label: 'PDF (Current View)', onClick: () => {
+                      if (!displayedMembers.length) { message.warning('No members in current view'); return }
+                      setPdfMeta({ data: displayedMembers, filters, programList, agentList })
+                    } },
                     { key: 'pdf', icon: <FileTextOutlined />, label: 'PDF (All Members)', onClick: async () => {
                       setAllMembersExportLoading(true)
                       try {
                         // Use cached data if available, otherwise fetch
-                        const raw = allMembersForExport || await fetchAllMembersForExport()
-                        if (!raw || raw.length === 0) {
+                        const data = allMembersForExport || await fetchAllMembersForExport()
+                        if (!data || data.length === 0) {
                           message.warning('No members found')
                           return
                         }
-                        const data = raw.filter(m => m.active_flag === true)
-                        if (data.length === 0) { message.warning('No accepted members found'); return }
-                        if (data.length < raw.length) message.info(`PDF: ${data.length} accepted members (${raw.length - data.length} pending skipped)`)
                         setPdfMeta({ data, filters, programList, agentList })
                       } catch (err) {
                         console.error('PDF error:', err)
