@@ -39,9 +39,13 @@ import PaymentDetailsDrawer from './components/PaymentDetailsDrawer'
 // ── Helper: auto-download PDF when blob is ready ──
 const PdfAutoDownloader = ({ pdfMeta, onDone }) => {
   const [generating, setGenerating] = useState(false)
+  const firedRef = useRef(false)
   useEffect(() => {
     if (pdfMeta && !generating) setGenerating(true)
   }, [pdfMeta, generating])
+  useEffect(() => {
+    if (pdfMeta) firedRef.current = false
+  }, [pdfMeta])
 
   if (!pdfMeta) return null
   return (
@@ -54,10 +58,11 @@ const PdfAutoDownloader = ({ pdfMeta, onDone }) => {
       <BlobProvider document={<MemberListPdf members={pdfMeta.data} filters={pdfMeta.filters} programList={pdfMeta.programList} agentList={pdfMeta.agentList} />}>
         {({ blob, url, loading, error }) => {
           if (error) {
-            setTimeout(() => { message.error('PDF error: ' + (error.message || error)); onDone() }, 0)
+            if (!firedRef.current) { firedRef.current = true; setTimeout(() => { message.error('PDF error: ' + (error.message || error)); onDone() }, 0) }
             return null
           }
-          if (!loading && blob && generating) {
+          if (!loading && blob && generating && !firedRef.current) {
+            firedRef.current = true
             setTimeout(() => {
               const a = document.createElement('a')
               a.href = url

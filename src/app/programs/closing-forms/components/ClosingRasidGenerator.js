@@ -1,0 +1,322 @@
+"use client"
+import React, { useState, useEffect, useCallback } from 'react'
+import { Modal, Button, Alert, Space, Spin, message } from 'antd'
+import { FileTextOutlined, TeamOutlined, UserOutlined } from '@ant-design/icons'
+import { collection, query, where, documentId, getDocs } from 'firebase/firestore'
+import { db } from '../../../../../lib/firbase-client'
+import dayjs from 'dayjs'
+
+// ─── helpers ─────────────────────────────────────────────────────────────────
+const chunkArr = (arr, n) =>
+  Array.from({ length: Math.ceil(arr.length / n) }, (_, i) =>
+    arr.slice(i * n, i * n + n)
+  )
+
+const fmtDate = (d) => {
+  if (!d) return '—'
+  if (typeof d === 'string' && /^\d{2}-\d{2}-\d{4}$/.test(d)) return d
+  const t = d?.toDate ? d.toDate() : new Date(d)
+  if (isNaN(t)) return '—'
+  return dayjs(t).format('DD-MM-YYYY')
+}
+
+const HINDI_MONTHS = ['जनवरी','फरवरी','मार्च','अप्रैल','मई','जून',
+                      'जुलाई','अगस्त','सितंबर','अक्टूबर','नवंबर','दिसंबर']
+
+// Secure print window that cannot be blocked by strict popup policies
+function openPrintWindow(html) {
+  const win = window.open('', '_blank')
+  if (!win) { message.error('Popup blocked! Please allow popups.'); return }
+  win.document.open()
+  win.document.write(html)
+  win.document.close()
+  win.focus()
+}
+
+const RASID_CSS = `
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:'Noto Sans Devanagari',sans-serif;background:#b0b0b0;color:#111;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  .print-bar{position:sticky;top:0;z-index:100;padding:12px 24px;background:#1B385A;display:flex;gap:12px;align-items:center}
+  .btn-print{background:#D3292F;color:#fff;border:none;padding:10px 28px;border-radius:6px;cursor:pointer;font-weight:700;font-size:14px;font-family:inherit}
+  .btn-close{background:rgba(255,255,255,.15);color:#fff;border:1px solid rgba(255,255,255,.3);padding:10px 20px;border-radius:6px;cursor:pointer;font-size:14px;font-family:inherit}
+  .page{width:210mm;min-height:297mm;background:#fff;margin:18px auto;padding:5mm 8mm;box-shadow:0 6px 28px rgba(0,0,0,.25);position:relative}
+  .page::before{content:'';position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:60%;height:60%;background:url('/Images/logoT.png') center/contain no-repeat;opacity:.04;pointer-events:none;z-index:0}
+  .page>*{position:relative;z-index:1}
+  .bless{display:flex;justify-content:space-between;font-size:10px;color:#8a6d3b;margin-bottom:6px;font-weight:600}
+  .hdr{display:flex;align-items:center;justify-content:space-between;gap:8px;border-bottom:2.5px solid #D3292F;padding-bottom:8px;margin-bottom:4px}
+  .logo-box{width:70px;display:flex;flex-direction:column;align-items:center}
+  .logo{width:62px;height:62px;object-fit:contain}
+  .logo-fb{font-size:9px;font-weight:700;color:#1B385A;text-align:center;line-height:1.1}
+  .center-block{text-align:center;flex:1}
+  .org-title{font-size:17px;font-weight:800;color:#1B385A}
+  .org-sub{font-size:12px;font-weight:600;color:#333}
+  .org-addr{font-size:10px;color:#444;margin-top:2px;line-height:1.4}
+  .org-contact{font-size:10px;color:#444}
+  .blue{color:#0066cc;font-weight:600}
+  .since-bar{display:flex;justify-content:center;gap:24px;font-size:10px;font-weight:600;color:#1B385A;margin:6px 0}
+  .badge-wrap{display:flex;justify-content:center;margin:8px 0}
+  .badge{background:#D3292F;color:#fff;padding:6px 26px;border-radius:6px;font-size:14px;font-weight:800;letter-spacing:.5px}
+  .info-row{display:flex;gap:8px;flex-wrap:wrap;font-size:12px;margin-bottom:6px}
+  .info-item{display:flex;align-items:baseline;min-width:250px;flex:1}
+  .lbl{font-weight:600;color:#1B385A}
+  .sep{color:#666}
+  .val{font-weight:600;color:#111}
+  .val-amt{color:#D3292F;font-weight:800}
+  table{width:100%;border-collapse:collapse;border:1.5px solid #999;margin-top:6px}
+  th{padding:6px 4px;font-size:11px;font-weight:700;color:#1B385A;text-align:center;border:1px solid #999;background:#f0f0f0}
+  td{padding:5px 4px;font-size:11px;color:#111;border:.8px solid #c0c8d4}
+  td.c{text-align:center} td.l{text-align:left;padding-left:6px}
+  tr:nth-child(even){background:#fafafa}
+  .total-row td{font-weight:700;background:#fff3f0;font-size:12px}
+  .footer{text-align:center;margin-top:12px;padding-top:6px;border-top:1.5px solid #D3292F;font-size:10px;color:#666}
+  @media print{body{background:#fff}.print-bar{display:none!important}.page{margin:0;box-shadow:none}}
+`
+
+// Org header block shared by all pages
+const orgHeader = () => `
+  <div class="bless">
+    <span>॥ श्री गणेशाय नमः ॥</span>
+    <span>॥ श्री शनिदेवाय नमः ॥</span>
+    <span>॥ श्री सांवलाजी महाराज नमः ॥</span>
+  </div>
+  <div class="hdr">
+    <div class="logo-box">
+      <img src="/Images/logoT.png" class="logo" onerror="this.style.display='none';this.nextSibling.style.display='flex'" alt="">
+      <div class="logo-fb">SSGMS<br>TRUST</div>
+    </div>
+    <div class="center-block">
+      <div class="org-title">श्री क्षत्रिय घांची मोदी समाज सेवा संस्थान ट्रस्ट</div>
+      <div class="org-sub">अहमदाबाद,गुजरात</div>
+      <div class="org-addr">
+        <b>हेड ऑफिस :</b> 68, वृंदावन शॉपिंग सेंटर, गुजरात हाउसिंग बोर्ड बी. एस. स्कूल के पास,<br>
+        चांदखेडा, साबरमती, अहमदाबाद&nbsp; 382424 (O) 9898535345
+      </div>
+      <div class="org-contact"><b>संपर्क सूत्र :</b><span class="blue"> अध्यक्ष श्री वोरारामजी टी. बोराणा</span></div>
+      <div class="org-contact"><span class="blue">9374934004</span>&nbsp;&nbsp;<b>ऑफिस :</b><span class="blue"> 9898535345</span></div>
+    </div>
+    <div class="logo-box">
+      <img src="/Images/sanidevImg.jpeg" class="logo" onerror="this.style.display='none';this.nextSibling.style.display='flex'" alt="">
+      <div class="logo-fb logo-fb2">शनि<br>देव</div>
+    </div>
+  </div>
+  <div class="since-bar"><span>SINCE : 2024</span><span>Reg. No: A/5231</span></div>
+`
+
+const ClosingRasidGenerator = ({ open, onClose, group, programList }) => {
+  const [members, setMembers]     = useState([])
+  const [loading, setLoading]     = useState(false)
+
+  const yojanaName = (() => {
+    const p = (programList || []).find(x => x.id === group?.programId)
+    return p?.hindiName || p?.name || ''
+  })()
+
+  // ── Fetch member snapshots for the group's closedMemberIds ────────────────
+  const fetchGroupMembers = useCallback(async () => {
+    const ids = group?.closedMemberIds || []
+    if (!ids.length) { setMembers([]); return }
+    setLoading(true)
+    try {
+      const all = []
+      const snaps = await Promise.all(
+        chunkArr(ids, 10).map(chunk =>
+          getDocs(query(collection(db, 'members'), where(documentId(), 'in', chunk)))
+        )
+      )
+      snaps.forEach(snap => snap.forEach(d => {
+        if (d.exists) all.push({ id: d.id, ...d.data() })
+      }))
+      setMembers(all)
+    } catch (e) { console.error(e) }
+    finally { setLoading(false) }
+  }, [group])
+
+  useEffect(() => {
+    if (open) fetchGroupMembers()
+  }, [open, fetchGroupMembers])
+
+  // ── Resolve each member's closed_date from their closedStatus for THIS group
+  const memberRows = members.map(m => {
+    const entry = (m.closedStatus || []).find(
+      cs => cs.closingGroupId === group?.id && cs.programId === group?.programId
+    )
+    return {
+      ...m,
+      closedDate: fmtDate(entry?.closed_date || m.closed_date || m.marriageDate),
+      dueDate:    fmtDate(entry?.closed_date || m.closed_date || m.marriageDate), // due date = closed date
+    }
+  })
+
+  const memberCount = group?.memberCount || group?.closedMemberIds?.length || memberRows.length || 1
+  const totalAmount = Number(group?.totalAmount || 0)
+  const perMemberAmount = totalAmount / memberCount
+  const groupName = group?.groupName || `Group ${group?.id?.slice?.(0, 8) || ''}`
+  const dateStr = dayjs().format('DD/MM/YYYY')
+
+  const noteLine = `${HINDI_MONTHS[dayjs().month()]}-${dayjs().format('YYYY')} सहयोग राशि ( "यह सहयोग राशि स्वैच्छिक है एवं गैर-वापसीयोग्य है।" )`
+
+  // ── Build full-group rasid HTML ─────────────────────────────────────────────
+  const buildGroupHtml = () => {
+    const rows = (memberRows.length ? memberRows : []).filter(Boolean).map((m, i) => `
+      <tr>
+        <td class="c">${i + 1}</td>
+        <td class="c">${m.registrationNumber || '—'}</td>
+        <td class="l">[${m.displayName || ''}${m.fatherName ? ' / ' + m.fatherName : ''}]</td>
+        <td class="c">${m.caste || m.casteName || '—'}</td>
+        <td class="l">${m.village || '—'}</td>
+        <td class="c">${m.phone || '—'}</td>
+        <td class="c">${m.closedDate}</td>
+        <td class="c">${m.dueDate}</td>
+        <td class="c">₹${perMemberAmount.toLocaleString()}</td>
+      </tr>`).join('') || '<tr><td colspan="9" class="c">No members</td></tr>'
+
+    return `<!DOCTYPE html><html lang="hi"><head>
+      <meta charset="utf-8"><title>क्लोजिंग ग्रुप रसीद</title>
+      <link rel="preconnect" href="https://fonts.googleapis.com">
+      <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Devanagari:wght@400;500;600;700&display=swap" rel="stylesheet">
+      <style>${RASID_CSS}</style>
+    </head><body>
+      <div class="print-bar">
+        <button class="btn-print" onclick="window.print()">🖨 Print / Save PDF</button>
+        <button class="btn-close" onclick="window.close()">✕ Close</button>
+        <span class="print-info">📄 ${memberRows.length} members | Total: ₹${totalAmount.toLocaleString()}</span>
+      </div>
+      <div class="page">
+        ${orgHeader()}
+        <div class="badge-wrap"><div class="badge">क्लोजिंग ग्रुप रसीद</div></div>
+        <div class="info-row">
+          <div class="info-item"><span class="lbl">ग्रुप</span><span class="sep"> : </span><span class="val">${groupName}</span></div>
+          <div class="info-item right"><span class="lbl">दिनांक</span><span class="sep"> : </span><span class="val">${dateStr}</span></div>
+        </div>
+        <div class="info-row">
+          <div class="info-item"><span class="lbl">योजना</span><span class="sep"> : </span><span class="val">${yojanaName || '—'}</span></div>
+          <div class="info-item right"><span class="lbl">कुल सदस्य</span><span class="sep"> : </span><span class="val">${memberCount}</span></div>
+          <div class="info-item right"><span class="lbl">कुल राशि</span><span class="sep"> : </span><span class="val val-amt">₹${totalAmount.toLocaleString()}</span></div>
+        </div>
+        <table>
+          <thead><tr>
+            <th style="width:30px">#</th>
+            <th style="width:80px">रजि. नं.</th>
+            <th>नाम / पिता</th>
+            <th style="width:70px">जाति</th>
+            <th style="width:90px">गाँव</th>
+            <th style="width:90px">फोन</th>
+            <th style="width:80px">क्लोजिंग डेट</th>
+            <th style="width:80px">ड्यू डेट</th>
+            <th style="width:80px">सहयोग राशि</th>
+          </tr></thead>
+          <tbody>${rows}
+            <tr class="total-row">
+              <td colspan="5" class="l">कुल योग (${memberCount} सदस्य)</td>
+              <td class="c">—</td><td class="c">—</td><td class="c">—</td>
+              <td class="c">₹${totalAmount.toLocaleString()}</td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="info-row" style="margin-top:8px"><span class="lbl">नोट</span><span class="sep"> : </span><span class="val">${noteLine}</span></div>
+        <div class="footer">Generated on ${dayjs().format('DD MMM YYYY hh:mm A')} — SSGMS Trust</div>
+      </div>
+    </body></html>`
+  }
+
+  // ── Build member-wise rasid HTML (one page per member) ─────────────────────
+  const buildMemberHtml = () => {
+    if (!memberRows.length) return ''
+    const ROWS = 20
+    const pages = memberRows.map((m, idx) => {
+      let serial = 10000 + ((group?.id || '').charCodeAt(0) || 0) + idx
+      return `
+        <div class="page">
+          ${orgHeader()}
+          <div class="badge-wrap"><div class="badge">सहयोग राशि रसीद</div></div>
+          <div class="info-row">
+            <div class="info-item"><span class="lbl">क्र. सं.</span><span class="sep"> : </span><span class="val">${serial}</span></div>
+            <div class="info-item right"><span class="lbl">दिनांक</span><span class="sep"> : </span><span class="val">${dateStr}</span></div>
+          </div>
+          <div class="info-row">
+            <div class="info-item"><span class="lbl">नाम</span><span class="sep"> : </span><span class="val">${m.displayName || ''}</span></div>
+            <div class="info-item right"><span class="lbl">फोन नं.</span><span class="sep"> : </span><span class="val">${m.phone || '—'}</span></div>
+          </div>
+          <div class="info-row">
+            <div class="info-item"><span class="lbl">पिता का नाम</span><span class="sep"> : </span><span class="val">${m.fatherName || '—'}</span></div>
+            <div class="info-item right"><span class="lbl">रजि. नं.</span><span class="sep"> : </span><span class="val">${m.registrationNumber || '—'}</span></div>
+          </div>
+          <div class="info-row">
+            <div class="info-item"><span class="lbl">जाति</span><span class="sep"> : </span><span class="val">${m.caste || m.casteName || '—'}</span></div>
+            <div class="info-item right"><span class="lbl">गाँव</span><span class="sep"> : </span><span class="val">${m.village || '—'}</span></div>
+          </div>
+          <div class="info-row">
+            <div class="info-item"><span class="lbl">योजना</span><span class="sep"> : </span><span class="val">${yojanaName || '—'}</span>&nbsp;&nbsp;<span class="lbl">ग्रुप</span><span class="sep"> : </span><span class="val">${groupName}</span></div>
+            <div class="info-item right"><span class="lbl">क्लोजिंग डेट</span><span class="sep"> : </span><span class="val">${m.closedDate}</span></div>
+          </div>
+          <div class="info-row">
+            <div class="info-item"><span class="lbl">ड्यू डेट</span><span class="sep"> : </span><span class="val">${m.dueDate}</span></div>
+            <div class="info-item right"><span class="lbl">सहयोग राशि</span><span class="sep"> : </span><span class="val val-amt">₹${perMemberAmount.toLocaleString()}</span></div>
+          </div>
+          <div class="info-row"><span class="lbl">नोट</span><span class="sep"> : </span><span class="val">${noteLine}</span></div>
+          <div class="footer">
+            पूर्ण क्लोजिंग सदस्य सूची : नाम, फोन, पिता, जाति, गाँव, रजि. नं.<br>
+            Generated on ${dayjs().format('DD MMM YYYY hh:mm A')} — SSGMS Trust
+          </div>
+        </div>`
+    }).join('')
+
+    return `<!DOCTYPE html><html lang="hi"><head>
+      <meta charset="utf-8"><title>सहयोग राशि रसीद</title>
+      <link rel="preconnect" href="https://fonts.googleapis.com">
+      <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Devanagari:wght@400;500;600;700&display=swap" rel="stylesheet">
+      <style>${RASID_CSS}</style>
+    </head><body>
+      <div class="print-bar">
+        <button class="btn-print" onclick="window.print()">🖨 Print / Save PDF</button>
+        <button class="btn-close" onclick="window.close()">✕ Close</button>
+        <span class="print-info">📄 ${memberRows.length} member rasids</span>
+      </div>
+      ${pages}
+    </body></html>`
+  }
+
+  const handleGroupRasid = () => {
+    if (!memberRows.length) return message.warning('No closed members in this group')
+    openPrintWindow(buildGroupHtml())
+  }
+
+  const handleMemberRasid = () => {
+    if (!memberRows.length) return message.warning('No closed members in this group')
+    openPrintWindow(buildMemberHtml())
+  }
+
+  return (
+    <Modal
+      open={open}
+      onCancel={onClose}
+      title={<Space><FileTextOutlined style={{ color: '#D3292F' }} />Closing Rasid — {groupName}</Space>}
+      footer={null}
+      width={520}
+    >
+      {loading ? (
+        <div style={{ textAlign: 'center', padding: 30 }}><Spin /></div>
+      ) : (
+        <>
+          <Alert
+            type="info" showIcon style={{ marginBottom: 16 }}
+            message={`${memberCount} members closed · Total ₹${totalAmount.toLocaleString()}`}
+            description={`Each member: ₹${perMemberAmount.toLocaleString()} (group total split equally per member). Due date = closing date.`}
+          />
+          <Space direction="vertical" style={{ width: '100%' }} size={12}>
+            <Button block size="large" icon={<TeamOutlined />} style={{ height: 48 }}
+              onClick={handleGroupRasid} disabled={!memberRows.length}>
+              Print Full Group Rasid ({memberRows.length} members)
+            </Button>
+            <Button block size="large" icon={<UserOutlined />} style={{ height: 48 }}
+              onClick={handleMemberRasid} disabled={!memberRows.length}>
+              Print Member-wise Rasid ({memberRows.length} rasids)
+            </Button>
+          </Space>
+        </>
+      )}
+    </Modal>
+  )
+}
+
+export default ClosingRasidGenerator

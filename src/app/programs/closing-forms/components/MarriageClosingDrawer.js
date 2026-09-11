@@ -264,6 +264,7 @@ const MarriageClosingDrawer = ({ visible, onClose, members: allMembers = [], pro
   const [mode,           setMode]           = useState('new')
   const [groupName,      setGroupName]      = useState('')
   const [existingGroupId, setExistingGroupId] = useState(null)
+  const [includeInactive, setIncludeInactive] = useState(false)
 
   // Ref to always read the latest details in handleSubmit (avoids stale closure)
   const detailsRef = useRef(details)
@@ -540,6 +541,7 @@ const MarriageClosingDrawer = ({ visible, onClose, members: allMembers = [], pro
             memberGroups,
             memberClosingList,
             groupName:        groupName || undefined,
+            includeInactive,
             // For new mode, send groupId; for add-mode, send closingGroupId
             ...(mode === 'add'
               ? { closingGroupId: existingGroupId }
@@ -590,9 +592,9 @@ const MarriageClosingDrawer = ({ visible, onClose, members: allMembers = [], pro
               <HeartFilled style={{ color: '#fff', fontSize: 20 }} />
             </div>
             <div>
-              <div style={{ fontWeight: 800, fontSize: 16, color: C.fg }}>Marriage Closing</div>
+              <div style={{ fontWeight: 800, fontSize: 16, color: C.fg }}> Closing Member</div>
               <div style={{ fontSize: 11, color: C.muted }}>
-                {mode === 'add' ? 'Adding to existing group' : 'Register member marriage details'}
+                {mode === 'add' ? 'Adding to existing group' : 'Register member Closing details'}
               </div>
             </div>
             {selectedIds.length > 0 && (
@@ -734,6 +736,18 @@ const MarriageClosingDrawer = ({ visible, onClose, members: allMembers = [], pro
                 )
               })}
             </div>
+
+            {/* Pending-distribution scope toggle */}
+            <div style={{ marginTop: 16, display: 'flex', alignItems: 'center', gap: 10 }}>
+              <Checkbox checked={includeInactive} onChange={e => setIncludeInactive(e.target.checked)}>
+                Include inactive members in pending distribution
+              </Checkbox>
+            </div>
+            <Alert type="info" showIcon style={{ marginTop: 8 }}
+              message={includeInactive
+                ? 'Closing pending amount will ALSO be added to inactive members who joined before the closing date.'
+                : 'Closing pending amount is added to active members only.'}
+            />
 
             {/* Next button — requires program selected and (in add-mode) a group selected */}
             {selectedProg && (mode === 'new' || (mode === 'add' && existingGroupId)) && (

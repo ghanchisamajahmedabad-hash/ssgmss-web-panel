@@ -643,6 +643,11 @@ const RasidGroupClosingDrawer = ({ open, setOpen, agentId, preselectedGroupId, a
     if (!previewList.length || !selectedGroup) return '';
     const dateStr = rasidDate.format('DD/MM/YYYY');
     const selectedMemberIds = [...selAgentMembers];
+    // Header-level agent line — same "(code) Name Phone" format the receipt
+    // uses for कार्यकर्ता.
+    const agentStr = agent
+      ? [agent.agentCode ? `(${agent.agentCode})` : '', agent.name || '', agent.phone1 || agent.phone || ''].filter(Boolean).join(' ')
+      : '—';
 
     const rows = previewList.map((r, i) => {
       const am = agentMembers.find(m => m.id === selectedMemberIds[i]) || {};
@@ -710,8 +715,9 @@ const RasidGroupClosingDrawer = ({ open, setOpen, agentId, preselectedGroupId, a
           <p>क्लोजिंग पेमेंट सारांश — ${selectedGroup.groupName || 'Group'} · ${dateStr}</p>
         </div>
         <div class="info-row">
+          <span><b>एजेंट :</b> ${agentStr}</span>
           <span><b>ग्रुप :</b> ${selectedGroup.groupName || '—'}</span>
-          <span><b>योजना :</b> ${(programList || []).find(p => p.id === selectedGroup.programId)?.name || (programList || []).find(p => p.id === selectedGroup.programId)?.name || '—'}</span>
+          <span><b>योजना :</b> ${selectedGroup.yojanaName || (programList || []).find(p => p.id === selectedGroup.programId)?.hindiName || (programList || []).find(p => p.id === selectedGroup.programId)?.name || '—'}</span>
           <span><b>कुल सदस्य :</b> ${totalMembers}</span>
           <span><b>दिनांक :</b> ${dateStr}</span>
         </div>
@@ -741,7 +747,7 @@ const RasidGroupClosingDrawer = ({ open, setOpen, agentId, preselectedGroupId, a
         </div>
       </div>
     </body></html>`;
-  }, [agentMembers, selAgentMembers, selectedGroup, rasidDate, previewList, programList]);
+  }, [agent, agentMembers, selAgentMembers, selectedGroup, rasidDate, previewList, programList]);
 
   // ── Build rasid list ───────────────────────────────────────────────────────
   const buildRasid = useCallback(() => {
@@ -754,7 +760,7 @@ const RasidGroupClosingDrawer = ({ open, setOpen, agentId, preselectedGroupId, a
     // fetch time from the programs doc (Hindi preferred).
     const prog       = (programList || []).find(p => p.id === selectedGroup.programId) || {};
 
-    const yojanaName =  prog.name || prog.hindiName || '';
+    const yojanaName =  selectedGroup.yojanaName || prog.hindiName || prog.name || '';
     // Printed receipt reads "अप्रैल-2026 सहयोग राशि (…)" — Hindi month name,
     // not dayjs's English abbreviation.
     const HINDI_MONTHS = ['जनवरी','फरवरी','मार्च','अप्रैल','मई','जून',

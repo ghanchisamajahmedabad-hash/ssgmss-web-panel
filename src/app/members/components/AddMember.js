@@ -286,7 +286,7 @@ const AddMember = ({ open, setOpen, programs, agents, currentUser, onSuccess }) 
       setProgramDetail(null); return
     }
 
-    const calcAge     = dayjs().diff(dobDate, 'year')
+    const calcAge     = joinDate.diff(dobDate, 'year')
     const joinDateStr = joinDate.format('DD-MM-YYYY')
     const program     = programs.find(p => p.id === selectedProgram)
 

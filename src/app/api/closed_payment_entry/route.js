@@ -95,6 +95,7 @@ export async function POST(req) {
     ageGroups = [],
     memberGroups = [],
     closingGroupId,        // present only in add-to-existing mode
+    includeInactive = false,
   } = body;
 
   if (!programId || !memberIds.length || !memberClosingList.length) {
@@ -149,11 +150,13 @@ export async function POST(req) {
       ? (existingGroupData?.groupName || groupName || '')
       : (groupName || '');
 
-    // ── 1. Fetch all active members in this program ──────────────────────
-    let membersQuery = db
-      .collection("members")
-      .where("programId", "==", programId)
-      .where("status", "==", "active");
+    // ── 1. Fetch all members in this program ──────────────────────────────
+    // By default only status 'active' members receive the closing pending
+    // amount. includeInactive=true also distributes to status 'inactive'
+    // members (e.g. currently-inactive members who joined before the event).
+    let membersQuery = db.collection("members").where("programId", "==", programId);
+    if (!includeInactive)
+      membersQuery = membersQuery.where("status", "==", "active");
 
     const effectiveAgeGroups = isAddMode
       ? (existingGroupData?.ageGroupIds || ageGroups)
