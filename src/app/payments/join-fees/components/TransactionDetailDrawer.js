@@ -33,6 +33,10 @@ const paymentMethodInfo = (mode) => {
 const TransactionDetailDrawer = ({
   visible, onClose, transaction, selectedMember,
   programList, colors, isSuperAdmin, onDeleteSuccess,
+  // The closing-payment screen reuses this drawer, but its transactions live in
+  // memberClosingFees and must be reverted by the closing endpoint. Defaults to
+  // join fees so existing callers are unaffected.
+  revertEndpoint = '/api/join-fees-revert-single',
 }) => {
   const [deleting, setDeleting] = useState(false);
 
@@ -47,7 +51,7 @@ const TransactionDetailDrawer = ({
     try {
       const auth = getAuth();
       const token = await auth.currentUser?.getIdToken();
-      const res = await fetch('/api/join-fees-revert-single', {
+      const res = await fetch(revertEndpoint, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

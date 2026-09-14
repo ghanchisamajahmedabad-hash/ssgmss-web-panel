@@ -55,6 +55,7 @@ const styles = StyleSheet.create({
   trEven: { backgroundColor: '#f8fafc' },
   td: { fontSize: 7, paddingHorizontal: 3, textAlign: 'center' },
   tdL: { fontSize: 7, paddingHorizontal: 3, textAlign: 'left' },
+  tdR: { fontSize: 7, paddingHorizontal: 3, textAlign: 'right' },
 
   footer: { borderTopWidth: 1, borderTopColor: RED, paddingTop: 4, marginTop: 6, alignItems: 'center' },
   footerText: { fontSize: 8, fontWeight: 'bold', color: RED, textAlign: 'center' },
@@ -137,6 +138,11 @@ const MemberListPdf = ({ members, filters, programList, agentList }) => {
         <Text style={[styles.td, { width: 62 }]}>{clip(m.phone, 14) || '-'}</Text>
         <Text style={[styles.td, { width: 88 }]}>{clip(progName, 22)}</Text>
         <Text style={[styles.td, { width: 48 }]}>{clip(ageGroup, 12)}</Text>
+        {/* Per-closing instalment amount — sits next to the age group because
+            that is what determines it. */}
+        <Text style={[styles.tdR, { width: 52, fontWeight: 'bold', color: BLUE }]}>
+          ₹{(m.payAmount || 0).toLocaleString('en-IN')}
+        </Text>
         <Text style={[styles.td, { width: 62 }]}>{clip(m.village, 15) || '-'}</Text>
         <Text style={[styles.td, { width: 52, color: statusText === 'Closed' ? RED : statusText === 'Active' ? '#16a34a' : '#888' }]}>{statusText}</Text>
         {showClosedCol && (
@@ -194,6 +200,7 @@ const MemberListPdf = ({ members, filters, programList, agentList }) => {
               <Text style={[styles.thCell, { width: 62 }]}>फोन</Text>
               <Text style={[styles.thCell, { width: 88 }]}>योजना</Text>
               <Text style={[styles.thCell, { width: 48 }]}>आयु वर्ग</Text>
+              <Text style={[styles.thCell, { width: 52 }]}>राशि</Text>
               <Text style={[styles.thCell, { width: 62 }]}>गाँव</Text>
               <Text style={[styles.thCell, { width: 52 }]}>Status</Text>
               {showClosedCol && <Text style={[styles.thCell, { width: 58 }]}>Closed Date</Text>}

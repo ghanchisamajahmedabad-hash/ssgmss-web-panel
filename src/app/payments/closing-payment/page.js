@@ -17,7 +17,9 @@ import {
   Row,
   Col,
   Avatar,
-  Badge
+  Badge,
+  Input,
+  Select
 } from 'antd';
 import {
   UserOutlined,
@@ -31,19 +33,20 @@ import {
   ArrowRightOutlined,
   HistoryOutlined,
   PhoneOutlined,
-  EnvironmentOutlined
+  EnvironmentOutlined,
+  SyncOutlined,
+  SearchOutlined,
+  FilterOutlined
 } from '@ant-design/icons';
+import { message as antMessage } from 'antd';
+import { auth } from '../../../../lib/firbase-client';
 import { useRouter } from 'next/navigation';
 
 // Import custom components
 
 // Import constants and helpers
-import { usePaymentHistory } from '@/utils/hooks/usePaymentHistory';
 import { processAgentStats } from '@/utils/agentUtils';
-import AgentDetailDrawer from '../join-fees/components/AgentDetailDrawer';
-import GroupDetailDrawer from '../join-fees/components/GroupDetailDrawer';
 import SummaryCards from '../join-fees/components/SummaryCards';
-import PaymentHistoryDrawerAgent from '../join-fees/components/PaymentHistoryDrawerAgent';
 import ClosingPaymentHistoryDrawerAgent from './components/PaymentHistoryDrawerAgent';
 import { useClosingPaymentHistory } from '@/utils/hooks/useClosingPaymentHistory';
 import ClosingGroupDetailDrawer from './components/GroupDetailDrawer';
@@ -74,7 +77,11 @@ const ClosingPayment = () => {
   
   const [drawerAgent, setDrawerAgent] = useState(null);
   const [expandedRowKeys, setExpandedRowKeys] = useState([]);
-  
+  const [syncing, setSyncing] = useState(false);
+  const [searchText, setSearchText]     = useState('');
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [programFilter, setProgramFilter] = useState('all');
+
   // Payment History State
   const [historyDrawerVisible, setHistoryDrawerVisible] = useState(false);
   const [selectedAgentForHistory, setSelectedAgentForHistory] = useState(null);
@@ -104,12 +111,56 @@ const ClosingPayment = () => {
     refreshAgents();
   }, []);
 
-  console.log(agentList,'agentList')
-
   // Process agents with stats
   const agentsWithStats = processAgentStats(agentList, programList);
   const activeAgents = agentsWithStats.filter((a) => a.active_flag && !a.delete_flag);
-  console.log(activeAgents,'activeAgents')
+
+  // Programme options built from the agents actually on screen, so the dropdown
+  // never lists a yojna nobody collects closing for.
+  const programFilterOptions = React.useMemo(() => {
+    const seen = new Map();
+    activeAgents.forEach(a => {
+      (a.programs || []).forEach(p => {
+        if (!p.programId) return;
+        if (!seen.has(p.programId)) seen.set(p.programId, p.programName || p.programId);
+      });
+    });
+    return [
+      { label: '📋 All Yojna', value: 'all' },
+      ...[...seen.entries()]
+        .sort((a, b) => String(a[1]).localeCompare(String(b[1])))
+        .map(([value, label]) => ({ label, value })),
+    ];
+  }, [agentList, programList]);
+
+  // Closing pending for one agent, narrowed to the selected yojna.
+  const closingPendingFor = (a) => {
+    if (programFilter === 'all') return a.closing_pendingAmount || 0;
+    const p = (a.programs || []).find(p => p.programId === programFilter);
+    return p?.totalClosingPendingAmount || 0;
+  };
+
+  // Search + programme + status filter, then pending-first ordering so the
+  // agents who still owe money are always at the top of the list.
+  const filteredAgents = activeAgents
+    .filter((a) => {
+      const q = searchText.trim().toLowerCase();
+      if (q) {
+        const nameMatch  = (a.name   || '').toLowerCase().includes(q);
+        const phoneMatch = (a.phone1 || a.phone || '').toLowerCase().includes(q);
+        const villMatch  = (a.village || '').toLowerCase().includes(q);
+        const codeMatch  = (a.agentCode || '').toLowerCase().includes(q);
+        if (!nameMatch && !phoneMatch && !villMatch && !codeMatch) return false;
+      }
+      if (programFilter !== 'all') {
+        const inProgram = (a.programs || []).some(p => p.programId === programFilter);
+        if (!inProgram) return false;
+      }
+      if (statusFilter === 'pending') return closingPendingFor(a) > 0;
+      if (statusFilter === 'paid')    return closingPendingFor(a) === 0;
+      return true;
+    })
+    .sort((a, b) => closingPendingFor(b) - closingPendingFor(a));
 
   // Summary calculations
   const totalPending = activeAgents.reduce((s, a) => s + (a.closing_pendingAmount || 0), 0);
@@ -118,7 +169,9 @@ const ClosingPayment = () => {
   const overallProgress = totalFees ? Math.round((totalCollected / totalFees) * 100) : 0;
 
   const handleGoToPayPage = (agent, program = null) => {
-    const programId = program?.programId || 'all';
+    // Carry the yojna filter through to the collect page, so the row-level Pay
+    // button lands on the same programme the user is currently looking at.
+    const programId = program?.programId || programFilter || 'all';
     const url = `closing-payment/${agent.uid}?programId=${programId}`;
     router.push(url);
   };
@@ -146,6 +199,30 @@ const ClosingPayment = () => {
     }
   };
 
+  // ── Recalculate all agent stats from member docs ─────────────────────────────
+  // Same endpoint join-fees uses — it rebuilds both join-fee and closing totals,
+  // which is the fix when an agent's closing_pendingAmount has drifted.
+  const handleSyncStats = async () => {
+    setSyncing(true);
+    try {
+      const token = await auth.currentUser?.getIdToken();
+      const res = await fetch('/api/agents/recalculate-stats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({}),
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.message);
+      antMessage.success(`Stats synced for ${data.results?.length || 0} agent(s)`);
+      const snap = await getDocs(collection(db, 'agents'));
+      dispatch(setAgentList(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
+    } catch (err) {
+      antMessage.error(`Sync failed: ${err.message}`);
+    } finally {
+      setSyncing(false);
+    }
+  };
+
   const getStatusTag = (pending) => {
     if (pending === 0)
       return (
@@ -169,7 +246,6 @@ const ClosingPayment = () => {
   };
 
   const expandedRowRender = (record) => {
-    console.log(record,'record')
     const programColumns = [
       {
         title: 'Program',
@@ -247,11 +323,17 @@ const ClosingPayment = () => {
       },
     ];
 
+    // When a yojna is selected above, the expanded rows show only that yojna —
+    // otherwise the filter would look like it hadn't applied.
+    const rows = programFilter === 'all'
+      ? record.programs
+      : (record.programs || []).filter(p => p.programId === programFilter);
+
     return (
       <div style={{ padding: '8px 16px', background: '#fdf2f8', borderRadius: 8 }}>
         <Table
           columns={programColumns}
-          dataSource={record.programs}
+          dataSource={rows}
           rowKey="programId"
           pagination={false}
           size="small"
@@ -387,7 +469,10 @@ const ClosingPayment = () => {
               style={{ borderColor: colors.primary, color: colors.primary, borderRadius: 6 }}
             />
           </Tooltip>
-          {record.totalJoinFeesPending > 0 && (
+          {/* Closing page must key off the CLOSING pending amount. This used to
+              read totalJoinFeesPending, so an agent with closing dues but no
+              join-fees dues never saw a Pay button. */}
+          {(record.closing_pendingAmount || 0) > 0 && (
             <Tooltip title="Go to Pay Page">
               <Button
                 type="primary"
@@ -428,21 +513,42 @@ const ClosingPayment = () => {
           </Title>
           <Text type="secondary">Track and manage agent closing payments across programs</Text>
         </div>
-        <Button
-          icon={<HistoryOutlined />}
-          onClick={() => router.push('/payments/history')}
-          style={{
-            background: colors.historyBtnBg,
-            border: 'none',
-            color: '#fff',
-            borderRadius: 8,
-            fontWeight: 600,
-            fontSize: 12,
-            height: 36,
-          }}
-        >
-          Payment History
-        </Button>
+        <Space>
+          {isSuperAdmin && (
+            <Tooltip title="Recalculate all agent stats from member data to fix any mismatch">
+              <Button
+                icon={<SyncOutlined spin={syncing} />}
+                loading={syncing}
+                onClick={handleSyncStats}
+                style={{
+                  borderColor: colors.primary,
+                  color: colors.primary,
+                  borderRadius: 8,
+                  fontWeight: 600,
+                  fontSize: 12,
+                  height: 36,
+                }}
+              >
+                Sync Stats
+              </Button>
+            </Tooltip>
+          )}
+          <Button
+            icon={<HistoryOutlined />}
+            onClick={() => router.push('/payments/history')}
+            style={{
+              background: colors.historyBtnBg,
+              border: 'none',
+              color: '#fff',
+              borderRadius: 8,
+              fontWeight: 600,
+              fontSize: 12,
+              height: 36,
+            }}
+          >
+            Payment History
+          </Button>
+        </Space>
       </div>
 
       {/* Summary Cards */}
@@ -465,9 +571,57 @@ const ClosingPayment = () => {
         }}
         bodyStyle={{ padding: 0 }}
       >
+        {/* Search & Filter bar */}
+        <div style={{
+          display: 'flex', gap: 10, flexWrap: 'wrap',
+          padding: '14px 16px',
+          borderBottom: `1px solid ${colors.border}`,
+          alignItems: 'center',
+        }}>
+          <Input
+            prefix={<SearchOutlined style={{ color: '#9ca3af' }} />}
+            placeholder="Search by agent name, code, phone or village..."
+            value={searchText}
+            onChange={(e) => setSearchText(e.target.value)}
+            allowClear
+            style={{ width: 300, borderRadius: 8, borderColor: colors.border }}
+          />
+          <Select
+            value={programFilter}
+            onChange={setProgramFilter}
+            style={{ width: 200 }}
+            showSearch
+            optionFilterProp="label"
+            options={programFilterOptions}
+          />
+          <Select
+            value={statusFilter}
+            onChange={setStatusFilter}
+            style={{ width: 170 }}
+            prefix={<FilterOutlined />}
+            options={[
+              { label: '🔵 All Agents',  value: 'all'     },
+              { label: '🟡 Has Pending', value: 'pending' },
+              { label: '🟢 Fully Paid',  value: 'paid'    },
+            ]}
+          />
+          {(searchText || statusFilter !== 'all' || programFilter !== 'all') && (
+            <Button
+              size="small"
+              onClick={() => { setSearchText(''); setStatusFilter('all'); setProgramFilter('all'); }}
+              style={{ borderRadius: 6, color: colors.primary, borderColor: colors.border }}
+            >
+              Clear
+            </Button>
+          )}
+          <span style={{ marginLeft: 'auto', fontSize: 12, color: '#9ca3af' }}>
+            {filteredAgents.length} of {activeAgents.length} agents
+          </span>
+        </div>
+
         <Table
           columns={columns}
-          dataSource={activeAgents}
+          dataSource={filteredAgents}
           rowKey="uid"
           pagination={{ pageSize: 10, size: 'small', showTotal: (t) => `${t} agents` }}
           size="middle"

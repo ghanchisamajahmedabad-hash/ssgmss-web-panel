@@ -974,7 +974,7 @@ const handleDeleteMember = (member) => {
     // numbers. The ="…" form pins them as text.
     const num = (v) => (v ? `="${String(v).replace(/["=]/g, '')}"` : '""')
 
-    const headers = ['Sr. No','Registration No','Old Registration No','Name','Father Name','Phone','Aadhaar','Village','City','Program','Age Group','Join Date','Status','Closed Date','Payment %','Paid Amount','Pending Amount','Agent Name']
+    const headers = ['Sr. No','Registration No','Old Registration No','Name','Father Name','Phone','Aadhaar','Village','City','Program','Age Group','Pay Amount','Join Date','Status','Closed Date','Join Fees','Payment %','Paid Amount','Pending Amount','Agent Name']
 
     const rows = list.map(m => [
       m.srNo ?? '',
@@ -989,10 +989,14 @@ const handleDeleteMember = (member) => {
       q(m.city),
       q(m.programName || (programList?.find(p => p.id === m.programId)?.name || '')),
       q(m.ageGroupName || m.memberGroupName || m.ageGroup || ''),
+      // Per-closing instalment amount, set by the member's age group. Plain
+      // number (no ₹, no quotes) so Excel can total and sort the column.
+      m.payAmount || 0,
       q(m.dateJoin),
       q(m.member_closed ? 'Closed' : m.active_flag ? 'Active' : 'Inactive'),
       // Marriage/closing date — blank for members who aren't closed
       q(m.member_closed ? getClosedDate(m) : ''),
+      m.joinFees || 0,
       m.paymentPercentage || 0,
       m.paidAmount || 0,
       Math.max(0, (m.joinFees || 0) - (m.paidAmount || 0)),

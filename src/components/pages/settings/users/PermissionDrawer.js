@@ -73,6 +73,7 @@ const MODULE_CONFIG = {
       { key: '/settings/contact',                  label: 'Contact' },
       { key: '/settings/commission',               label: 'Commission' },
       { key: '/settings/payment-details',          label: 'Payment Details' },
+      { key: '/settings/fix-age-groups',           label: 'Fix Age Group & Fees' },
       { key: '/settings/security/change-password', label: 'Password Change' },
       { key: '/settings/security/sessions',        label: 'Sessions' },
       { key: '/settings/security/pin',             label: 'PIN Lock' },

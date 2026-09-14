@@ -2,7 +2,8 @@
 import React, { useEffect, useState, useMemo, useCallback } from 'react';
 import {
   Drawer, Spin, Empty, Typography, Input, Checkbox, Button,
-  Tag, Avatar, Badge, DatePicker, message, Space, Divider, Alert
+  Tag, Avatar, Badge, DatePicker, message, Space, Divider, Alert,
+  Select, Segmented
 } from 'antd';
 import {
   SearchOutlined, UserOutlined, CalendarOutlined, TeamOutlined,
@@ -488,6 +489,10 @@ const RasidGroupClosingDrawer = ({ open, setOpen, agentId, preselectedGroupId, a
   const [searchClosing, setSearchClosing] = useState('');
   const [searchAgent, setSearchAgent]     = useState('');
 
+  // Agent-member list filters (yojna + active/inactive)
+  const [agentProgramFilter, setAgentProgramFilter] = useState('all');
+  const [agentStatusFilter, setAgentStatusFilter]   = useState('all');
+
   const [rasidDate, setRasidDate] = useState(dayjs());
   const [rasidNote, setRasidNote] = useState('');
   const [previewList, setPreviewList] = useState([]);
@@ -501,6 +506,7 @@ const RasidGroupClosingDrawer = ({ open, setOpen, agentId, preselectedGroupId, a
       setExpandedGroups(preselectedGroupId ? [preselectedGroupId] : []);
       setPreviewList([]);
       setSearchGroup(''); setSearchClosing(''); setSearchAgent('');
+      setAgentProgramFilter('all'); setAgentStatusFilter('all');
       setInitialSelectDone(false);
       fetchGroupClosings();
       if (agentId) fetchAgentMembers();
@@ -583,16 +589,14 @@ const RasidGroupClosingDrawer = ({ open, setOpen, agentId, preselectedGroupId, a
   }, [selectedGroup, searchClosing]);
 
   const eligibleAgentMembers = useMemo(() => {
-    if (!agentMembers.length || !selClosingMembers.size) return [];
-    const selectedClosingIds = [...selClosingMembers];
-    console.log(agentMembers,'agentMembers');
+    if (!agentMembers.length || !selClosingMembers.size || !selectedGroup) return [];
+    const pmIds = selectedGroup.paymentMemberIds || [];
     return agentMembers.filter(m => {
       if (m.delete_flag) return false;
       if ((m.closing_pendingAmount || 0) <= 0) return false;
-      const pmIds = selectedGroup.paymentMemberIds || [];
       return pmIds.includes(m.id);
     });
-  }, [agentMembers, selClosingMembers]);
+  }, [agentMembers, selClosingMembers, selectedGroup]);
 
   const ineligibleCount = useMemo(() => {
     if (!agentMembers.length || !selClosingMembers.size) return 0;
@@ -605,15 +609,68 @@ const RasidGroupClosingDrawer = ({ open, setOpen, agentId, preselectedGroupId, a
     }).length;
   }, [agentMembers, selClosingMembers]);
 
+  // Yojna options built from the members actually in this list, so the dropdown
+  // never offers a programme with nothing behind it.
+  const agentProgramOptions = useMemo(() => {
+    const seen = new Map();
+    eligibleAgentMembers.forEach(m => {
+      if (!m.programId) return;
+      if (!seen.has(m.programId)) {
+        const prog = (programList || []).find(p => p.id === m.programId);
+        const name = prog?.hindiName || prog?.name || m.programName || m.programId;
+        seen.set(m.programId, { value: m.programId, label: name, count: 0 });
+      }
+      seen.get(m.programId).count++;
+    });
+    return [
+      { value: 'all', label: `All Yojna (${eligibleAgentMembers.length})` },
+      ...[...seen.values()]
+        .sort((a, b) => a.label.localeCompare(b.label))
+        .map(o => ({ value: o.value, label: `${o.label} (${o.count})` })),
+    ];
+  }, [eligibleAgentMembers, programList]);
+
   const filteredAgentMembers = useMemo(() => {
-    if (!searchAgent.trim()) return eligibleAgentMembers;
-    const s = searchAgent.toLowerCase();
-    return eligibleAgentMembers.filter(m =>
-      m.displayName?.toLowerCase().includes(s) ||
-      m.registrationNumber?.toLowerCase().includes(s) ||
-      (m.phone||'').includes(searchAgent)
-    );
-  }, [eligibleAgentMembers, searchAgent]);
+    let list = eligibleAgentMembers;
+
+    if (agentProgramFilter !== 'all') {
+      list = list.filter(m => m.programId === agentProgramFilter);
+    }
+
+    if (agentStatusFilter !== 'all') {
+      list = list.filter(m => {
+        const isActive = m.active_flag === true && m.member_closed !== true;
+        return agentStatusFilter === 'active' ? isActive : !isActive;
+      });
+    }
+
+    const s = searchAgent.trim().toLowerCase();
+    if (s) {
+      list = list.filter(m =>
+        m.displayName?.toLowerCase().includes(s) ||
+        m.fatherName?.toLowerCase().includes(s) ||
+        m.registrationNumber?.toLowerCase().includes(s) ||
+        m.village?.toLowerCase().includes(s) ||
+        (m.phone || '').includes(searchAgent.trim())
+      );
+    }
+
+    return list;
+  }, [eligibleAgentMembers, searchAgent, agentProgramFilter, agentStatusFilter]);
+
+  // Counts shown on the active/inactive toggle — scoped to the chosen yojna so
+  // the numbers always match what picking that tab would actually show.
+  const agentStatusCounts = useMemo(() => {
+    const base = agentProgramFilter === 'all'
+      ? eligibleAgentMembers
+      : eligibleAgentMembers.filter(m => m.programId === agentProgramFilter);
+    let active = 0;
+    base.forEach(m => { if (m.active_flag === true && m.member_closed !== true) active++; });
+    return { all: base.length, active, inactive: base.length - active };
+  }, [eligibleAgentMembers, agentProgramFilter]);
+
+  const agentFiltersActive =
+    agentProgramFilter !== 'all' || agentStatusFilter !== 'all' || !!searchAgent.trim();
 
   // ── Handlers ───────────────────────────────────────────────────────────────
   const toggleGroupExpand = (id) =>
@@ -635,8 +692,15 @@ const RasidGroupClosingDrawer = ({ open, setOpen, agentId, preselectedGroupId, a
   const toggleAgentMember = (id) => setSelAgentMembers(p => {
     const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n;
   });
+  // Select-all acts on what is VISIBLE. Members hidden by the yojna/status/search
+  // filters keep whatever state they already had, so switching filters never
+  // silently drops a selection the user made earlier.
   const selectAllAgent = (checked) =>
-    setSelAgentMembers(checked ? new Set(eligibleAgentMembers.map(m=>m.id)) : new Set());
+    setSelAgentMembers(prev => {
+      const n = new Set(prev);
+      filteredAgentMembers.forEach(m => { checked ? n.add(m.id) : n.delete(m.id); });
+      return n;
+    });
 
   // ── Build summary table HTML ──────────────────────────────────────────────
   const buildSummaryHTML = useCallback(() => {
@@ -857,8 +921,8 @@ const RasidGroupClosingDrawer = ({ open, setOpen, agentId, preselectedGroupId, a
   // ── Misc ───────────────────────────────────────────────────────────────────
   const allClosingChecked = selectedGroup && selectedGroup.members.length > 0 &&
     selectedGroup.members.every(m => selClosingMembers.has(m.id));
-  const allAgentChecked = eligibleAgentMembers.length > 0 &&
-    eligibleAgentMembers.every(m => selAgentMembers.has(m.id));
+  const allAgentChecked = filteredAgentMembers.length > 0 &&
+    filteredAgentMembers.every(m => selAgentMembers.has(m.id));
 
   const stepTitles = [
     '1. Group & Closing Members',
@@ -1105,19 +1169,56 @@ const RasidGroupClosingDrawer = ({ open, setOpen, agentId, preselectedGroupId, a
             </div>
           </div>
 
-          <div style={{padding:'8px 16px',background:C.surf,borderBottom:`1px solid ${C.border}`,display:'flex',alignItems:'center',gap:10}}>
-            <Checkbox
-              indeterminate={selAgentMembers.size>0&&!allAgentChecked}
-              checked={allAgentChecked}
-              onChange={e=>selectAllAgent(e.target.checked)}
-            >
-              <Text strong style={{fontSize:12}}>Agent Members — सभी ({eligibleAgentMembers.length})</Text>
-            </Checkbox>
-            <Badge count={selAgentMembers.size} style={{backgroundColor:C.red}}/>
-            <div style={{flex:1}}/>
-            <Input placeholder="Search agent members..." size="small" style={{width:220}}
-              prefix={<SearchOutlined style={{fontSize:11,color:C.pink}}/>}
-              value={searchAgent} onChange={e=>setSearchAgent(e.target.value)} allowClear/>
+          <div style={{padding:'8px 16px',background:C.surf,borderBottom:`1px solid ${C.border}`,display:'flex',flexDirection:'column',gap:8}}>
+            <div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
+              <Checkbox
+                indeterminate={selAgentMembers.size>0&&!allAgentChecked}
+                checked={allAgentChecked}
+                onChange={e=>selectAllAgent(e.target.checked)}
+              >
+                <Text strong style={{fontSize:12}}>
+                  Agent Members — {agentFiltersActive ? 'दिख रहे' : 'सभी'} ({filteredAgentMembers.length})
+                  {agentFiltersActive && (
+                    <Text style={{fontSize:11,color:C.muted}}> / {eligibleAgentMembers.length}</Text>
+                  )}
+                </Text>
+              </Checkbox>
+              <Badge count={selAgentMembers.size} style={{backgroundColor:C.red}}/>
+              <div style={{flex:1}}/>
+              <Input placeholder="नाम / रजि. नं. / मोबाइल / गाँव खोजें..." size="small" style={{width:250}}
+                prefix={<SearchOutlined style={{fontSize:11,color:C.pink}}/>}
+                value={searchAgent} onChange={e=>setSearchAgent(e.target.value)} allowClear/>
+            </div>
+
+            {/* Yojna + active/inactive filters for the agent member list */}
+            <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
+              <Select
+                size="small"
+                style={{width:230}}
+                value={agentProgramFilter}
+                onChange={setAgentProgramFilter}
+                options={agentProgramOptions}
+                showSearch
+                optionFilterProp="label"
+                placeholder="योजना चुनें"
+              />
+              <Segmented
+                size="small"
+                value={agentStatusFilter}
+                onChange={setAgentStatusFilter}
+                options={[
+                  { label: `सभी (${agentStatusCounts.all})`,        value: 'all' },
+                  { label: `Active (${agentStatusCounts.active})`,   value: 'active' },
+                  { label: `Inactive (${agentStatusCounts.inactive})`, value: 'inactive' },
+                ]}
+              />
+              {agentFiltersActive && (
+                <Button size="small" type="link" style={{fontSize:11,padding:0}}
+                  onClick={()=>{ setAgentProgramFilter('all'); setAgentStatusFilter('all'); setSearchAgent(''); }}>
+                  Clear filters
+                </Button>
+              )}
+            </div>
           </div>
 
           <div style={{flex:1,overflowY:'auto',padding:'10px 16px'}}>
@@ -1129,6 +1230,14 @@ const RasidGroupClosingDrawer = ({ open, setOpen, agentId, preselectedGroupId, a
                 <Text type="secondary" style={{fontSize:13}}>
                   Koi eligible agent member nahi mila.<br/>
                   <Text style={{fontSize:11}}>Selected closing members ki IDs kisi agent member ke paymentMemberIds mein nahi hain.</Text>
+                </Text>
+              </div>
+            ) : filteredAgentMembers.length===0 ? (
+              <div style={{textAlign:'center',padding:40}}>
+                <SearchOutlined style={{fontSize:32,color:C.muted,marginBottom:10,display:'block'}}/>
+                <Text type="secondary" style={{fontSize:13}}>
+                  Is filter mein koi member nahi mila.<br/>
+                  <Text style={{fontSize:11}}>{eligibleAgentMembers.length} eligible members hain — filter ya search change karo.</Text>
                 </Text>
               </div>
             ) : (
@@ -1158,10 +1267,18 @@ const RasidGroupClosingDrawer = ({ open, setOpen, agentId, preselectedGroupId, a
                           {m.fatherName&&<Text style={{fontSize:11,color:C.muted}}>/ {m.fatherName}</Text>}
                           <Tag color="orange" style={{fontSize:10,margin:0}}>₹{payAmt}/closing</Tag>
                           <Tag color="geekblue" style={{fontSize:10,margin:0}}>{m.registrationNumber}</Tag>
+                          {m.member_closed ? (
+                            <Tag color="purple" style={{fontSize:10,margin:0}}>Closed</Tag>
+                          ) : (
+                            <Tag color={m.active_flag ? 'green' : 'red'} style={{fontSize:10,margin:0}}>
+                              {m.active_flag ? 'Active' : 'Inactive'}
+                            </Tag>
+                          )}
                         </div>
                         <Text style={{fontSize:11,color:C.muted}}>
                           {m.phone}{m.village?` · ${m.village}`:''}
                           {m.city?`, ${m.city}`:''}
+                          {m.programName ? ` · ${m.programName}` : ''}
                         </Text>
                         <div style={{display:'flex',alignItems:'center',gap:6,marginTop:3}}>
                           <div style={{height:3,width:100,background:'#f0f0f0',borderRadius:3,overflow:'hidden'}}>

@@ -3,6 +3,7 @@ import { fetchMembersByAgent } from '@/app/members/components/firebase-helpers';
 import { useParams, useSearchParams } from 'next/navigation';
 import React, { useEffect, useState, useMemo, useRef } from 'react';
 import { useSelector } from 'react-redux';
+import { useAuth } from '@/components/Base/AuthProvider';
 import {
   Table, Card, Tag, Button, Space, Typography, InputNumber, message,
   Row, Col, Avatar, Select, Checkbox, Empty, Radio, Input, Badge,
@@ -119,6 +120,8 @@ const ClosingMemberPaymentPage = () => {
   const programList  = useSelector(s => s.data.programList);
   const agentList    = useSelector(s => s.data.agentList || []);
   const { token } = theme.useToken();
+  const { user }     = useAuth();
+  const isSuperAdmin = user?.role === 'superadmin';
 
   const agentId      = params?.agentId;
   const programId    = searchParams.get('programId');
@@ -154,6 +157,12 @@ const ClosingMemberPaymentPage = () => {
   const [processingPayments,         setProcessingPayments]         = useState([]);
   const [closingGroupsMap,           setClosingGroupsMap]           = useState({});
   const [openRasidDrawer,            setOpenRasidDrawer]            = useState(false);
+
+  // Idempotency key for the in-flight payment. Held in a ref so retrying the
+  // SAME submission reuses it (server rejects the replay), while a new payment
+  // — drawer reopened — gets a fresh key. Without this, cash closing payments
+  // had no duplicate protection at all: the UTR check only fires for online.
+  const idempotencyKeyRef = useRef(null);
 
   // ── Derived ──────────────────────────────────────────────────────────────
   const membersMap = useMemo(() => Object.fromEntries(members.map(m => [m.id, m])), [members]);
@@ -250,7 +259,12 @@ const ClosingMemberPaymentPage = () => {
       const data = await fetchMembersByAgent(agentId);
       const processed = data.map(m => ({
         ...m, key: m.id,
-        closing_pendingAmount: m.delete_flag ? 0 : (m.closing_pendingAmount || 0),
+        // Derive pending from total − paid when the field is missing on the doc.
+        // With `|| 0` an older member whose closing_pendingAmount was never
+        // written showed ₹0 pending, so they could never be selected for payment.
+        closing_pendingAmount: m.delete_flag
+          ? 0
+          : (m.closing_pendingAmount ?? Math.max(0, (m.closing_totalAmount || 0) - (m.closing_paidAmount || 0))),
         closing_paidAmount:    m.closing_paidAmount || 0,
         closing_totalAmount:   m.delete_flag ? 0 : (m.closing_totalAmount || 0),
         totalClosingCount:     m.totalClosingCount || 0,
@@ -304,6 +318,12 @@ const ClosingMemberPaymentPage = () => {
     if (globalPaymentAmount) {
       const sorted = filteredMembers.filter(m => newSel.includes(m.id)).map(m => m.id);
       setMemberPayments(prev => ({ ...prev, ...waterfallDistribute(Number(globalPaymentAmount), sorted, membersMap) }));
+    } else if (checked) {
+      // Same behaviour as join fees: ticking a member fills their full pending
+      // amount, so "Review & Pay" is usable without typing anything.
+      setMemberPayments(prev => ({ ...prev, [memberId]: m?.closing_pendingAmount || 0 }));
+    } else {
+      setMemberPayments(prev => ({ ...prev, [memberId]: 0 }));
     }
   };
 
@@ -313,7 +333,12 @@ const ClosingMemberPaymentPage = () => {
     setSelectedMembers(newSel);
     if (globalPaymentAmount && checked)
       setMemberPayments(prev => ({ ...prev, ...waterfallDistribute(Number(globalPaymentAmount), newSel, membersMap) }));
-    else if (!checked) {
+    else if (checked) {
+      // Auto-fill each member's full pending amount (join-fees behaviour)
+      const filled = {};
+      selectable.forEach(id => { filled[id] = membersMap[id]?.closing_pendingAmount || 0; });
+      setMemberPayments(prev => ({ ...prev, ...filled }));
+    } else if (!checked) {
       const cleared = {};
       selectable.forEach(id => { cleared[id] = 0; });
       setMemberPayments(prev => ({ ...prev, ...cleared }));
@@ -417,6 +442,12 @@ const ClosingMemberPaymentPage = () => {
     try {
       if (!auth.currentUser) { message.error('No authenticated user'); return; }
       setUploading(true);
+
+      if (!idempotencyKeyRef.current) {
+        idempotencyKeyRef.current =
+          `cp_${agentId}_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+      }
+
       let fileUrl = null;
       if (uploadedFile) {
         const result = await uploadFile(uploadedFile, `memberpayments/JoinFees/${agentId}/${Date.now()}_${uploadedFile.name}`);
@@ -432,8 +463,23 @@ const ClosingMemberPaymentPage = () => {
         totalAmount: totalAmt,
         agentId,
         programId: selectedProgram !== 'all' ? selectedProgram : null,
+        idempotencyKey: idempotencyKeyRef.current,
       });
+
+      // Server recognised this as a replay — the payment already exists
+      if (res.alreadyProcessed) {
+        message.warning(res.message || 'This payment was already recorded.');
+        setIsPaymentDrawerVisible(false);
+        fetchMember();
+        setSelectedMembers([]);
+        setMemberPayments({});
+        setGlobalPaymentAmount('');
+        idempotencyKeyRef.current = null;
+        return;
+      }
+
       if (res.success) {
+        idempotencyKeyRef.current = null;   // this payment is done
         if (paymentMethod === 'advance') {
           const deductResult = await deductFromAdvance(totalAmt, `Closing Payment — ${processingPayments.length} member(s)`);
           if (!deductResult.success) message.warning('Payment recorded but advance deduction failed: ' + deductResult.message);
@@ -960,10 +1006,25 @@ const ClosingMemberPaymentPage = () => {
         selectedMember={selectedMemberForHistory}
         programList={programList}
         colors={C}
+        isSuperAdmin={isSuperAdmin}
+        // Closing transactions live in memberClosingFees — must NOT be reverted
+        // through the join-fees endpoint this drawer defaults to.
+        revertEndpoint="/api/closing-fees-revert-single"
+        onDeleteSuccess={(deletedTx) => {
+          setTransactionDetailVisible(false);
+          setSelectedTransaction(null);
+          setMemberTransactions(prev => prev.filter(t => t.id !== deletedTx.id));
+          fetchMember();
+        }}
       />
       <ClosingPaymentConfirmationDrawer
         visible={isPaymentDrawerVisible}
-        onClose={() => setIsPaymentDrawerVisible(false)}
+        onClose={() => {
+          // Abandoning the drawer ends this attempt — the next payment must get
+          // a fresh key, or the server would reject it as a duplicate.
+          idempotencyKeyRef.current = null;
+          setIsPaymentDrawerVisible(false);
+        }}
         onConfirm={confirmPayment}
         uploading={uploading}
         processingPayments={processingPayments}

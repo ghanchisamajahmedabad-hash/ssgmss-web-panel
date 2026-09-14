@@ -37,6 +37,11 @@ const fetchClosingPaymentDocs = async (memberId) => {
 // POST — Closing Payment
 // ─────────────────────────────────────────────────────────────────────────────
 export async function POST(req) {
+  // Hoisted so the catch block can release the claim — the request body is
+  // already consumed by then and can't be re-read.
+  let idemRefOuter = null;
+  let committed    = false;
+
   try {
     const authResult = await verifyToken(req);
     if (!authResult.success)
@@ -49,8 +54,52 @@ export async function POST(req) {
     const body = await req.json();
     const {
       closingPayments, memberPayments, paymentDate, paymentMethod, paymentNote,
-      totalAmount, transactionId, fileUrl, agentId, programId,
+      totalAmount, transactionId, fileUrl, agentId, programId, idempotencyKey,
     } = body;
+
+    // ── Idempotency guard ─────────────────────────────────────────────────────
+    // The UTR check below only fires when the user typed a transaction ID, so
+    // CASH closing payments had no duplicate protection at all — a double-click,
+    // a browser retry, or a second click after a slow response wrote a second
+    // payment group and deducted the member twice. Claiming a key atomically
+    // closes that for every payment method.
+    const idemRef = idempotencyKey
+      ? db.collection('paymentIdempotency').doc(String(idempotencyKey))
+      : null;
+    idemRefOuter = idemRef;
+
+    if (idemRef) {
+      const prior = await db.runTransaction(async (txn) => {
+        const snap = await txn.get(idemRef);
+        if (snap.exists) return snap.data();       // someone already claimed it
+        txn.set(idemRef, {
+          status:    'in_progress',
+          type:      'closingPayment',
+          agentId:   agentId || null,
+          createdBy: currentUser.uid,
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+        return null;
+      });
+
+      if (prior) {
+        console.warn(`[ClosingPayment] Duplicate submission blocked (key=${idempotencyKey}, status=${prior.status})`);
+        return NextResponse.json({
+          success: true,
+          alreadyProcessed: true,
+          paymentGroupId: prior.paymentGroupId || null,
+          message: prior.status === 'completed'
+            ? 'This payment was already recorded — no duplicate was created.'
+            : 'This payment is already being processed. Please wait a moment and refresh.',
+        });
+      }
+    }
+
+    // Release the claim if we bail out, so a genuine retry isn't blocked forever
+    const releaseIdempotency = async () => {
+      if (!idemRef) return;
+      try { await idemRef.delete(); } catch (e) { console.error('Failed to release idempotency key:', e); }
+    };
 
     const batch = db.batch();
     const numTotalAmount = Number(totalAmount);
@@ -73,6 +122,7 @@ export async function POST(req) {
         const existingDate = existing.paymentDate?.toDate
           ? existing.paymentDate.toDate().toLocaleDateString('en-IN')
           : existing.paymentDate || '';
+        await releaseIdempotency();
         return NextResponse.json({
           success: false,
           message: `Duplicate transaction: UTR/Transaction ID "${transactionId.trim()}" was already used in a ${existing.paymentType === 'joinFees' ? 'Join Fees' : 'Closing'} payment on ${existingDate}. Please verify and use a different ID.`,
@@ -357,6 +407,22 @@ export async function POST(req) {
     }, { merge: true });
 
     await batch.commit();
+    committed = true;
+
+    // Payment is durable from here — mark the key so any replay of this exact
+    // submission returns the existing group instead of writing another one.
+    if (idemRef) {
+      try {
+        await idemRef.update({
+          status:         'completed',
+          paymentGroupId: paymentGroupRef.id,
+          actualTotalPaid: grandTotalPaid,
+          completedAt:    admin.firestore.FieldValue.serverTimestamp(),
+        });
+      } catch (e) {
+        console.error('Failed to mark idempotency key completed:', e);
+      }
+    }
 
     // ── Commission — 5% of each closing payment credited to agent wallet ──
     const agentSnap = await agentRef.get();
@@ -400,6 +466,13 @@ export async function POST(req) {
 
   } catch (error) {
     console.error('❌ Error processing closing payment:', error);
+    // Free the key so a genuine retry isn't blocked by a failed attempt — but
+    // only if nothing was written. If the batch committed and a later step
+    // (commission, FCM) threw, the payment exists and must stay claimed.
+    if (idemRefOuter && !committed) {
+      try { await idemRefOuter.delete(); }
+      catch (e) { console.error('Failed to release idempotency key after error:', e); }
+    }
     return NextResponse.json({ success: false, message: error.message }, { status: 500 });
   }
 }
