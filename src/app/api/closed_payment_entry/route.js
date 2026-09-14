@@ -15,10 +15,65 @@ const chunkArr = (arr, n) =>
 
 const parseDate = (d) => {
   if (!d) return null;
-  if (typeof d !== "string") return new Date(d);
-  if (d.includes("T") || /^\d{4}-\d{2}-\d{2}$/.test(d)) return new Date(d);
+  // Firestore Timestamp — `new Date(timestampObject)` yields Invalid Date, so
+  // this has to be unwrapped first. member_closed_at is stored as a Timestamp
+  // and is the last-resort source for a member's own closing date.
+  if (typeof d?.toDate === "function") {
+    const t = d.toDate();
+    return isNaN(t.getTime()) ? null : t;
+  }
+  if (typeof d !== "string") {
+    const t = new Date(d);
+    return isNaN(t.getTime()) ? null : t;
+  }
+  if (d.includes("T") || /^\d{4}-\d{2}-\d{2}$/.test(d)) {
+    const t = new Date(d);
+    return isNaN(t.getTime()) ? null : t;
+  }
   const [day, month, year] = d.split("-").map(Number);
-  return new Date(year, month - 1, day);
+  const t = new Date(year, month - 1, day);
+  return isNaN(t.getTime()) ? null : t;
+};
+
+// A member's OWN closing date, checked across every place it can live.
+//
+// This used to read only `closedStatus[].closed_date`, and that caused closed
+// members to keep accruing instalments for closings that happened after them:
+//
+//  • Closing a member without a date stores `closed_date: null` in their
+//    closedStatus entry. Setting the date later from /programs/closing-forms
+//    goes through api/closing/update-date, which writes the TOP-LEVEL
+//    closed_date — a field this function never looked at.
+//  • closedStatus is appended with arrayUnion, so a member closed, marked
+//    active, then closed again has several entries for one programme. find()
+//    returned the first, which may be the dateless original.
+//  • Members whose closedStatus is empty (older data, other close paths) had
+//    no entry to sync at all.
+//
+// In each case ownClosedDate came back null, the "don't pay for events after
+// this member closed" guard never fired, and they were charged for everything.
+//
+// Returns { date, closedNoDate } — closedNoDate flags a member who is closed
+// but whose date cannot be established anywhere, so the caller can refuse to
+// charge them rather than silently treating them as still-open.
+const resolveOwnClosedDate = (m, programId) => {
+  // Most specific first: a closedStatus entry for THIS programme that actually
+  // carries a date. Scan all matching entries, don't just take the first.
+  for (const cs of (m.closedStatus || [])) {
+    if (cs?.programId !== programId) continue;
+    const d = parseDate(cs.closed_date);
+    if (d) return { date: d, closedNoDate: false };
+  }
+
+  // Then the top-level fields, which is where the closing-forms date editor and
+  // the close operation itself write. member_closed_at is a server timestamp
+  // set on every close, so it almost always resolves something.
+  const top = parseDate(m.closed_date)
+           || parseDate(m.marriageDate)
+           || parseDate(m.member_closed_at);
+  if (top) return { date: top, closedNoDate: false };
+
+  return { date: null, closedNoDate: m.member_closed === true };
 };
 
 // Fetch member docs in parallel batches of 10, return id→data map
@@ -204,6 +259,9 @@ export async function POST(req) {
     const paymentPerMember = {};
     const closedIds = [];              // members being closed (marked) this run
     const skippedClose = [];
+    // Already-closed members with no discoverable closing date — skipped rather
+    // than charged, and surfaced in the response so the date can be filled in.
+    const closedWithoutDate = [];
 
     // In add-mode: load existing closing_payment docs for all program members
     // so we know which events each member has already been paid for.
@@ -301,16 +359,24 @@ export async function POST(req) {
 
       // Determine this member's own closing date (if they are being closed now,
       // or were already closed before in another group for this program)
-      const prevClosedEntry = (m.closedStatus || []).find(
-        (cs) => cs.programId === programId
-      );
-      const prevClosedDate = prevClosedEntry
-        ? parseDate(prevClosedEntry.closed_date)
-        : null;
+      const resolved = resolveOwnClosedDate(m, programId);
 
       const ownClosedDate = isBeingClosedNow
-        ? closingDateMap[memberId] || null
-        : prevClosedDate;
+        ? (closingDateMap[memberId] || resolved.date || null)
+        : resolved.date;
+
+      // Closed, but no closing date exists anywhere. We cannot prove any event
+      // falls before their closing, so charging them would be a guess. Skip and
+      // report it, rather than treating them as an open member (which is what
+      // produced the "closed members keep getting pending" complaint).
+      if (!isBeingClosedNow && resolved.closedNoDate) {
+        closedWithoutDate.push({
+          memberId,
+          name: m.displayName || m.name || '',
+          registrationNumber: m.registrationNumber || '',
+        });
+        continue;
+      }
 
       // In add-mode: find which closing events this member has ALREADY been paid for
       // We track this via the closingDetails array on their existing closing_payment doc.
@@ -565,6 +631,8 @@ export async function POST(req) {
         closedCount:         closedIds.length,
         skippedCount:        skippedClose.length,
         skipped:             skippedClose,
+        closedWithoutDateCount: closedWithoutDate.length,
+        closedWithoutDate,
       },
     });
   } catch (err) {
