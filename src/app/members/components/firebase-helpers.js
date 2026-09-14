@@ -347,21 +347,36 @@ export const fetchMembersByAgent = async (agentId) => {
   if (!agentId || agentId === "all") return [];
 
   try {
+    // IMPORTANT: only equality clauses on fields every member doc is guaranteed
+    // to have. This used to also carry `where('delete_flag','==',false)` and
+    // `orderBy('createdAt','desc')`, and BOTH silently dropped documents:
+    // Firestore excludes a doc from an equality match when the field is absent,
+    // and excludes it from an orderBy when the sort field is absent. So members
+    // written before those fields existed never came back, and the agent detail
+    // page showed LESS pending than the agent row on the list page — the
+    // server-side rollup (api/agents/recalculate-stats) counts them because it
+    // filters delete_flag in JS, not in the query.
+    //
+    // Deletion and ordering are therefore handled below, in JS, exactly the way
+    // recalculate-stats does it, so both numbers agree.
     const q = query(
       collection(db, "members"),
-      where("delete_flag", "==", false),
-      where("status",      "==", "active"),
-      where("agentId",     "==", agentId),
-      orderBy("createdAt", "desc")
+      where("agentId", "==", agentId),
+      where("status",  "==", "active")
     );
 
     const querySnapshot = await getDocs(q);
-    return querySnapshot.docs.map((doc) => ({
+    const rows = querySnapshot.docs.map((doc) => ({
       id: doc.id,
       ...doc.data(),
       createdAt:  doc.data().createdAt?.toDate?.()  || null,
       updated_at: doc.data().updated_at?.toDate?.() || null
     }));
+
+    // Newest first; members with no createdAt sink to the bottom instead of
+    // vanishing from the result altogether.
+    rows.sort((a, b) => (b.createdAt?.getTime?.() || 0) - (a.createdAt?.getTime?.() || 0));
+    return rows;
   } catch (error) {
     console.error("❌ Error fetching agent members:", error);
     return [];

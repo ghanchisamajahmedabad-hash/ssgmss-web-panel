@@ -8,7 +8,7 @@ import {
   Table, Card, Tag, Button, Space, Typography, InputNumber, message,
   Row, Col, Avatar, Select, Checkbox, Empty, Radio, Input, Badge,
   Tooltip, Progress, Statistic, Divider, Modal, Flex, theme,
-  ConfigProvider
+  ConfigProvider, Alert
 } from 'antd';
 import {
   UserOutlined, SearchOutlined, TeamOutlined, BankOutlined,
@@ -187,6 +187,11 @@ const MemberPaymentPage = () => {
   const activeMembers     = members.filter(m => !m.isDeleted);
   const totalOverallPaid  = activeMembers.reduce((s, m) => s + (m.paidAmount || 0), 0);
   const totalOverallPending = activeMembers.reduce((s, m) => s + (m.pendingAmount || 0), 0);
+  // Gap between the cached agent-level total and the live sum of member docs.
+  // Only meaningful once members have actually loaded.
+  const statsDrift = (!loading && members.length)
+    ? (currentAgent?.totalJoinFeesPending || 0) - totalOverallPending
+    : 0;
   const totalSelectedPending = members.filter(m => selectedMembers.includes(m.id) && !m.isDeleted).reduce((s, m) => s + m.pendingAmount, 0);
   const totalPaymentAmount   = selectedMembers.reduce((s, id) => s + (parseFloat(memberPayments[id]) || 0), 0);
   const selectableCount      = filteredMembers.filter(m => !m.isDeleted && m.pendingAmount > 0).length;
@@ -253,16 +258,30 @@ const MemberPaymentPage = () => {
     setLoading(true);
     try {
       const data = await fetchMembersByAgent(agentId);
-      const processed = data.map(m => ({
+      const processed = data.map(m => {
+        // Mirror api/agents/recalculate-stats exactly, so this page's totals and
+        // the agent row on /payments/join-fees can't disagree:
+        //  • migrated members count toward memberCount but contribute NO fee
+        //    amounts (the migration only bumped counts, never amounts)
+        //  • pending is always recomputed as joinFees − paidAmount, never taken
+        //    from the stored pendingAmount, which some agent-app writes
+        //    corrupted with joinFees + fixedJoinFees
+        const isMigrated = m.migratedData === true;
+        const jf     = isMigrated || m.delete_flag ? 0 : Number(m.joinFees   || 0);
+        const jfPaid = isMigrated || m.delete_flag ? 0 : Number(m.paidAmount || 0);
+        const jfPend = Math.max(0, jf - jfPaid);
+        return {
         ...m, key: m.id,
-        pendingAmount: m.delete_flag ? 0 : (m.pendingAmount ?? ((m.joinFees || 0) - (m.paidAmount || 0))),
-        paidAmount:    m.paidAmount  || 0,
-        joinFees:      m.joinFees    || 0,
-        totalFees:     m.delete_flag ? 0 : (m.joinFees || 0),
+        pendingAmount: jfPend,
+        paidAmount:    jfPaid,
+        joinFees:      jf,
+        totalFees:     jf,
+        isMigrated,
         programName:   (() => { const p = programList?.find(p => p.id === m.programId); return p?.name || m.programName || 'No Program'; })(),
         programNames:  (() => { const p = programList?.find(p => p.id === m.programId); return p?.name || m.programName || 'No Program'; })(),
         isDeleted: m.delete_flag || false,
-      }));
+        };
+      });
       setMembers(processed);
       const init = {};
       processed.forEach(m => { init[m.id] = 0; });
@@ -734,6 +753,33 @@ const MemberPaymentPage = () => {
         </Card>
 
         {/* ── Advance Payment Panel ─────────────────────────────────────────────── */}
+        {/* The agent row on the list page reads agent.totalJoinFeesPending; this
+            page sums the member docs. They should match — when they don't, the
+            agent doc has drifted (a payment path that didn't update it), so say
+            so plainly instead of leaving two different numbers on two screens. */}
+        {statsDrift !== 0 && (
+          <Alert
+            type="warning"
+            showIcon
+            style={{ marginBottom: 12, borderRadius: 10 }}
+            message={
+              <span style={{ fontSize: 12 }}>
+                Agent total mismatch — agent record says{' '}
+                <b>₹{(currentAgent?.totalJoinFeesPending || 0).toLocaleString()}</b> pending,
+                but these {activeMembers.length} members add up to{' '}
+                <b>₹{totalOverallPending.toLocaleString()}</b>{' '}
+                (difference ₹{Math.abs(statsDrift).toLocaleString()}).
+                The member figures below are the accurate ones.
+              </span>
+            }
+            description={
+              isSuperAdmin
+                ? <span style={{ fontSize: 11 }}>Run <b>Sync Stats</b> on the Join Fees list page to rebuild the agent record from member data.</span>
+                : <span style={{ fontSize: 11 }}>Ask a superadmin to run <b>Sync Stats</b> on the Join Fees list page.</span>
+            }
+          />
+        )}
+
         <AgentAdvancePanel agentId={agentId} />
 
         {/* ── 3. Filters & Controls (Compact Row) ──────────────────────────────────── */}

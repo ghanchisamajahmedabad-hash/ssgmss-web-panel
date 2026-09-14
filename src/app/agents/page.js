@@ -12,13 +12,15 @@ import {
   FileOutlined, ReloadOutlined, CheckCircleOutlined, CloseCircleOutlined,
   SearchOutlined, FilterOutlined, FileTextOutlined, PictureOutlined,
   ExclamationCircleOutlined, StopOutlined, WalletOutlined,
-  DollarOutlined, HistoryOutlined, MinusCircleOutlined, PlusCircleOutlined
+  DollarOutlined, HistoryOutlined, MinusCircleOutlined, PlusCircleOutlined,
+  CalculatorOutlined
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { agentApi } from '@/utils/api';
 import { collection, getDocs } from 'firebase/firestore';
 import { auth, db } from '../../../lib/firbase-client';
 import { useAuth } from '@/components/Base/AuthProvider';
+import AgentStatsEditDrawer from './components/AgentStatsEditDrawer';
 
 const { Title, Text } = Typography;
 const { Option }      = Select;
@@ -59,6 +61,9 @@ const AgentsManagementPage = () => {
   const [advanceHistory,        setAdvanceHistory]        = useState([]);
   const [advanceHistoryLoading, setAdvanceHistoryLoading] = useState(false);
   const [advanceModalVisible,   setAdvanceModalVisible]   = useState(false);
+  // Amount-correction drawer (superadmin) — fixes agent aggregates that have
+  // drifted from their members.
+  const [statsEditAgent,        setStatsEditAgent]        = useState(null);
   const [advanceAmount,         setAdvanceAmount]         = useState('');
   const [advanceDesc,           setAdvanceDesc]           = useState('');
   const [advanceNote,           setAdvanceNote]           = useState('');
@@ -588,7 +593,7 @@ const isSuperAdmin = (user) => user?.role === 'superadmin';
       render: (_, r) => <div className="text-xs text-gray-500">{formatDate(r.created_at)}</div>,
     },
     {
-      title: 'ACTIONS', key: 'actions', width: 210, fixed: 'right',
+      title: 'ACTIONS', key: 'actions', width: 250, fixed: 'right',
       render: (_, record) => (
         <Space size="small">
           {
@@ -615,6 +620,19 @@ const isSuperAdmin = (user) => user?.role === 'superadmin';
               size="small" checkedChildren="ON" unCheckedChildren="OFF"
             />
           </Tooltip>
+            ) : null
+    }
+    {
+            // Rewrites agent aggregates outside the payment trail — superadmin only,
+            // same bar as the member-level amount editor.
+            isSuperAdmin(user) ? (
+              <Tooltip title="Correct Join Fees / Closing amounts">
+                <Button
+                  type="text" size="small"
+                  icon={<CalculatorOutlined className="text-orange-600" />}
+                  onClick={() => setStatsEditAgent(record)}
+                />
+              </Tooltip>
             ) : null
     }
     {
@@ -1411,6 +1429,14 @@ const isSuperAdmin = (user) => user?.role === 'superadmin';
             </div>
           </div>
         </Modal>
+
+        {/* Amount correction — agent aggregates only, superadmin */}
+        <AgentStatsEditDrawer
+          open={!!statsEditAgent}
+          agent={statsEditAgent}
+          onClose={() => setStatsEditAgent(null)}
+          onSaved={() => fetchAgents(pagination.current)}
+        />
       </div>
 
       <style jsx global>{`

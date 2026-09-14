@@ -113,6 +113,7 @@ const buildMenuItems = (user, pendingCount, collapsed) => {
       module: 'payments',
       children: [
         { key: '/payments/join-fees', label: 'Join Fees', module: 'payments' },
+        { key: '/payments/join-fees-edit', label: 'Join Fees — Edit Amount', module: 'payments' },
         { key: '/payments/closing-payment', label: 'Closing Payment', module: 'payments' },
         { key: '/payments/history', label: 'Payment History', module: 'payments' },
         { key: '/payments/whatsapp', label: 'WhatsApp', icon: <WhatsAppOutlined />, module: 'payments' },
