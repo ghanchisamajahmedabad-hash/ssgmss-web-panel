@@ -40,7 +40,16 @@ export const buildMembersConstraints = (filters = {}) => {
   ];
 
   // ── Program filter (multi-select, flat field) ─────────────────────────────
-  const progIds = Array.isArray(programIds) ? programIds.filter(Boolean) : [];
+  // Accept `programId: 'x'` as an alias for `programIds: ['x']`. A caller that
+  // passed the singular key used to have it dropped during destructuring, which
+  // applied NO programme condition at all and silently returned every yojna's
+  // members — a filter that fails open is worse than one that errors.
+  const singleProgramId =
+    filters.programId && filters.programId !== 'all' ? [filters.programId] : [];
+  const rawProgIds = Array.isArray(programIds) && programIds.length
+    ? programIds
+    : singleProgramId;
+  const progIds = rawProgIds.filter(Boolean);
   if (progIds.length === 1) {
     conditions.push(where("programId", "==", progIds[0]));
   } else if (progIds.length > 1) {
@@ -200,7 +209,13 @@ export const getTotalMembersCount = async (filters = {}) => {
     where("status",      "==", "active")
   ];
 
-  const progIdsForCount = Array.isArray(programIds) ? programIds.filter(Boolean) : [];
+  // Same singular-key alias as buildMembersConstraints, so a count can never
+  // disagree with the list it is counting.
+  const singleForCount =
+    filters.programId && filters.programId !== 'all' ? [filters.programId] : [];
+  const progIdsForCount = (Array.isArray(programIds) && programIds.length
+    ? programIds
+    : singleForCount).filter(Boolean);
   if (progIdsForCount.length === 1)
     conditions.push(where("programId", "==", progIdsForCount[0]));
   else if (progIdsForCount.length > 1)

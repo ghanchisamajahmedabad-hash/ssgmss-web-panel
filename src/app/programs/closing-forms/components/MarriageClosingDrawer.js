@@ -283,8 +283,13 @@ const MarriageClosingDrawer = ({ visible, onClose, members: allMembers = [], pro
     if (!programId) return
     setListLoading(true); setSearchMode(false); setSearch('')
     try {
+      // NOTE: the helper reads `programIds` (an ARRAY). Passing `programId`
+      // singular was silently dropped during destructuring, so no programme
+      // condition was ever added to the query and the list showed members from
+      // EVERY yojna. The search path below filtered by programme in JS, which
+      // is why search looked correct while the scrolling list did not.
       const r = await fetchMembersPaginated({
-        programId, status: 'active', pageSize: PAGE, lastDoc: null, search: '',
+        programIds: [programId], status: 'active', pageSize: PAGE, lastDoc: null, search: '',
       })
       setDisplayed(r.members || [])
       setLastDoc(r.lastDoc || null)
@@ -299,7 +304,7 @@ const MarriageClosingDrawer = ({ visible, onClose, members: allMembers = [], pro
     setLoadingMore(true)
     try {
       const r = await fetchMembersPaginated({
-        programId: selectedProg, status: 'active', pageSize: PAGE, lastDoc, search: '',
+        programIds: [selectedProg], status: 'active', pageSize: PAGE, lastDoc, search: '',
       })
       setDisplayed(p => [...p, ...(r.members || [])])
       setLastDoc(r.lastDoc || null)

@@ -167,6 +167,7 @@ const buildMenuItems = (user, pendingCount, collapsed) => {
         { key: '/settings/commission', label: 'Commission', module: 'settings' },
         { key: '/settings/payment-details', label: 'Payment Details', module: 'settings' },
         { key: '/settings/fix-age-groups', label: 'Fix Age Group & Fees', module: 'settings' },
+        { key: '/settings/fix-closing', label: 'Closing System Check', module: 'settings' },
       ],
     },
     {
