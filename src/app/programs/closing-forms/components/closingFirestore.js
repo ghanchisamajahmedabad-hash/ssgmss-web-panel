@@ -36,8 +36,17 @@ export const buildClosedConditions = (filters = {}) => {
     where('member_closed', '==', true),
   ]
 
+  // Filter on `programId`, NOT `member_closed_program`.
+  //
+  // member_closed_program is only written by api/closed_payment_entry when it
+  // closes a member. Members closed by any other path, and every migrated
+  // member, simply don't have the field — and a Firestore equality match
+  // EXCLUDES documents where the field is absent, so the programme filter
+  // returned almost nothing. Every member doc has programId, and the close
+  // operation sets it to the closing programme anyway, so it is both always
+  // present and equally correct.
   if (programId && programId !== 'all')
-    conditions.push(where('member_closed_program', '==', programId))
+    conditions.push(where('programId', '==', programId))
   if (agentId && agentId !== 'all')
     conditions.push(where('agentId', '==', agentId))
   if (closingGroupId && closingGroupId !== 'all')

@@ -14,7 +14,7 @@ import {
   RollbackOutlined, ExclamationCircleOutlined,
   HeartFilled, ClockCircleOutlined, CheckCircleOutlined,
   InfoCircleOutlined, WarningOutlined, EditOutlined,
-  DownloadOutlined
+  DownloadOutlined, SyncOutlined
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import relativeTime from 'dayjs/plugin/relativeTime'
@@ -24,6 +24,7 @@ import {
   collection, query, orderBy, limit, getDocs
 } from 'firebase/firestore'
 import { db, auth } from '../../../../lib/firbase-client'
+import { useAuth } from '@/components/Base/AuthProvider'
 import MemberDetailDrawer from '@/app/members/components/MemberDetailsView'
 import MarriageClosingDrawer from './components/MarriageClosingDrawer'
 import ClosingRasidGenerator from './components/ClosingRasidGenerator'
@@ -243,6 +244,8 @@ const ClosingMembersPage = () => {
   const [exportLoading,   setExportLoading]  = useState(false)
   const [stats,           setStats]           = useState({ totalActive: 0, activeCount: 0, closedCount: 0, inviteCount: null })
 
+  const { user: authUser } = useAuth()
+  const isSuperAdmin = authUser?.role === 'superadmin'
   const programList = useSelector((s) => s.data.programList || [])
   const agentList   = useSelector((s) => s.data.agentList   || [])
   const currentUser = auth.currentUser
@@ -265,6 +268,47 @@ const ClosingMembersPage = () => {
 
   const loadClosedStats = async () => {
     try { setStats(await getClosedStats()) } catch (e) { console.error(e) }
+  }
+
+  // ── Backfill closed_date from closedStatus (and vice versa) ────────────────
+  // Members carrying their date only in closedStatus are invisible to the date
+  // range filter, because a Firestore range filter excludes documents that lack
+  // the field entirely. This copies the date across so they become queryable.
+  const [syncingDates, setSyncingDates] = useState(false)
+
+  const handleSyncDates = async () => {
+    setSyncingDates(true)
+    try {
+      const token = await auth.currentUser?.getIdToken()
+      let cursor = null, top = 0, status = 0, noDate = 0, scanned = 0, guard = 0
+      do {
+        const res = await fetch('/api/closing/sync-dates', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ cursor, dryRun: false, batchSize: 300 }),
+        })
+        const data = await res.json()
+        if (!data.success) throw new Error(data.message)
+        scanned += data.scanned; top += data.filledTopLevel
+        status += data.filledStatus; noDate += data.noDate
+        cursor = data.nextCursor
+        guard++
+      } while (cursor && guard < 200)
+
+      if (top || status) {
+        message.success(`Synced ${top} date(s) onto the member record, ${status} into closing history (${scanned} checked)`)
+      } else {
+        message.info(`All ${scanned} closed members already have their date in both places`)
+      }
+      if (noDate) {
+        message.warning(`${noDate} closed member(s) have no date anywhere — set those by hand`)
+      }
+      await Promise.all([loadClosedStats(), loadClosedPage(closedCurrent)])
+    } catch (e) {
+      message.error('Sync failed: ' + e.message)
+    } finally {
+      setSyncingDates(false)
+    }
   }
 
   const fetchClosedPageN = async (n, withTotal = true) => {
@@ -500,6 +544,43 @@ const ClosingMembersPage = () => {
     return d.isValid() ? d.format('DD-MM-YYYY') : String(raw)
   }
 
+  // A member's closing date, checked everywhere it can live — the same order
+  // api/closed_payment_entry uses.
+  //
+  // The table used to read only the top-level `closed_date`, so any member whose
+  // date sits in closedStatus[] (closed before the top-level field was written,
+  // or closed through a path that only filled the array) showed "N/A". It also
+  // passed Firestore Timestamps straight to dayjs(), which yields Invalid Date
+  // rather than the real day — that is the "wrong date" half of the problem.
+  const resolveClosedDate = (m) => {
+    if (!m) return null
+    const prog = m.member_closed_program || m.programId || null
+    for (const cs of (m.closedStatus || [])) {
+      if (prog && cs?.programId !== prog) continue
+      if (cs?.closed_date) {
+        const d = cs.closed_date?.toDate ? dayjs(cs.closed_date.toDate()) : dayjs(cs.closed_date)
+        if (d.isValid()) return d
+      }
+    }
+    // Any programme's entry, then the top-level fields.
+    for (const cs of (m.closedStatus || [])) {
+      if (!cs?.closed_date) continue
+      const d = cs.closed_date?.toDate ? dayjs(cs.closed_date.toDate()) : dayjs(cs.closed_date)
+      if (d.isValid()) return d
+    }
+    for (const raw of [m.closed_date, m.marriageDate, m.member_closed_at]) {
+      if (!raw) continue
+      const d = raw?.toDate ? dayjs(raw.toDate()) : dayjs(raw)
+      if (d.isValid()) return d
+    }
+    return null
+  }
+
+  const closedDateText = (m) => {
+    const d = resolveClosedDate(m)
+    return d ? d.format('DD-MM-YYYY') : ''
+  }
+
   // Fetch the COMPLETE filtered set from the backend (ignores table pagination).
   // Result is cached in exportRows so repeat CSV/PDF clicks don't re-query.
   const prepareExportRows = async () => {
@@ -533,7 +614,9 @@ const ClosingMembersPage = () => {
       m.phone || '',
       programName(m.member_closed_program || m.programId),
       groupName(m.closingGroupId),
-      fmtClosedDate(m.closed_date),
+      // Same resolution as the table, so the CSV never says "blank" for a member
+      // whose date is only in their closing history.
+      closedDateText(m),
       m.agentId ? `${agentName(m.agentId)}${m.agent_code ? ` (${m.agent_code})` : ''}` : '',
       m.closed_invitation_url ? 'Yes' : 'No',
     ])
@@ -580,7 +663,29 @@ const ClosingMembersPage = () => {
       title: 'Program', key: 'programName', width: 160,
       render: (_, r) => <Tag color="blue">{programName(r.member_closed_program || r.programId)}</Tag>
     },
-    { title: 'Closed Date', key: 'closed_date', width: 130, render: (_, r) => r.closed_date ? dayjs(r.closed_date).format('DD/MM/YYYY') : 'N/A' },
+    {
+      title: 'Closed Date', key: 'closed_date', width: 140,
+      render: (_, r) => {
+        const txt = closedDateText(r)
+        if (txt) {
+          // Flag a member whose date exists only in closedStatus — the top-level
+          // field is what the date-range filter and several reports query, so a
+          // missing one is worth seeing rather than silently papering over.
+          const topLevelMissing = !r.closed_date
+          return (
+            <span>
+              {txt}
+              {topLevelMissing && (
+                <Tooltip title="Date found in the member's closing history but not on the top-level field. Re-save it here to sync both.">
+                  <Tag color="orange" style={{ fontSize: 8, marginLeft: 4 }}>sync</Tag>
+                </Tooltip>
+              )}
+            </span>
+          )
+        }
+        return <Tag color="red" style={{ fontSize: 10 }}>not set</Tag>
+      },
+    },
     {
       title: 'Group', key: 'closingGroupId', width: 140,
       render: (_, r) => {
@@ -697,6 +802,14 @@ const ClosingMembersPage = () => {
               style={{ width: 270 }} placeholder={['Closing from', 'Closing to']} allowClear />
             {(programFilter !== 'all' || agentFilter !== 'all' || groupFilter !== 'all' || dateRange || searchText) && (
               <Button size="small" icon={<CloseCircleOutlined />} onClick={() => { setProgramFilter('all'); setAgentFilter('all'); setGroupFilter('all'); setDateRange(null); setSearchText('') }}>Clear</Button>
+            )}
+            {isSuperAdmin && (
+              <Tooltip title="Copy each closed member's date onto the top-level field. Members missing it are skipped by the date filter entirely, and show 'not set' in the table.">
+                <Button size="small" icon={<SyncOutlined spin={syncingDates} />} loading={syncingDates}
+                  onClick={handleSyncDates}>
+                  Sync dates
+                </Button>
+              </Tooltip>
             )}
             <div style={{ marginLeft: 'auto' }}>
               <Button icon={<DownloadOutlined />} loading={exportLoading} onClick={() => exportClosingsToCSV()}>Export CSV</Button>
