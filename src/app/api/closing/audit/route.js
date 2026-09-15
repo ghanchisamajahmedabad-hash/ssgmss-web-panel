@@ -92,6 +92,7 @@ export async function POST(req) {
 
     const {
       programId = 'all',
+      memberId = null,
       cursor = null,
       batchSize = 200,
       dryRun = true,
@@ -100,13 +101,23 @@ export async function POST(req) {
 
     const size = Math.min(Number(batchSize) || 200, 400);
 
-    // Page members by document id for stable, resumable pagination.
-    let q = db.collection('members')
-      .orderBy(admin.firestore.FieldPath.documentId())
-      .limit(size);
-    if (cursor) q = q.startAfter(cursor);
-
-    const snap = await q.get();
+    // Single-member mode — used by the "Recheck" button on a member's closing
+    // tab, so a mismatch can be fixed where it is noticed instead of running a
+    // full sweep.
+    let snap;
+    if (memberId) {
+      const one = await db.collection('members').doc(memberId).get();
+      if (!one.exists)
+        return NextResponse.json({ success: false, message: 'Member not found' }, { status: 404 });
+      snap = { docs: [one], size: 1, empty: false };
+    } else {
+      // Page members by document id for stable, resumable pagination.
+      let q = db.collection('members')
+        .orderBy(admin.firestore.FieldPath.documentId())
+        .limit(size);
+      if (cursor) q = q.startAfter(cursor);
+      snap = await q.get();
+    }
 
     let scanned = 0, considered = 0, clean = 0, fixed = 0, skipped = 0;
     const issueCounts = {};
@@ -330,7 +341,8 @@ export async function POST(req) {
       }
     }
 
-    const hasMore = snap.size === size;
+    // Single-member mode is always a complete run.
+    const hasMore = !memberId && snap.size === size;
 
     console.log(
       `[ClosingAudit] chunk scanned=${scanned} considered=${considered} clean=${clean} ` +

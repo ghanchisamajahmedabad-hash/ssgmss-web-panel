@@ -131,25 +131,80 @@ const ClosingRasidGenerator = ({ open, onClose, group, programList }) => {
     finally { setLoading(false) }
   }, [group])
 
+  // ── Per-closed-member collection amount ───────────────────────────────────
+  // group.totalAmount is the sum of what every PAYING member owes for the whole
+  // group. Dividing it by the number of CLOSED members (as this screen used to)
+  // produces one average that is identical for everyone — which is why three
+  // members closed on three different dates all printed the same figure.
+  //
+  // The real per-person amount has to be attributed event by event: each payer's
+  // closing_payment doc lists, in closingDetails, exactly which closings it is
+  // paying for. Summing that payer's payAmount against each closed member gives
+  // what is collected on account of that person. Members closed on a later date
+  // have a different (usually larger) set of eligible payers, so their totals
+  // legitimately differ.
+  const [amountByClosedMember, setAmountByClosedMember] = useState({})
+
+  const fetchPerMemberAmounts = useCallback(async () => {
+    if (!group?.id) { setAmountByClosedMember({}); return }
+    try {
+      const snap = await getDocs(
+        query(collection(db, 'closing_payment'), where('closingGroupId', '==', group.id))
+      )
+      const tally = {}
+      snap.forEach(d => {
+        const cp = d.data()
+        if (cp.isReversed === true) return
+        const pay = Number(cp.payAmount || 0)
+        if (pay <= 0) return
+        const seen = new Set()
+        ;(cp.closingDetails || []).forEach(ev => {
+          const cid = ev?.closed_memberId
+          if (!cid) return
+          // One payer can only pay once per closing — guards against the
+          // duplicate closingDetails entries arrayUnion can leave behind.
+          if (seen.has(cid)) return
+          seen.add(cid)
+          if (!tally[cid]) tally[cid] = { amount: 0, payers: 0 }
+          tally[cid].amount += pay
+          tally[cid].payers += 1
+        })
+      })
+      setAmountByClosedMember(tally)
+    } catch (e) {
+      console.error('per-member closing amounts failed:', e)
+      setAmountByClosedMember({})
+    }
+  }, [group])
+
   useEffect(() => {
-    if (open) fetchGroupMembers()
-  }, [open, fetchGroupMembers])
+    if (open) { fetchGroupMembers(); fetchPerMemberAmounts() }
+  }, [open, fetchGroupMembers, fetchPerMemberAmounts])
 
   // ── Resolve each member's closed_date from their closedStatus for THIS group
   const memberRows = members.map(m => {
     const entry = (m.closedStatus || []).find(
       cs => cs.closingGroupId === group?.id && cs.programId === group?.programId
     )
+    const tally = amountByClosedMember[m.id]
     return {
       ...m,
       closedDate: fmtDate(entry?.closed_date || m.closed_date || m.marriageDate),
       dueDate:    fmtDate(entry?.closed_date || m.closed_date || m.marriageDate), // due date = closed date
+      // Collected on account of THIS person. Falls back to 0 rather than an
+      // average, so a missing figure is visibly missing instead of quietly
+      // looking plausible.
+      ownAmount:  Number(tally?.amount || 0),
+      payerCount: Number(tally?.payers || 0),
     }
   })
 
   const memberCount = group?.memberCount || group?.closedMemberIds?.length || memberRows.length || 1
   const totalAmount = Number(group?.totalAmount || 0)
-  const perMemberAmount = totalAmount / memberCount
+  // Sum of the attributed per-person figures. Should equal group.totalAmount;
+  // when it doesn't, the group's rollup has drifted (Settings → Closing System
+  // Check reports exactly that), and the attributed sum is the trustworthy one.
+  const attributedTotal = memberRows.reduce((s, m) => s + m.ownAmount, 0)
   const groupName = group?.groupName || `Group ${group?.id?.slice?.(0, 8) || ''}`
   const dateStr = dayjs().format('DD/MM/YYYY')
 
@@ -167,7 +222,7 @@ const ClosingRasidGenerator = ({ open, onClose, group, programList }) => {
         <td class="c">${m.phone || '—'}</td>
         <td class="c">${m.closedDate}</td>
         <td class="c">${m.dueDate}</td>
-        <td class="c">₹${perMemberAmount.toLocaleString()}</td>
+        <td class="c">₹${m.ownAmount.toLocaleString()}<div style="font-size:8px;color:#888">${m.payerCount} सदस्य</div></td>
       </tr>`).join('') || '<tr><td colspan="9" class="c">No members</td></tr>'
 
     return `<!DOCTYPE html><html lang="hi"><head>
@@ -179,7 +234,7 @@ const ClosingRasidGenerator = ({ open, onClose, group, programList }) => {
       <div class="print-bar">
         <button class="btn-print" onclick="window.print()">🖨 Print / Save PDF</button>
         <button class="btn-close" onclick="window.close()">✕ Close</button>
-        <span class="print-info">📄 ${memberRows.length} members | Total: ₹${totalAmount.toLocaleString()}</span>
+        <span class="print-info">📄 ${memberRows.length} members | Total: ₹${attributedTotal.toLocaleString()}</span>
       </div>
       <div class="page">
         ${orgHeader()}
@@ -191,7 +246,7 @@ const ClosingRasidGenerator = ({ open, onClose, group, programList }) => {
         <div class="info-row">
           <div class="info-item"><span class="lbl">योजना</span><span class="sep"> : </span><span class="val">${yojanaName || '—'}</span></div>
           <div class="info-item right"><span class="lbl">कुल सदस्य</span><span class="sep"> : </span><span class="val">${memberCount}</span></div>
-          <div class="info-item right"><span class="lbl">कुल राशि</span><span class="sep"> : </span><span class="val val-amt">₹${totalAmount.toLocaleString()}</span></div>
+          <div class="info-item right"><span class="lbl">कुल राशि</span><span class="sep"> : </span><span class="val val-amt">₹${attributedTotal.toLocaleString()}</span></div>
         </div>
         <table>
           <thead><tr>
@@ -209,7 +264,7 @@ const ClosingRasidGenerator = ({ open, onClose, group, programList }) => {
             <tr class="total-row">
               <td colspan="5" class="l">कुल योग (${memberCount} सदस्य)</td>
               <td class="c">—</td><td class="c">—</td><td class="c">—</td>
-              <td class="c">₹${totalAmount.toLocaleString()}</td>
+              <td class="c">₹${attributedTotal.toLocaleString()}</td>
             </tr>
           </tbody>
         </table>
@@ -251,7 +306,7 @@ const ClosingRasidGenerator = ({ open, onClose, group, programList }) => {
           </div>
           <div class="info-row">
             <div class="info-item"><span class="lbl">ड्यू डेट</span><span class="sep"> : </span><span class="val">${m.dueDate}</span></div>
-            <div class="info-item right"><span class="lbl">सहयोग राशि</span><span class="sep"> : </span><span class="val val-amt">₹${perMemberAmount.toLocaleString()}</span></div>
+            <div class="info-item right"><span class="lbl">सहयोग राशि</span><span class="sep"> : </span><span class="val val-amt">₹${m.ownAmount.toLocaleString()}</span></div>
           </div>
           <div class="info-row"><span class="lbl">नोट</span><span class="sep"> : </span><span class="val">${noteLine}</span></div>
           <div class="footer">
@@ -301,7 +356,11 @@ const ClosingRasidGenerator = ({ open, onClose, group, programList }) => {
           <Alert
             type="info" showIcon style={{ marginBottom: 16 }}
             message={`${memberCount} members closed · Total ₹${totalAmount.toLocaleString()}`}
-            description={`Each member: ₹${perMemberAmount.toLocaleString()} (group total split equally per member). Due date = closing date.`}
+            description={
+              attributedTotal !== totalAmount && totalAmount > 0
+                ? `Amounts are attributed per closed member from the actual payer records (₹${attributedTotal.toLocaleString()}). The group's stored total says ₹${totalAmount.toLocaleString()} — run Settings → Closing System Check. Due date = closing date.`
+                : `Each member's amount is what is collected on account of their own closing, so members closed on different dates differ. Due date = closing date.`
+            }
           />
           <Space direction="vertical" style={{ width: '100%' }} size={12}>
             <Button block size="large" icon={<TeamOutlined />} style={{ height: 48 }}

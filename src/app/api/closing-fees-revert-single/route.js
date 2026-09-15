@@ -92,15 +92,35 @@ export async function POST(req) {
     const currentPending = Number(member.closing_pendingAmount || 0);
     const closingTotal   = Number(member.closing_totalAmount   || 0);
     const newPaid        = Math.max(0, currentPaid - revertAmount);
-    const newPending     = currentPending + revertAmount;
+    // Pending is DERIVED from total − paid, not grown by the reverted amount.
+    // `currentPending + revertAmount` had no ceiling, so reverting a payment
+    // whose charge no longer exists (an orphaned fee doc, or a total that was
+    // reduced elsewhere) pushed pending ABOVE total — a member showing total
+    // ₹400 with pending ₹600. Total is not changed by a payment reversal, so
+    // deriving pending here is exactly equivalent when the data is sound and
+    // self-correcting when it isn't.
+    const newPending     = Math.max(0, closingTotal - newPaid);
     const paymentPct     = closingTotal > 0 ? Math.min((newPaid / closingTotal) * 100, 100) : 0;
+
+    const newPaidCount    = Math.max(0, Number(member.paidClosingCount || 0) - 1);
+    const totalCount      = Number(member.totalClosingCount || 0);
+    const newPendingCount = totalCount > 0
+      ? Math.max(0, totalCount - newPaidCount)
+      : Number(member.pendingClosingCount || 0) + 1;
+
+    if (currentPending !== closingTotal - currentPaid) {
+      console.warn(
+        `[ClosingRevertSingle] member ${memberId} pending was inconsistent before revert ` +
+        `(stored ${currentPending}, expected ${closingTotal - currentPaid}) — corrected to ${newPending}`
+      );
+    }
 
     mb.update(memberRef, {
       closing_paidAmount:        newPaid,
       closing_pendingAmount:     newPending,
       closing_paymentPercentage: Number(paymentPct.toFixed(2)),
-      paidClosingCount:          Math.max(0, Number(member.paidClosingCount   || 0) - 1),
-      pendingClosingCount:       Number(member.pendingClosingCount || 0) + 1,
+      paidClosingCount:          newPaidCount,
+      pendingClosingCount:       newPendingCount,
       updated_at:                ts,
     });
 

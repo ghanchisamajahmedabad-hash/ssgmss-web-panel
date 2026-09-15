@@ -1,6 +1,6 @@
 "use client"
 import React, { useState } from 'react'
-import { Card, Tag, Button, Space, Spin, Table, Text, Progress, Empty } from 'antd'
+import { Card, Tag, Button, Space, Spin, Table, Text, Progress, Empty, Alert, message } from 'antd'
 import {
   MoneyCollectOutlined, FilePdfOutlined, HistoryOutlined,
   CalendarOutlined, ClockCircleOutlined, CheckCircleOutlined
@@ -36,6 +36,62 @@ const ClosingEntriesList = ({
 
   const hasClosing = (member?.closing_totalAmount || 0) > 0
 
+  // ── Reconciliation ────────────────────────────────────────────────────────
+  // The summary cards above show the member's stored rollup; the group cards
+  // below are the closing_payment docs those figures are supposed to be a
+  // rollup OF. When they disagree — the "table says one thing, details says
+  // another" complaint — show both numbers rather than leaving two different
+  // totals on screen with no explanation.
+  const docTotals = closingEntries.reduce((a, e) => {
+    a.total += Number(e.totalAmount   || 0)
+    a.paid  += Number(e.paidAmount    || 0)
+    a.count += Number(e.closingCount  || 0)
+    return a
+  }, { total: 0, paid: 0, count: 0 })
+  docTotals.pending = Math.max(0, docTotals.total - docTotals.paid)
+
+  const stored = {
+    total:   Number(member?.closing_totalAmount   || 0),
+    paid:    Number(member?.closing_paidAmount    || 0),
+    pending: Number(member?.closing_pendingAmount || 0),
+    count:   Number(member?.totalClosingCount     || 0),
+  }
+
+  const mismatches = !loading.entries && closingEntries.length > 0
+    ? [
+        ['Total',   stored.total,   docTotals.total],
+        ['Paid',    stored.paid,    docTotals.paid],
+        ['Pending', stored.pending, docTotals.pending],
+        ['Events',  stored.count,   docTotals.count],
+      ].filter(([, s, d]) => s !== d)
+    : []
+
+  const [rechecking, setRechecking] = useState(false)
+
+  const recheck = async () => {
+    setRechecking(true)
+    try {
+      const { getAuth } = await import('firebase/auth')
+      const token = await getAuth().currentUser?.getIdToken()
+      const res = await fetch('/api/closing/audit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ memberId: member.id, dryRun: false, removeInvalidEvents: false }),
+      })
+      const data = await res.json()
+      if (!data.success) throw new Error(data.message)
+      if (data.fixed > 0) {
+        message.success('Figures recalculated — reopen the member to see the updated totals')
+      } else {
+        message.info('Nothing to change — the stored figures already match the groups')
+      }
+    } catch (e) {
+      message.error('Recheck failed: ' + e.message)
+    } finally {
+      setRechecking(false)
+    }
+  }
+
   return (
     <div className="mt-4 space-y-4">
       {/* Summary cards — only here, not duplicated in header */}
@@ -45,7 +101,13 @@ const ClosingEntriesList = ({
             { title: 'Total Closing', value: member.closing_totalAmount || 0, color: '#722ed1', prefix: '₹' },
             { title: 'Paid', value: member.closing_paidAmount || 0, color: '#52c41a', prefix: '₹' },
             { title: 'Pending', value: member.closing_pendingAmount || 0, color: (member.closing_pendingAmount || 0) > 0 ? '#ff4d4f' : '#52c41a', prefix: '₹' },
-            { title: 'Events', value: `${member.paidClosingCount || 0} paid / ${member.totalClosingCount || 0} total`, color: '#1890ff', prefix: '' },
+            // "Events" = individual closings charged for. The All/Pending/Paid
+            // buttons below count GROUPS, which is a different number — one
+            // group usually covers several events. Both used to be described as
+            // "closing", so a member could look like they had 2 in one place and
+            // 3 in another. If the numbers still disagree after accounting for
+            // that, the rollup has drifted: Settings → Closing System Check.
+            { title: 'Events charged', value: `${member.paidClosingCount || 0} paid / ${member.totalClosingCount || 0} total`, color: '#1890ff', prefix: '' },
           ].map((s, i) => (
             <div key={i} className="bg-white rounded-lg border p-3 text-center">
               <div className="text-2xs text-gray-500">{s.title}</div>
@@ -57,13 +119,48 @@ const ClosingEntriesList = ({
         </div>
       )}
 
+      {/* Stored rollup vs the groups it summarises */}
+      {mismatches.length > 0 && (
+        <Alert
+          type="warning"
+          showIcon
+          style={{ borderRadius: 8 }}
+          message={<span style={{ fontSize: 12 }}>
+            These summary figures don't match the {closingEntries.length} closing group(s) listed below.
+          </span>}
+          description={
+            <div style={{ fontSize: 11 }}>
+              {mismatches.map(([label, s, d]) => (
+                <div key={label}>
+                  {label}: summary says <b>{label === 'Events' ? s : `₹${s.toLocaleString()}`}</b>,
+                  groups add up to <b>{label === 'Events' ? d : `₹${d.toLocaleString()}`}</b>
+                  {' '}<span style={{ color: '#dc2626' }}>
+                    ({s > d ? '+' : ''}{label === 'Events' ? s - d : `₹${(s - d).toLocaleString()}`})
+                  </span>
+                </div>
+              ))}
+              <div style={{ marginTop: 6, color: '#6b7280' }}>
+                The groups below are the source of truth. The members table shows the summary
+                figure, which is why the two screens differ.
+              </div>
+              <Button
+                size="small" type="primary" loading={rechecking} onClick={recheck}
+                style={{ marginTop: 6 }}
+              >
+                Recalculate this member
+              </Button>
+            </div>
+          }
+        />
+      )}
+
       {/* Filter + PDF bar */}
       <div className="flex flex-wrap items-center justify-between gap-2 p-3 bg-gray-50 rounded-lg border">
         <Space>
           <Button size="small" type={closingFilter === 'all' ? 'primary' : 'default'}
             onClick={() => setClosingFilter('all')}
             style={closingFilter === 'all' ? { background: '#1B385A', borderColor: '#1B385A' } : {}}>
-            All <span className="ml-1 opacity-70">({closingEntries.length})</span>
+            All groups <span className="ml-1 opacity-70">({closingEntries.length})</span>
           </Button>
           <Button size="small" type={closingFilter === 'pending' ? 'primary' : 'default'}
             danger={closingFilter === 'pending'} onClick={() => setClosingFilter('pending')}

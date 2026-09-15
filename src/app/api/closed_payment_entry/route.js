@@ -262,6 +262,10 @@ export async function POST(req) {
     // Already-closed members with no discoverable closing date — skipped rather
     // than charged, and surfaced in the response so the date can be filled in.
     const closedWithoutDate = [];
+    // Members who could not be charged at all. Previously a silent `continue`,
+    // which is why a member could be closed and still show zero pending.
+    const noPayAmount = [];
+    const noJoinDate  = [];
 
     // In add-mode: load existing closing_payment docs for all program members
     // so we know which events each member has already been paid for.
@@ -351,11 +355,32 @@ export async function POST(req) {
       }
 
       // ── JOB 2: Calculate payment for this member ─────────────────────────
-      // Skip members with no payAmount
-      if (payAmount <= 0) continue;
+      // A member with no payAmount cannot be charged anything — including for
+      // their OWN closing. That is almost always an age-group mismatch (the
+      // member's age group has no matching period, so payAmount was left 0),
+      // not a deliberate exemption, and it used to happen silently: the member
+      // was closed but no pending was ever raised for them. Report it instead.
+      if (payAmount <= 0) {
+        noPayAmount.push({
+          memberId,
+          name: m.displayName || m.name || '',
+          registrationNumber: m.registrationNumber || '',
+          ageGroupName: m.ageGroupName || '',
+          beingClosedNow: isBeingClosedNow,
+        });
+        continue;
+      }
 
       const joinDate = parseDate(m.dateJoin);
-      if (!joinDate) continue;
+      if (!joinDate) {
+        noJoinDate.push({
+          memberId,
+          name: m.displayName || m.name || '',
+          registrationNumber: m.registrationNumber || '',
+          beingClosedNow: isBeingClosedNow,
+        });
+        continue;
+      }
 
       // Determine this member's own closing date (if they are being closed now,
       // or were already closed before in another group for this program)
@@ -633,6 +658,14 @@ export async function POST(req) {
         skipped:             skippedClose,
         closedWithoutDateCount: closedWithoutDate.length,
         closedWithoutDate,
+        // Members who received nothing. `...ClosedNow` are the serious ones:
+        // they were just closed but no pending was raised for them at all.
+        noPayAmountCount:        noPayAmount.length,
+        noPayAmount,
+        noPayAmountClosedNow:    noPayAmount.filter(x => x.beingClosedNow),
+        noJoinDateCount:         noJoinDate.length,
+        noJoinDate,
+        noJoinDateClosedNow:     noJoinDate.filter(x => x.beingClosedNow),
       },
     });
   } catch (err) {
@@ -789,7 +822,14 @@ export async function DELETE(req) {
           } catch (_) {}
         }
 
-        if (!amount && !count) continue;
+        // Nothing to reverse for this member — but the closing_payment doc may
+        // still exist (a zero breakdown with a real doc behind it). Deleting it
+        // here stops it lingering as an orphan that the member's detail view
+        // would keep listing after the group is gone.
+        if (!amount && !count) {
+          mb.delete(db.collection("closing_payment").doc(`${memberId}_${closingGroupId}`));
+          continue;
+        }
 
         totalRevAmount += amount;
         totalRevCount  += count;
@@ -813,13 +853,30 @@ export async function DELETE(req) {
 
         const pendingForThisGroup = Math.max(0, amount - paidForThisGroup);
 
+        // Write ABSOLUTE values, not increments.
+        //
+        // This used to decrement closing_totalAmount by the full `amount` while
+        // decrementing closing_pendingAmount by a CLAMPED amount
+        // (Math.min(pendingForThisGroup, current)). Whenever the clamp bit, the
+        // total fell further than the pending and the two stopped agreeing —
+        // producing exactly the "total ₹400 but pending ₹600" members. Pending
+        // is now always derived as total − paid, so the invariant cannot break.
+        const newTotal   = Math.max(0, Number(m.closing_totalAmount || 0) - amount);
+        const newPaid    = Math.max(0, Number(m.closing_paidAmount  || 0) - paidForThisGroup);
+        const newPending = Math.max(0, newTotal - newPaid);
+
+        const newTotalCount   = Math.max(0, Number(m.totalClosingCount  || 0) - count);
+        const newPaidCount    = Math.max(0, Number(m.paidClosingCount   || 0) - Math.min(countForThisGroup, Number(m.paidClosingCount || 0)));
+        const newPendingCount = Math.max(0, newTotalCount - newPaidCount);
+
         mb.update(memberRef, {
-          closing_totalAmount:   INC(-amount),
-          closing_paidAmount:    INC(-Math.min(paidForThisGroup, m.closing_paidAmount   || 0)),
-          closing_pendingAmount: INC(-Math.min(pendingForThisGroup, m.closing_pendingAmount || 0)),
-          totalClosingCount:     INC(-count),
-          paidClosingCount:      INC(-Math.min(countForThisGroup, m.paidClosingCount    || 0)),
-          pendingClosingCount:   INC(-Math.min(countForThisGroup, m.pendingClosingCount || 0)),
+          closing_totalAmount:   newTotal,
+          closing_paidAmount:    newPaid,
+          closing_pendingAmount: newPending,
+          totalClosingCount:     newTotalCount,
+          paidClosingCount:      newPaidCount,
+          pendingClosingCount:   newPendingCount,
+          closing_paymentPercentage: newTotal > 0 ? Number(((newPaid / newTotal) * 100).toFixed(2)) : 0,
           updated_at:            ts,
           closingGroupIds:       admin.firestore.FieldValue.arrayRemove(closingGroupId),
           [`closingGroupAmounts.${closingGroupId}`]: DEL(),

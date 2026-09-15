@@ -130,15 +130,34 @@ export async function POST(req) {
       const closingTotal   = Number(member.closing_totalAmount   || 0);
 
       const newPaid    = Math.max(0, currentPaid - totalAmount);
-      const newPending = currentPending + totalAmount;
+      // Derive pending from total − paid rather than growing it by the reverted
+      // amount. The unbounded `currentPending + totalAmount` could push pending
+      // above total (member showing total ₹400, pending ₹600) whenever the
+      // charge behind the payment no longer existed. A payment reversal never
+      // changes total, so this is equivalent on sound data and self-correcting
+      // on unsound data.
+      const newPending = Math.max(0, closingTotal - newPaid);
       const paymentPct = closingTotal > 0 ? Math.min((newPaid / closingTotal) * 100, 100) : 0;
+
+      const newPaidCount    = Math.max(0, Number(member.paidClosingCount || 0) - paidDocsCount);
+      const totalCount      = Number(member.totalClosingCount || 0);
+      const newPendingCount = totalCount > 0
+        ? Math.max(0, totalCount - newPaidCount)
+        : Number(member.pendingClosingCount || 0) + paidDocsCount;
+
+      if (currentPending !== closingTotal - currentPaid) {
+        console.warn(
+          `[ClosingRevert] member ${memberId} pending was inconsistent before revert ` +
+          `(stored ${currentPending}, expected ${closingTotal - currentPaid}) — corrected to ${newPending}`
+        );
+      }
 
       const memberUpdate = {
         closing_paidAmount:        newPaid,
         closing_pendingAmount:     newPending,
         closing_paymentPercentage: Number(paymentPct.toFixed(2)),
-        paidClosingCount:          Math.max(0, Number(member.paidClosingCount   || 0) - paidDocsCount),
-        pendingClosingCount:       Number(member.pendingClosingCount || 0) + paidDocsCount,
+        paidClosingCount:          newPaidCount,
+        pendingClosingCount:       newPendingCount,
         updated_at:                ts,
       };
       mb.update(memberRef, memberUpdate);

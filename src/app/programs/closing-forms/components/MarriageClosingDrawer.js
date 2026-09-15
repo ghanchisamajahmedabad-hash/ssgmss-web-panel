@@ -569,6 +569,57 @@ const MarriageClosingDrawer = ({ visible, onClose, members: allMembers = [], pro
             message.success(`Marriage closed for ${processed} member(s)`)
           }
 
+          // Members who were closed but could NOT be charged — almost always a
+          // payAmount of 0 from an age-group mismatch. This used to be a silent
+          // skip inside the API, so the member ended up closed with no pending
+          // raised for their own closing and nobody knew why.
+          const noPay  = result.summary?.noPayAmountClosedNow  ?? []
+          const noJoin = result.summary?.noJoinDateClosedNow   ?? []
+          const noDate = result.summary?.closedWithoutDate     ?? []
+
+          if (noPay.length || noJoin.length) {
+            Modal.warning({
+              title: 'Some members were closed but not charged',
+              width: 560,
+              content: (
+                <div style={{ fontSize: 13 }}>
+                  {noPay.length > 0 && (
+                    <>
+                      <p style={{ marginBottom: 4 }}>
+                        <b>{noPay.length} member(s) have no pay amount</b> — no closing pending was
+                        raised for them, not even for their own closing:
+                      </p>
+                      <ul style={{ paddingLeft: 18, marginBottom: 10 }}>
+                        {noPay.slice(0, 10).map(x => (
+                          <li key={x.memberId} style={{ fontSize: 12 }}>
+                            {x.name} ({x.registrationNumber || '—'})
+                            {x.ageGroupName ? ` — age group: ${x.ageGroupName}` : ' — no age group'}
+                          </li>
+                        ))}
+                        {noPay.length > 10 && <li style={{ fontSize: 12 }}>…and {noPay.length - 10} more</li>}
+                      </ul>
+                      <p style={{ fontSize: 12, color: '#6b7280' }}>
+                        Fix with <b>Settings → Fix Age Group &amp; Fees</b>, then close them again
+                        or re-run the group.
+                      </p>
+                    </>
+                  )}
+                  {noJoin.length > 0 && (
+                    <p style={{ fontSize: 12, marginTop: 8 }}>
+                      <b>{noJoin.length} member(s) have no readable join date</b> and were skipped.
+                    </p>
+                  )}
+                  {noDate.length > 0 && (
+                    <p style={{ fontSize: 12, marginTop: 8 }}>
+                      <b>{noDate.length} already-closed member(s) have no closing date</b>, so they
+                      were left out of this round. Set their date on the Closed list.
+                    </p>
+                  )}
+                </div>
+              ),
+            })
+          }
+
           await resetAll()
           onSuccess?.()
         } catch (e) {
