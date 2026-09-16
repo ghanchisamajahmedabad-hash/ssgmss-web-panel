@@ -122,8 +122,38 @@ class MultiBatch {
     this._cur().delete(ref);
     this._ops++;
   }
-  commit() {
-    return Promise.all(this._batches.map((b) => b.commit()));
+  // Commit SEQUENTIALLY and stop at the first failure.
+  //
+  // This used to be `Promise.all(batches.map(b => b.commit()))`, which fires
+  // every batch in parallel. A Firestore batch is atomic only WITHIN itself, so
+  // if one batch failed — a member doc deleted mid-run (update() throws when the
+  // document is missing, and that kills the whole batch), contention, a deadline
+  // — the other batches had already committed and still landed. The close was
+  // then HALF APPLIED: members marked closed with no amounts, or agent totals
+  // incremented for members whose own docs were never written. That is how a
+  // member ends up with pending greater than total, and how an agent's closing
+  // total drifts away from the sum of its members.
+  //
+  // Sequential commits can still leave earlier batches applied if a later one
+  // fails, but the failure is now deterministic, reported, and tells the caller
+  // exactly how far it got — instead of scattering writes unpredictably.
+  async commit() {
+    const committed = [];
+    for (let i = 0; i < this._batches.length; i++) {
+      try {
+        await this._batches[i].commit();
+        committed.push(i);
+      } catch (e) {
+        const err = new Error(
+          `Closing write failed on batch ${i + 1} of ${this._batches.length} ` +
+          `(${committed.length} already applied): ${e.message}. ` +
+          `Run Settings → Closing System Check to repair the partial write.`
+        );
+        err.partial = { failedBatch: i, total: this._batches.length, committed: committed.length };
+        throw err;
+      }
+    }
+    return committed;
   }
 }
 
@@ -220,18 +250,37 @@ export async function POST(req) {
       ? (existingGroupData?.memberGroupIds || memberGroups)
       : memberGroups;
 
+    // Firestore caps `in` at 30 values. This used to slice to 10 and say
+    // nothing, so selecting more than ten age groups SILENTLY EXCLUDED every
+    // member in groups 11+ from the paying set — they were eligible, were never
+    // charged, and no one was told. Raised to the real limit, and anything
+    // beyond it is now reported instead of dropped.
+    const IN_LIMIT = 30;
+    const droppedAgeGroups    = effectiveAgeGroups.slice(IN_LIMIT);
+    const droppedMemberGroups = effectiveMemberGroups.slice(IN_LIMIT);
+
     if (effectiveAgeGroups.length)
       membersQuery = membersQuery.where(
         "ageGroupId",
         "in",
-        effectiveAgeGroups.slice(0, 10)
+        effectiveAgeGroups.slice(0, IN_LIMIT)
       );
     if (effectiveMemberGroups.length)
       membersQuery = membersQuery.where(
         "memberGroupId",
         "in",
-        effectiveMemberGroups.slice(0, 10)
+        effectiveMemberGroups.slice(0, IN_LIMIT)
       );
+
+    if (droppedAgeGroups.length || droppedMemberGroups.length) {
+      return NextResponse.json({
+        success: false,
+        message:
+          `Too many groups selected: Firestore can filter on at most ${IN_LIMIT} at once. ` +
+          `${droppedAgeGroups.length} age group(s) and ${droppedMemberGroups.length} member group(s) ` +
+          `would be left out, so their members would never be charged. Close in smaller batches.`,
+      }, { status: 400 });
+    }
 
     const membersSnap = await membersQuery.get();
     const allProgramDocs = {};
@@ -254,11 +303,24 @@ export async function POST(req) {
     let totalPaymentAmount = 0;
     let totalPaymentCount = 0;
     const agentStats = {};
+    // Exact per-agent movement, derived from how far each of their members
+    // actually moved — see where it is filled in below.
+    const agentDeltas = {};
     const agentClosedCounts = {};      // agentId → number of THEIR members closed this run
     const paymentUpdatedIds = [];      // members getting a NEW payment entry this run
     const paymentPerMember = {};
     const closedIds = [];              // members being closed (marked) this run
     const skippedClose = [];
+
+    // One pending update per member, merged from the "mark closed" and "charge
+    // for these closings" steps. Both used to be issued as separate batch
+    // operations, which could land in different batches and be applied
+    // independently; keeping them together makes each member all-or-nothing.
+    const memberUpdates = new Map();   // memberId → update object
+    const stageMemberUpdate = (memberId, patch) => {
+      const prev = memberUpdates.get(memberId);
+      memberUpdates.set(memberId, prev ? { ...prev, ...patch } : { ...patch });
+    };
     // Already-closed members with no discoverable closing date — skipped rather
     // than charged, and surfaced in the response so the date can be filled in.
     const closedWithoutDate = [];
@@ -267,26 +329,74 @@ export async function POST(req) {
     const noPayAmount = [];
     const noJoinDate  = [];
 
-    // In add-mode: load existing closing_payment docs for all program members
-    // so we know which events each member has already been paid for.
-    // We'll use this to avoid double-counting previously paid events.
-    let existingPaymentDocsMap = {};   // memberId → closing_payment doc data
-    if (isAddMode && programMemberIds.length) {
+    // Load EVERY closing_payment doc for these members, across all groups —
+    // not just this group's.
+    //
+    // Two jobs. First, the original one: knowing which events a member has
+    // already been charged for in THIS group, so add-mode doesn't double-count.
+    //
+    // Second, and the reason a sync used to be needed afterwards: these docs are
+    // the source of truth for a member's closing figures. The member's
+    // closing_totalAmount / pendingAmount / counts used to be bumped with blind
+    // increments, which assume the stored value was already right — so any
+    // earlier error was carried forward for ever and only a full recalculation
+    // could clear it. With every doc in hand we can instead write the member's
+    // ABSOLUTE totals: the sum of their groups, including the one being written
+    // now. That makes each close self-correcting.
+    const allCpDocsByMember = {};      // memberId → [closing_payment docs]
+    let existingPaymentDocsMap = {};   // memberId → THIS group's doc
+
+    if (programMemberIds.length) {
       const cpSnaps = await Promise.all(
-        chunkArr(programMemberIds, 10).map((chunk) =>
-          db
-            .collection("closing_payment")
-            .where("closingGroupId", "==", computedGroupId)
-            .where("memberId", "in", chunk)
-            .get()
+        chunkArr(programMemberIds, 30).map((chunk) =>
+          db.collection("closing_payment").where("memberId", "in", chunk).get()
         )
       );
       cpSnaps.forEach((snap) =>
         snap.forEach((d) => {
-          if (d.exists) existingPaymentDocsMap[d.data().memberId] = { id: d.id, ...d.data() };
+          if (!d.exists) return;
+          const data = { id: d.id, ...d.data() };
+          if (data.isReversed === true) return;
+          (allCpDocsByMember[data.memberId] ||= []).push(data);
+          if (data.closingGroupId === computedGroupId) {
+            existingPaymentDocsMap[data.memberId] = data;
+          }
         })
       );
     }
+
+    // A member's authoritative closing figures: the sum of their closing_payment
+    // docs, with this group's doc replaced by what we are about to write.
+    const absoluteMemberTotals = (memberId, thisGroupDoc) => {
+      const docs = allCpDocsByMember[memberId] || [];
+      let total = 0, paid = 0, count = 0, paidCount = 0;
+
+      for (const d of docs) {
+        if (d.closingGroupId === computedGroupId) continue;   // replaced below
+        total     += Number(d.totalAmount  || 0);
+        paid      += Number(d.paidAmount   || 0);
+        count     += Number(d.closingCount || 0);
+        if (d.status === "paid") paidCount += Number(d.closingCount || 0);
+      }
+
+      if (thisGroupDoc) {
+        total     += Number(thisGroupDoc.totalAmount  || 0);
+        paid      += Number(thisGroupDoc.paidAmount   || 0);
+        count     += Number(thisGroupDoc.closingCount || 0);
+        if (thisGroupDoc.status === "paid") paidCount += Number(thisGroupDoc.closingCount || 0);
+      }
+
+      const pending = Math.max(0, total - paid);
+      return {
+        closing_totalAmount:   total,
+        closing_paidAmount:    paid,
+        closing_pendingAmount: pending,      // always total − paid, never drifts
+        totalClosingCount:     count,
+        paidClosingCount:      Math.min(paidCount, count),
+        pendingClosingCount:   Math.max(0, count - Math.min(paidCount, count)),
+        closing_paymentPercentage: total > 0 ? Number(((paid / total) * 100).toFixed(2)) : 0,
+      };
+    };
 
     // ── 4. Main loop ─────────────────────────────────────────────────────
     for (const memberId of programMemberIds) {
@@ -332,7 +442,10 @@ export async function POST(req) {
               closed_by: closedBy || null,
             };
 
-            mb.update(memberRef, {
+            // Staged, not written yet. A member gets ONE update covering both
+            // "you are closed" and "you owe this", so the two can never land in
+            // different batches and leave the member half-updated.
+            stageMemberUpdate(memberId, {
               programId,
               closingGroupId: computedGroupId,
               member_closed_at: now,
@@ -446,17 +559,56 @@ export async function POST(req) {
         agentStats[m.agentId].count += memberCount;
         agentStats[m.agentId].memberCount += isBeingClosedNow ? 1 : 0;
       }
+      // Deltas are filled in just below, once the member's new absolute totals
+      // are known, so the agent moves by exactly what its member moved by.
 
       // ── Update member doc counters ────────────────────────────────────────
-      mb.update(memberRef, {
-        closing_totalAmount: INC(memberPayment),
-        closing_pendingAmount: INC(memberPayment),
-        totalClosingCount: INC(memberCount),
-        pendingClosingCount: INC(memberCount),
+      // ABSOLUTE values derived from this member's closing_payment docs, not
+      // increments. An increment carries any pre-existing error forward for
+      // ever, which is why the figures had to be re-synced after every close;
+      // recomputing the totals makes the close correct on its own, and repairs
+      // a member whose numbers were already wrong.
+      const prior      = existingPaymentDocsMap[memberId];
+      const priorTotal = Number(prior?.totalAmount  || 0);
+      const priorPaid  = Number(prior?.paidAmount   || 0);
+      const priorCount = Number(prior?.closingCount || 0);
+
+      // What this group's doc will hold once the write below lands.
+      const newGroupTotal = priorTotal + memberPayment;
+      const newGroupCount = priorCount + memberCount;
+      const thisGroupDoc = {
+        totalAmount:  newGroupTotal,
+        paidAmount:   priorPaid,
+        closingCount: newGroupCount,
+        status:       priorPaid >= newGroupTotal && newGroupTotal > 0 ? "paid"
+                    : priorPaid > 0 ? "partial" : "pending",
+      };
+
+      const nextTotals = absoluteMemberTotals(memberId, thisGroupDoc);
+
+      // The agent aggregate is meant to be the sum of its members, so move it by
+      // exactly how much this member moved — new absolute minus what was stored.
+      // Using the raw charge instead would re-apply any error the member was
+      // already carrying, and leave the agent adrift from its members even after
+      // the member itself had been corrected.
+      if (m.agentId) {
+        const d = (agentDeltas[m.agentId] ??= {
+          total: 0, paid: 0, pending: 0, count: 0, paidCount: 0, pendingCount: 0,
+        });
+        d.total        += nextTotals.closing_totalAmount   - Number(m.closing_totalAmount   || 0);
+        d.paid         += nextTotals.closing_paidAmount    - Number(m.closing_paidAmount    || 0);
+        d.pending      += nextTotals.closing_pendingAmount - Number(m.closing_pendingAmount || 0);
+        d.count        += nextTotals.totalClosingCount     - Number(m.totalClosingCount     || 0);
+        d.paidCount    += nextTotals.paidClosingCount      - Number(m.paidClosingCount      || 0);
+        d.pendingCount += nextTotals.pendingClosingCount   - Number(m.pendingClosingCount   || 0);
+      }
+
+      stageMemberUpdate(memberId, {
+        ...nextTotals,
         updated_at: ts,
         closingGroupIds: admin.firestore.FieldValue.arrayUnion(computedGroupId),
-        [`closingGroupAmounts.${computedGroupId}`]: INC(memberPayment),
-        [`closingGroupCounts.${computedGroupId}`]: INC(memberCount),
+        [`closingGroupAmounts.${computedGroupId}`]: newGroupTotal,
+        [`closingGroupCounts.${computedGroupId}`]: newGroupCount,
       });
 
       // ── JOB 3: Write / merge closing_payment entry for this member ────────
@@ -543,6 +695,12 @@ export async function POST(req) {
       }
     }
 
+    // ── 4b. Flush the staged member updates ──────────────────────────────
+    // One write per member, carrying both the close flags and the amounts.
+    for (const [memberId, patch] of memberUpdates) {
+      mb.update(db.collection("members").doc(memberId), patch);
+    }
+
     // ── 5. Write / update group doc ──────────────────────────────────────
     if (isAddMode) {
       // Re-fetch the latest group doc to avoid stale merge
@@ -617,22 +775,36 @@ export async function POST(req) {
       ...Object.keys(agentClosedCounts),
     ]);
     for (const agentId of allAgentIds) {
-      const s = agentStats[agentId] || { amount: 0, count: 0 };
+      // Move the agent by exactly how far its members moved, not by the raw
+      // charge. When a member's figures were wrong and this run corrected them,
+      // the delta carries that correction up, so the agent stays equal to the
+      // sum of its members instead of needing a separate recalculation.
+      const d = agentDeltas[agentId] || {
+        total: 0, paid: 0, pending: 0, count: 0, paidCount: 0, pendingCount: 0,
+      };
       const closedN = agentClosedCounts[agentId] || 0;
-      mb.update(db.collection("agents").doc(agentId), {
-        closing_pendingAmount:  INC(s.amount),
-        closing_totalAmount:    INC(s.amount),
-        totalClosingCount:      INC(s.count),
-        pendingClosingCount:    INC(s.count),
-        closedCount:            INC(closedN),
-        [`programStats.${programId}.totalClosingAmount`]:        INC(s.amount),
-        [`programStats.${programId}.totalClosingPendingAmount`]: INC(s.amount),
-        [`programStats.${programId}.totalClosingCount`]:         INC(s.count),
-        [`programStats.${programId}.pendingClosingCount`]:       INC(s.count),
-        [`programStats.${programId}.closedCount`]:               INC(closedN),
-        [`programStats.${programId}.lastUpdated`]:               ts,
+
+      const agentUpdate = {
+        closedCount: INC(closedN),
+        [`programStats.${programId}.closedCount`]: INC(closedN),
+        [`programStats.${programId}.lastUpdated`]: ts,
         updated_at: ts,
-      });
+      };
+
+      // Skip zero movements so an unchanged field isn't rewritten needlessly.
+      const bump = (field, progField, value) => {
+        if (!value) return;
+        agentUpdate[field] = INC(value);
+        agentUpdate[`programStats.${programId}.${progField}`] = INC(value);
+      };
+      bump('closing_totalAmount',   'totalClosingAmount',        d.total);
+      bump('closing_paidAmount',    'totalClosingPaidAmount',    d.paid);
+      bump('closing_pendingAmount', 'totalClosingPendingAmount', d.pending);
+      bump('totalClosingCount',     'totalClosingCount',         d.count);
+      bump('paidClosingCount',      'paidClosingCount',          d.paidCount);
+      bump('pendingClosingCount',   'pendingClosingCount',       d.pendingCount);
+
+      mb.update(db.collection("agents").doc(agentId), agentUpdate);
     }
 
     const globalStats = {

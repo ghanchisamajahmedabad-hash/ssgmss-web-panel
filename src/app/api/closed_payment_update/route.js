@@ -371,11 +371,33 @@ export async function POST(req) {
     // NOTE: must use update(), NOT set({merge:true}) — the Admin SDK only
     // interprets dot-notation field paths in update(); set() would create
     // literal top-level fields named "programStats.x.y" (stats mismatch bug).
+    // Clamp the decrements so the agent can never go negative.
+    //
+    // INC(-grandTotalPaid) has no floor: whenever the agent's stored pending was
+    // already lower than the payment being applied — a member charged without
+    // the agent aggregate being updated, a half-applied close, a stat that was
+    // rebuilt in between — the subtraction ran straight past zero. That is how
+    // an agent ends up showing closing pending of -12,000. Reading the agent doc
+    // first and writing an absolute floor costs one read and makes the field
+    // impossible to corrupt this way.
+    const agentSnapNow  = await agentRef.get();
+    const agentNow      = agentSnapNow.exists ? agentSnapNow.data() : {};
+    const curPending    = Number(agentNow.closing_pendingAmount || 0);
+    const curPendCount  = Number(agentNow.pendingClosingCount   || 0);
+
+    if (curPending < grandTotalPaid) {
+      console.warn(
+        `[ClosingPayment] agent ${agentId} pending (${curPending}) is less than the ` +
+        `payment being applied (${grandTotalPaid}) — clamping to 0. Agent stats have ` +
+        `drifted from their members; run Sync Stats.`
+      );
+    }
+
     const agentUpdate = {
       closing_paidAmount:    INC(grandTotalPaid),
-      closing_pendingAmount: INC(-grandTotalPaid),
+      closing_pendingAmount: Math.max(0, curPending   - grandTotalPaid),
       paidClosingCount:      INC(grandTotalCount),
-      pendingClosingCount:   INC(-grandTotalCount),
+      pendingClosingCount:   Math.max(0, curPendCount - grandTotalCount),
       updated_at:            timestamp,
     };
     for (const [pid, delta] of Object.entries(programDeltas)) {
