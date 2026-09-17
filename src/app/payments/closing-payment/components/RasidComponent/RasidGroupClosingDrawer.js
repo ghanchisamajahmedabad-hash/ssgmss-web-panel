@@ -496,6 +496,62 @@ const RasidGroupClosingDrawer = ({ open, setOpen, agentId, preselectedGroupId, a
   const [rasidDate, setRasidDate] = useState(dayjs());
   const [rasidNote, setRasidNote] = useState('');
   const [previewList, setPreviewList] = useState([]);
+
+  // ── Outstanding per member, derived from their closing_payment docs ────────
+  //
+  // The member doc's cached closing_pendingAmount is what the summary used to
+  // print, and it shows ₹0 whenever that cache is stale or was zeroed — which
+  // is exactly the field this project has been repairing all along. The
+  // closing_payment docs are the source of truth, so the receipt derives the
+  // figure rather than trusting the cache, and reports when it cannot.
+  const [outstandingByMember, setOutstandingByMember] = useState({});
+  const [outstandingLoaded, setOutstandingLoaded]     = useState(false);
+
+  const loadOutstanding = useCallback(async (memberIds) => {
+    const ids = [...new Set(memberIds)].filter(Boolean);
+    if (!ids.length) { setOutstandingByMember({}); setOutstandingLoaded(true); return {}; }
+    try {
+      const chunks = [];
+      for (let i = 0; i < ids.length; i += 30) chunks.push(ids.slice(i, i + 30));
+      const snaps = await Promise.all(chunks.map(c =>
+        getDocs(query(collection(db, 'closing_payment'), where('memberId', 'in', c)))
+      ));
+      const map = {};
+      ids.forEach(id => { map[id] = { total: 0, paid: 0, pending: 0, docs: 0, thisGroup: null }; });
+      snaps.forEach(s => s.forEach(d => {
+        const cp = d.data();
+        if (cp.isReversed === true) return;
+        const e = map[cp.memberId];
+        if (!e) return;
+        e.total += Number(cp.totalAmount || 0);
+        e.paid  += Number(cp.paidAmount  || 0);
+        e.docs  += 1;
+        // Keep THIS group's doc: it records which closings this member was
+        // actually charged for, which is not the same as the closings selected
+        // on screen — see the note in buildRasid.
+        if (cp.closingGroupId === selectedGroupId) {
+          e.thisGroup = {
+            totalAmount:  Number(cp.totalAmount  || 0),
+            paidAmount:   Number(cp.paidAmount   || 0),
+            closingCount: Number(cp.closingCount || 0),
+            chargedIds:   new Set((cp.closingDetails || [])
+                            .map(x => x?.closed_memberId).filter(Boolean)),
+          };
+        }
+      }));
+      Object.values(map).forEach(e => { e.pending = Math.max(0, e.total - e.paid); });
+      setOutstandingByMember(map);
+      setOutstandingLoaded(true);
+      return map;
+    } catch (e) {
+      console.error('outstanding fetch failed:', e);
+      setOutstandingByMember({});
+      setOutstandingLoaded(false);
+      message.warning('Could not read closing records — outstanding column may be incomplete');
+      return {};
+    }
+  }, [selectedGroupId]);
+
   const [initialSelectDone, setInitialSelectDone] = useState(false);
 
   // ── Reset + fetch on open ──────────────────────────────────────────────────
@@ -507,6 +563,7 @@ const RasidGroupClosingDrawer = ({ open, setOpen, agentId, preselectedGroupId, a
       setPreviewList([]);
       setSearchGroup(''); setSearchClosing(''); setSearchAgent('');
       setAgentProgramFilter('all'); setAgentStatusFilter('all');
+      setOutstandingByMember({}); setOutstandingLoaded(false);
       setInitialSelectDone(false);
       fetchGroupClosings();
       if (agentId) fetchAgentMembers();
@@ -706,36 +763,58 @@ const RasidGroupClosingDrawer = ({ open, setOpen, agentId, preselectedGroupId, a
   const buildSummaryHTML = useCallback(() => {
     if (!previewList.length || !selectedGroup) return '';
     const dateStr = rasidDate.format('DD/MM/YYYY');
-    const selectedMemberIds = [...selAgentMembers];
     // Header-level agent line — same "(code) Name Phone" format the receipt
     // uses for कार्यकर्ता.
     const agentStr = agent
       ? [agent.agentCode ? `(${agent.agentCode})` : '', agent.name || '', agent.phone1 || agent.phone || ''].filter(Boolean).join(' ')
       : '—';
 
-    const rows = previewList.map((r, i) => {
-      const am = agentMembers.find(m => m.id === selectedMemberIds[i]) || {};
+    const rows = previewList.map((r) => {
+      // Look the member up by ID, not by position — see the note on memberId in
+      // buildRasid. Falls back to the values carried on the row itself.
+      const am = agentMembers.find(m => m.id === r.memberId) || {};
       // The summary table already has its own रजि. नं. column, so the name is
       // shown WITHOUT the reg-no prefix that buildRasid adds for the receipt.
-      const name = [am.displayName, am.fatherName ? '/ ' + am.fatherName : '']
+      const name = [am.displayName || r.displayName, (am.fatherName || r.fatherName) ? '/ ' + (am.fatherName || r.fatherName) : '']
                       .filter(Boolean).join(' ') || r.name;
+      // Derived from the member's closing_payment docs; the cached field on the
+      // member doc is only a fallback, and an em-dash is printed rather than a
+      // misleading ₹0 when neither source can tell us.
+      const derived = outstandingByMember[r.memberId];
+      const pendingAll = derived
+        ? derived.pending
+        : Number(am.closing_pendingAmount ?? r.memberPending ?? 0);
+      const pendingCell = (derived || am.closing_pendingAmount != null || r.memberPending != null)
+        ? `₹${pendingAll.toLocaleString()}`
+        : '—';
       return `
         <tr>
           <td class="c">${r.serialNo}</td>
           <td class="l">${name}</td>
-          <td class="c">${am.registrationNumber || '—'}</td>
+          <td class="c">${am.registrationNumber || r.registrationNumber || '—'}</td>
           <td class="c">${r.phone || '—'}</td>
           <td class="c">${r.entries?.length || 0}</td>
           <td class="c">₹${(r.sahyogRashi || 0).toLocaleString()}</td>
           <td class="c">₹${(r.totalAmount || 0).toLocaleString()}</td>
-          <td class="c">₹${(am.closing_pendingAmount || 0).toLocaleString()}</td>
+          <td class="c">${pendingCell}</td>
         </tr>
       `;
     }).join('');
 
     const totalMembers = previewList.length;
     const totalAmount = previewList.reduce((s, r) => s + (r.totalAmount || 0), 0);
-    const totalPending = agentMembers.filter(m => selAgentMembers.has(m.id)).reduce((s, m) => s + (m.closing_pendingAmount || 0), 0);
+    // NOTE: these two totals measure DIFFERENT THINGS and are not comparable.
+    // `totalAmount` is what THIS receipt charges (closings in this group ×
+    // each member's instalment). `totalPending` is what those members still owe
+    // across EVERY closing group. Sitting side by side under headings "कुल राशि"
+    // and "बकाया", it read as though ₹400 of the ₹1,200 was outstanding — the
+    // headings below now say which scope each one covers.
+    const totalPending = previewList.reduce((s, r) => {
+      const derived = outstandingByMember[r.memberId];
+      if (derived) return s + derived.pending;
+      const am = agentMembers.find(m => m.id === r.memberId);
+      return s + Number(am?.closing_pendingAmount ?? r.memberPending ?? 0);
+    }, 0);
     const totalCount = previewList.reduce((s, r) => s + (r.entries?.length || 0), 0);
 
     return `<!DOCTYPE html><html lang="hi"><head>
@@ -771,7 +850,7 @@ const RasidGroupClosingDrawer = ({ open, setOpen, agentId, preselectedGroupId, a
       <div class="print-bar">
         <button class="btn-print" onclick="window.print()">🖨 Print / Save PDF</button>
         <button class="btn-close" onclick="window.close()">✕ Close</button>
-        <span class="print-info">📄 ${totalMembers} members | Total Pending: ₹${totalPending.toLocaleString()}</span>
+        <span class="print-info">📄 ${totalMembers} members | This receipt: ₹${totalAmount.toLocaleString()} | Outstanding (all groups): ₹${totalPending.toLocaleString()}</span>
       </div>
       <div class="page">
         <div class="header">
@@ -793,8 +872,8 @@ const RasidGroupClosingDrawer = ({ open, setOpen, agentId, preselectedGroupId, a
             <th style="width:90px">फोन</th>
             <th style="width:70px">क्लोजिंग काउंट</th>
             <th style="width:80px">किस्त</th>
-            <th style="width:90px">कुल राशि</th>
-            <th style="width:90px">बकाया</th>
+            <th style="width:95px">इस रसीद की राशि</th>
+            <th style="width:95px">कुल बकाया<div style="font-size:8px;font-weight:400">(सभी ग्रुप)</div></th>
           </tr></thead>
           <tbody>${rows}
             <tr class="total-row">
@@ -806,15 +885,36 @@ const RasidGroupClosingDrawer = ({ open, setOpen, agentId, preselectedGroupId, a
             </tr>
           </tbody>
         </table>
+        ${previewList.some(r => r.notCharged) ? `
+        <div style="margin-top:6px;padding:6px 8px;border:1px solid #D3292F;background:#fff3f0;font-size:10px;color:#D3292F;line-height:1.5">
+          <b>ध्यान दें :</b> ${previewList.filter(r => r.notCharged).length} सदस्य के लिए इस ग्रुप में कोई क्लोजिंग राशि दर्ज नहीं है,
+          इसलिए उनकी राशि ₹0 दिख रही है। इनसे वसूली न करें जब तक क्लोजिंग एंट्री ठीक न हो जाए।
+        </div>` : ''}
+        ${previewList.some(r => r.chargeMismatch) ? `
+        <div style="margin-top:6px;padding:6px 8px;border:1px solid #D3292F;background:#fff3f0;font-size:10px;color:#D3292F;line-height:1.5">
+          <b>चेतावनी :</b> ${previewList.filter(r => r.chargeMismatch).length} सदस्य की दर्ज राशि उनकी क्लोजिंग गिनती × किस्त से मेल नहीं खाती।
+          रसीद दर्ज राशि दिखा रही है। कृपया Settings → Closing System Check चलाएँ।
+        </div>` : ''}
+        <div style="margin-top:6px;font-size:10px;color:#555;line-height:1.5">
+          <b>नोट :</b> "इस रसीद की राशि" = इस सदस्य से इस ग्रुप में वसूली जाने वाली दर्ज राशि
+          (केवल वे क्लोजिंग जिनके लिए यह सदस्य पात्र था — जॉइन डेट और अपनी क्लोजिंग डेट के अनुसार)।
+          "कुल बकाया" = सदस्य की सभी ग्रुप मिलाकर शेष राशि — इसमें पुराने ग्रुप भी शामिल हैं
+          और इसमें से कुछ भुगतान हो चुका हो सकता है। दोनों कॉलम अलग-अलग हैं, एक दूसरे का हिस्सा नहीं।
+        </div>
         <div class="footer">
           Generated on ${dayjs().format('DD MMM YYYY hh:mm A')} — SSGMS Trust
         </div>
       </div>
     </body></html>`;
-  }, [agent, agentMembers, selAgentMembers, selectedGroup, rasidDate, previewList, programList]);
+  }, [agent, agentMembers, selAgentMembers, selectedGroup, rasidDate, previewList, programList, outstandingByMember]);
 
   // ── Build rasid list ───────────────────────────────────────────────────────
-  const buildRasid = useCallback(() => {
+  // `chargeMap` is passed in by goToStep3 with the data it JUST fetched.
+  // Reading outstandingByMember from state here would see the value from before
+  // setOutstandingByMember() — React has not re-rendered yet — so every member
+  // fell through to the "no doc" branch and was billed for the whole selection.
+  const buildRasid = useCallback((chargeMap) => {
+    const charges = chargeMap || outstandingByMember;
     if (!selectedGroup || !selClosingMembers.size || !selAgentMembers.size) return [];
     const dateStr    = rasidDate.format('DD/MM/YYYY');
     const closingDs  = selectedGroup.closedAt?.toDate
@@ -848,6 +948,7 @@ const RasidGroupClosingDrawer = ({ open, setOpen, agentId, preselectedGroupId, a
         return 0;
       })
       .map(m => ({
+        id:     m.id,
         code:   m.registrationNumber || '',
         name:   [m.displayName, m.fatherName ? '/ '+m.fatherName : ''].filter(Boolean).join(' '),
         // Printed receipt shows place after the name as "गाँव - जिला" /
@@ -874,8 +975,52 @@ const RasidGroupClosingDrawer = ({ open, setOpen, agentId, preselectedGroupId, a
       .filter(m => selAgentMembers.has(m.id))
       .map(am => {
         const payAmt = am.payAmount || 0;
-        const total  = entries.length * payAmt;
+
+        // Charge what this member was ACTUALLY billed for, not the whole
+        // selection.
+        //
+        // `entries` is every closing ticked on screen, and this used to print
+        // entries.length × payAmount for everyone — the same figure for each
+        // paying member. But closed_payment_entry charges each member only for
+        // the closings they were eligible for: it skips events dated before
+        // they joined, and events after their own closing. A member who joined
+        // part-way through was charged for 2 of the 6 closings, yet the receipt
+        // billed them for all 6 — ₹1,200 on paper against ₹400 actually owed.
+        //
+        // The member's closing_payment doc for this group lists exactly which
+        // closings they were charged for, so the receipt now shows those rows
+        // and that doc's total.
+        const info       = charges[am.id];
+        const groupDoc   = info?.thisGroup || null;
+
+        // No closing_payment doc for this group means this member was never
+        // charged for it. Falling back to entries.length × payAmount here would
+        // INVENT a charge — printing ₹1,200 for a member the system has no
+        // record of billing. Show zero and flag them instead; a receipt must
+        // never ask for money that was never raised.
+        const myEntries  = groupDoc
+          ? entries.filter(e => groupDoc.chargedIds.has(e.id))
+          : [];
+        const total      = groupDoc ? groupDoc.totalAmount : 0;
+        const notCharged = !groupDoc;
+        // Flags a member whose recorded charge doesn't match its own rows, so a
+        // stale figure is visible rather than silently printed.
+        const chargeMismatch = !!groupDoc && groupDoc.totalAmount !== myEntries.length * payAmt;
+
         return {
+          entriesCharged: myEntries.length,
+          chargeMismatch,
+          notCharged,
+          // Carried so the summary table can look the member up BY ID. It used
+          // to pair previewList[i] with [...selAgentMembers][i] — a Set's
+          // iteration order against a filtered array's order — so a row's name,
+          // reg. no. and outstanding amount could be taken from a different
+          // member than the one the row was actually for.
+          memberId:     am.id,
+          registrationNumber: am.registrationNumber || '',
+          displayName:  am.displayName || '',
+          fatherName:   am.fatherName || '',
+          memberPending: Number(am.closing_pendingAmount || 0),
           serialNo:     String(serial++),
           date:         dateStr,
           // Printed receipt shows the code ahead of the name:
@@ -889,7 +1034,8 @@ const RasidGroupClosingDrawer = ({ open, setOpen, agentId, preselectedGroupId, a
           group:        selectedGroup.groupName || '',
           ageGroup:     closingAgeGroup || am.ageGroupName || am.memberGroupName || am.ageGroup || '',
           sahyogRashi:  payAmt,
-          entries,
+          // The rows THIS member was charged for — not the whole selection.
+          entries:      myEntries,
           totalAmount:  total,
           totalInWords: toWords(total),
           // "कार्यकर्ता : (100018) Vikash Borana 9427212990"
@@ -902,7 +1048,7 @@ const RasidGroupClosingDrawer = ({ open, setOpen, agentId, preselectedGroupId, a
           note,
         };
       });
-  }, [selectedGroup, selClosingMembers, selAgentMembers, agentMembers, rasidDate, rasidNote, programList]);
+  }, [selectedGroup, selClosingMembers, selAgentMembers, agentMembers, rasidDate, rasidNote, programList, outstandingByMember]);
 
   // ── Step nav ───────────────────────────────────────────────────────────────
   const goToStep2 = () => {
@@ -911,9 +1057,15 @@ const RasidGroupClosingDrawer = ({ open, setOpen, agentId, preselectedGroupId, a
     setStep(2);
   };
 
-  const goToStep3 = () => {
+  const goToStep3 = async () => {
     if (!selAgentMembers.size) { message.warning('Kam se kam ek agent member select karo!'); return; }
-    const list = buildRasid();
+    // Derive outstanding before building the preview, so the summary prints a
+    // real figure instead of a possibly-stale cached one. The map is handed
+    // straight to buildRasid — the state set inside loadOutstanding is not
+    // visible until the next render, so relying on it here would silently use
+    // the previous (empty) value.
+    const charges = await loadOutstanding([...selAgentMembers]);
+    const list = buildRasid(charges);
     setPreviewList(list);
     setStep(3);
   };
