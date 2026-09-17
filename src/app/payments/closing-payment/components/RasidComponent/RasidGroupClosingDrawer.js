@@ -769,7 +769,7 @@ const RasidGroupClosingDrawer = ({ open, setOpen, agentId, preselectedGroupId, a
       ? [agent.agentCode ? `(${agent.agentCode})` : '', agent.name || '', agent.phone1 || agent.phone || ''].filter(Boolean).join(' ')
       : '—';
 
-    const rows = previewList.map((r) => {
+    const rows = previewList.map((r, idx) => {
       // Look the member up by ID, not by position — see the note on memberId in
       // buildRasid. Falls back to the values carried on the row itself.
       const am = agentMembers.find(m => m.id === r.memberId) || {};
@@ -789,9 +789,10 @@ const RasidGroupClosingDrawer = ({ open, setOpen, agentId, preselectedGroupId, a
         : '—';
       return `
         <tr>
-          <td class="c">${r.serialNo}</td>
+          <td class="c">${idx + 1}</td>
           <td class="l">${name}</td>
           <td class="c">${am.registrationNumber || r.registrationNumber || '—'}</td>
+          <td class="c">${r.serialNo || '—'}</td>
           <td class="c">${r.phone || '—'}</td>
           <td class="c">${r.entries?.length || 0}</td>
           <td class="c">₹${(r.sahyogRashi || 0).toLocaleString()}</td>
@@ -869,6 +870,7 @@ const RasidGroupClosingDrawer = ({ open, setOpen, agentId, preselectedGroupId, a
             <th style="width:40px">क्र. सं.</th>
             <th>नाम</th>
             <th style="width:90px">रजि. नं.</th>
+            <th style="width:70px">रसीद नं.</th>
             <th style="width:90px">फोन</th>
             <th style="width:70px">क्लोजिंग काउंट</th>
             <th style="width:80px">किस्त</th>
@@ -877,7 +879,7 @@ const RasidGroupClosingDrawer = ({ open, setOpen, agentId, preselectedGroupId, a
           </tr></thead>
           <tbody>${rows}
             <tr class="total-row">
-              <td colspan="4" class="l">कुल योग (${totalMembers} सदस्य)</td>
+              <td colspan="5" class="l">कुल योग (${totalMembers} सदस्य)</td>
               <td class="c">${totalCount}</td>
               <td class="c">—</td>
               <td class="c">₹${totalAmount.toLocaleString()}</td>
@@ -969,7 +971,48 @@ const RasidGroupClosingDrawer = ({ open, setOpen, agentId, preselectedGroupId, a
     // paying member's own group.
     const closingAgeGroup = entries.find(e => e.ageGroup)?.ageGroup || '';
 
-    let serial = 10000 + (Date.now() % 9000);
+    // Receipt number: DETERMINISTIC, from the member + group.
+    //
+    // This was `10000 + (Date.now() % 9000)`, incremented per member — derived
+    // from the clock, so every rebuild of the preview produced a different set
+    // of numbers. Printing the receipt and printing the summary at two different
+    // moments gave the same member two different क्र. सं. (11982 vs 14649), and
+    // reprinting a receipt never reproduced the original number. A receipt
+    // number that changes is not an identifier.
+    //
+    // Hashing memberId + groupId means the same member in the same closing
+    // group always gets the same number, on every rebuild and every reprint,
+    // without needing to store anything.
+    const serialFor = (memberId) => {
+      const key = `${selectedGroup.id || selectedGroupId || ''}:${memberId}`;
+      let h = 2166136261;                       // FNV-1a
+      for (let i = 0; i < key.length; i++) {
+        h ^= key.charCodeAt(i);
+        h = Math.imul(h, 16777619);
+      }
+      return String(10000 + (Math.abs(h) % 90000));   // stable 5-digit
+    };
+
+    // Two members could hash to the same number. Resolve collisions over the
+    // member ids in SORTED order rather than in selection order, so which member
+    // keeps the base number doesn't depend on who happened to be ticked first —
+    // the same member always ends up with the same receipt number.
+    const serialByMember = (() => {
+      const ids = agentMembers
+        .filter(m => selAgentMembers.has(m.id))
+        .map(m => m.id)
+        .sort();
+      const used = new Set();
+      const out = {};
+      for (const id of ids) {
+        let n = Number(serialFor(id));
+        while (used.has(n)) n = n >= 99999 ? 10000 : n + 1;
+        used.add(n);
+        out[id] = String(n);
+      }
+      return out;
+    })();
+    const uniqueSerial = (memberId) => serialByMember[memberId] || serialFor(memberId);
 
     return agentMembers
       .filter(m => selAgentMembers.has(m.id))
@@ -1021,7 +1064,7 @@ const RasidGroupClosingDrawer = ({ open, setOpen, agentId, preselectedGroupId, a
           displayName:  am.displayName || '',
           fatherName:   am.fatherName || '',
           memberPending: Number(am.closing_pendingAmount || 0),
-          serialNo:     String(serial++),
+          serialNo:     uniqueSerial(am.id),
           date:         dateStr,
           // Printed receipt shows the code ahead of the name:
           // "V100151 महेश / राजुभाई"
