@@ -215,6 +215,15 @@ function openPrintWindow(rasidList) {
       </div>
 
       <div class="info-row">
+        <div class="info-item">
+          <span class="lbl">रजि. नं.</span>
+          <span class="sep"> : </span>
+          <span class="val">${d.regNo || '—'}</span>
+          ${d.oldRegNo ? `&nbsp;&nbsp;<span class="lbl">पुराना नं.</span><span class="sep"> : </span><span class="val">${d.oldRegNo}</span>` : ''}
+        </div>
+      </div>
+
+      <div class="info-row">
         <div class="info-item" style="flex:1">
           <span class="lbl">पता</span>
           <span class="sep"> : </span>
@@ -1161,14 +1170,13 @@ const RasidGroupClosingDrawer = ({ open, setOpen, agentId, preselectedGroupId, a
           date:         dateStr,
           // Printed receipt shows the code ahead of the name:
           // "V100151 महेश / राजुभाई"
-          name:         [
-                          am.registrationNumber,
-                          // Members carried over from the old system are still known by
-                          // their old application number in the villages, so print both.
-                          getOldRegNo(am) ? `(पुराना: ${getOldRegNo(am)})` : '',
-                          am.displayName,
-                          am.fatherName ? '/ '+am.fatherName : '',
-                        ].filter(Boolean).join(' '),
+          // Name only. The registration number used to be prefixed onto this
+          // string, which made the receipt read "MEM719396 विकास कुमार" under a
+          // "नाम" label; it now has its own labelled field alongside the old
+          // application number.
+          name:         [am.displayName, am.fatherName ? '/ '+am.fatherName : '']
+                          .filter(Boolean).join(' '),
+          regNo:        am.registrationNumber || '',
           phone:        am.phone || '',
           address:      [am.village, am.city, am.state].filter(Boolean).join(', '),
           village:      am.village || '',
