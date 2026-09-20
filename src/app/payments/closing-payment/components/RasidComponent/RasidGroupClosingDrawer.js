@@ -837,102 +837,24 @@ const RasidGroupClosingDrawer = ({ open, setOpen, agentId, preselectedGroupId, a
     }, 0);
     const totalCount = previewList.reduce((s, r) => s + (r.entries?.length || 0), 0);
 
-    // ── Paginate onto A4 portrait sheets ─────────────────────────────────────
-    // The summary used to be ONE .page with min-height, so it grew into a single
-    // very tall sheet: the browser split it wherever it happened to run out of
-    // paper, the column headings appeared only on the first page, and the total
-    // row landed mid-page. Fixed-height pages with an explicit row budget keep
-    // every sheet a real A4 and repeat the headings.
-    const ROWS_PER_PAGE      = 32;   // fits 297mm tall minus header and footer
-    const ROWS_ON_LAST_PAGE  = 26;   // last sheet also carries totals and notes
-
-    const chunks = [];
-    for (let i = 0; i < rowHtml.length; i += ROWS_PER_PAGE) {
-      chunks.push(rowHtml.slice(i, i + ROWS_PER_PAGE));
-    }
-    if (!chunks.length) chunks.push([]);
-
-    // The LAST sheet also carries the totals row and the notes, so it holds
-    // fewer rows. If filling pages evenly left it too full, split it in two —
-    // otherwise the totals would be pushed off the bottom of a fixed-height A4.
-    const lastChunk = chunks[chunks.length - 1];
-    if (lastChunk.length > ROWS_ON_LAST_PAGE) {
-      chunks.pop();
-      const half = Math.ceil(lastChunk.length / 2);
-      chunks.push(lastChunk.slice(0, half), lastChunk.slice(half));
-    }
-
+    // ── Pagination ───────────────────────────────────────────────────────────
+    // Handled by the BROWSER, not by slicing rows into fixed-size chunks here.
+    //
+    // The manual version budgeted a row count per sheet, which only works while
+    // every row is the same height. Once the old application number added a
+    // second line to the रजि. नं. column — and longer villages wrapped too —
+    // rows grew from ~21px to ~30px, 32 of them no longer fitted 297mm, and the
+    // sheet overflowed: the browser then split it wherever it ran out of paper,
+    // leaving half-empty pages and gaps.
+    //
+    // `thead{display:table-header-group}` makes the browser repeat the column
+    // headings on every printed page by itself, and `tr{page-break-inside:avoid}`
+    // keeps a member's row whole. The result fills each page completely whatever
+    // the row heights turn out to be.
     const yojanaLabel = selectedGroup.yojanaName
       || (programList || []).find(p => p.id === selectedGroup.programId)?.hindiName
       || (programList || []).find(p => p.id === selectedGroup.programId)?.name
       || '—';
-
-    const tableHead = `
-          <thead><tr>
-            <th style="width:30px">क्र.<br>सं.</th>
-            <th style="min-width:230px">नाम / पिता</th>
-            <th style="width:92px">रजि. नं.</th>
-            <th style="width:70px">गाँव</th>
-            <th style="width:74px">फोन</th>
-            <th style="width:42px">क्लोजिंग<br>काउंट</th>
-            <th style="width:48px">किस्त</th>
-            <th style="width:76px">इस रसीद<br>की राशि</th>
-            <th style="width:76px">कुल बकाया<div style="font-size:7px;font-weight:400">(सभी ग्रुप)</div></th>
-          </tr></thead>`;
-
-    const notesHtml = `
-        ${previewList.some(r => r.notCharged) ? `
-        <div class="warn">
-          <b>ध्यान दें :</b> ${previewList.filter(r => r.notCharged).length} सदस्य के लिए इस ग्रुप में कोई क्लोजिंग राशि दर्ज नहीं है,
-          इसलिए उनकी राशि ₹0 दिख रही है। इनसे वसूली न करें जब तक क्लोजिंग एंट्री ठीक न हो जाए।
-        </div>` : ''}
-        ${previewList.some(r => r.chargeMismatch) ? `
-        <div class="warn">
-          <b>चेतावनी :</b> ${previewList.filter(r => r.chargeMismatch).length} सदस्य की दर्ज राशि उनकी क्लोजिंग गिनती × किस्त से मेल नहीं खाती।
-          रसीद दर्ज राशि दिखा रही है। कृपया Settings → Closing System Check चलाएँ।
-        </div>` : ''}
-        <div class="note">
-          <b>नोट :</b> "इस रसीद की राशि" = इस सदस्य से इस ग्रुप में वसूली जाने वाली दर्ज राशि
-          (केवल वे क्लोजिंग जिनके लिए यह सदस्य पात्र था — जॉइन डेट और अपनी क्लोजिंग डेट के अनुसार)।
-          "कुल बकाया" = सदस्य की सभी ग्रुप मिलाकर शेष राशि — इसमें पुराने ग्रुप भी शामिल हैं
-          और इसमें से कुछ भुगतान हो चुका हो सकता है। दोनों कॉलम अलग-अलग हैं, एक दूसरे का हिस्सा नहीं।
-        </div>`;
-
-    const pages = chunks.map((chunk, pi) => {
-      const isLast = pi === chunks.length - 1;
-      return `
-      <div class="page">
-        <div class="header">
-          <h2>श्री क्षत्रिय घांची मोदी समाज सेवा संस्थान ट्रस्ट</h2>
-          <p>क्लोजिंग पेमेंट सारांश — ${selectedGroup.groupName || 'Group'} · ${dateStr}</p>
-        </div>
-        <div class="info-row">
-          <span><b>एजेंट :</b> ${agentStr}</span>
-          <span><b>ग्रुप :</b> ${selectedGroup.groupName || '—'}</span>
-          <span><b>योजना :</b> ${yojanaLabel}</span>
-          <span><b>कुल सदस्य :</b> ${totalMembers}</span>
-          <span><b>दिनांक :</b> ${dateStr}</span>
-        </div>
-        <table>
-          ${tableHead}
-          <tbody>${chunk.join('')}
-            ${isLast ? `
-            <tr class="total-row">
-              <td colspan="5" class="l">कुल योग (${totalMembers} सदस्य)</td>
-              <td class="c">${totalCount}</td>
-              <td class="c">—</td>
-              <td class="c">₹${totalAmount.toLocaleString()}</td>
-              <td class="c">₹${totalPending.toLocaleString()}</td>
-            </tr>` : ''}
-          </tbody>
-        </table>
-        ${isLast ? notesHtml : ''}
-        <div class="footer">
-          पृष्ठ ${pi + 1} / ${chunks.length}
-          ${isLast ? `&nbsp;·&nbsp; Generated on ${dayjs().format('DD MMM YYYY hh:mm A')} — SSGMS Trust` : ''}
-        </div>
-      </div>`;
-    }).join('');
 
     return `<!DOCTYPE html><html lang="hi"><head>
       <meta charset="utf-8">
@@ -946,15 +868,11 @@ const RasidGroupClosingDrawer = ({ open, setOpen, agentId, preselectedGroupId, a
         .btn-print{background:#D3292F;color:#fff;border:none;padding:10px 28px;border-radius:6px;cursor:pointer;font-weight:700;font-size:14px;font-family:inherit}
         .btn-close{background:rgba(255,255,255,.15);color:#fff;border:1px solid rgba(255,255,255,.3);padding:10px 20px;border-radius:6px;cursor:pointer;font-size:14px;font-family:inherit}
         @page{size:A4 portrait;margin:8mm}
-        /* On screen each chunk is drawn as a full A4 portrait sheet. min-height
-           (not height) so a row that wraps makes the sheet a little taller
-           instead of being clipped — silently cutting members off the bottom is
-           worse than a slightly long page, and it stays visible here.
-           Page breaks are handled once, in @media print, with page-break-AFTER;
-           combining that with a page-break-before rule here produced a blank
-           sheet between every page. */
-        .page{width:210mm;min-height:297mm;background:#fff;margin:18px auto;padding:6mm 7mm;box-shadow:0 6px 28px rgba(0,0,0,.25);position:relative;display:flex;flex-direction:column}
-        table{flex:0 0 auto}
+        /* One continuous sheet — the browser decides where the page breaks
+           fall. A fixed 297mm height here is what caused the half-empty pages:
+           once rows grew to two lines the content no longer fitted the box, the
+           box grew past one physical page, and the printer split it arbitrarily. */
+        .page{width:210mm;background:#fff;margin:18px auto;padding:6mm 7mm;box-shadow:0 6px 28px rgba(0,0,0,.25);position:relative}
         .warn{margin-top:5px;padding:5px 7px;border:1px solid #D3292F;background:#fff3f0;font-size:8.5px;color:#D3292F;line-height:1.45}
         .note{margin-top:5px;font-size:8.5px;color:#555;line-height:1.45}
         .oldreg{font-size:7.5px;color:#777;line-height:1.2;margin-top:1px}
@@ -975,38 +893,84 @@ const RasidGroupClosingDrawer = ({ open, setOpen, agentId, preselectedGroupId, a
         th.name,td.name{text-align:left;padding-left:6px}
         tr:nth-child(even){background:#fafafa}
         .total-row td{font-weight:700;background:#fff3f0;font-size:10px}
-        .footer{text-align:center;margin-top:auto;padding-top:5px;border-top:1.5px solid #D3292F;font-size:8.5px;color:#666}
+        .footer{text-align:center;margin-top:10px;padding-top:5px;border-top:1.5px solid #D3292F;font-size:8.5px;color:#666}
         @media print{
           html,body{background:#fff;margin:0;padding:0}
           .print-bar{display:none!important}
-          /* @page already sets the A4 portrait sheet and its margins, so each
-             .page fills that box rather than carrying its own mm size — keeping
-             210mm here would add the page's width on top of the printer margin
-             and push every sheet onto two. height must be auto for the same
-             reason; the per-page row budget is what keeps one chunk to one
-             sheet. Earlier this also set width/height auto but left the flex
-             layout and the break rule mismatched, so the sheets ran together. */
-          .page{
-            width:100%; height:auto; min-height:0;
-            margin:0; padding:0; box-shadow:none;
-            display:block;                       /* margin-top:auto footer needs flex; not in print */
-            page-break-after:always; break-after:page;
-            page-break-inside:avoid; break-inside:avoid;
-          }
-          .page:last-child{page-break-after:auto; break-after:auto}
+          /* @page owns the paper and its margins; the sheet just fills it. */
+          .page{width:auto;margin:0;padding:0;box-shadow:none}
           .page::before{display:none}            /* absolute watermark can spawn a blank sheet */
-          .footer{margin-top:10px}
+
+          /* The browser repeats these on every printed page, so each sheet
+             carries its own column headings without us slicing the rows. */
           thead{display:table-header-group}
+          tfoot{display:table-footer-group}
           tr{page-break-inside:avoid; break-inside:avoid}
-        }
-      </style>
+          /* Keep the totals row with the table, and the notes together. */
+          .total-row{page-break-inside:avoid}
+          .warn,.note{page-break-inside:avoid}
+        }</style>
     </head><body>
       <div class="print-bar">
         <button class="btn-print" onclick="window.print()">🖨 Print / Save PDF</button>
         <button class="btn-close" onclick="window.close()">✕ Close</button>
         <span class="print-info">📄 ${totalMembers} members | This receipt: ₹${totalAmount.toLocaleString()} | Outstanding (all groups): ₹${totalPending.toLocaleString()}</span>
       </div>
-      ${pages}
+      <div class="page">
+        <div class="header">
+          <h2>श्री क्षत्रिय घांची मोदी समाज सेवा संस्थान ट्रस्ट</h2>
+          <p>क्लोजिंग पेमेंट सारांश — ${selectedGroup.groupName || 'Group'} · ${dateStr}</p>
+        </div>
+        <div class="info-row">
+          <span><b>एजेंट :</b> ${agentStr}</span>
+          <span><b>ग्रुप :</b> ${selectedGroup.groupName || '—'}</span>
+          <span><b>योजना :</b> ${yojanaLabel}</span>
+          <span><b>कुल सदस्य :</b> ${totalMembers}</span>
+          <span><b>दिनांक :</b> ${dateStr}</span>
+        </div>
+        <table>
+          <thead><tr>
+            <th style="width:30px">क्र.<br>सं.</th>
+            <th style="min-width:180px">नाम / पिता</th>
+            <th style="width:92px">रजि. नं.</th>
+            <th style="width:70px">गाँव</th>
+            <th style="width:74px">फोन</th>
+            <th style="width:42px">क्लोजिंग<br>काउंट</th>
+            <th style="width:48px">किस्त</th>
+            <th style="width:76px">इस रसीद<br>की राशि</th>
+            <th style="width:76px">कुल बकाया<div style="font-size:7px;font-weight:400">(सभी ग्रुप)</div></th>
+          </tr></thead>
+          <tbody>
+            ${rowHtml.join('')}
+            <tr class="total-row">
+              <td colspan="5" class="l">कुल योग (${totalMembers} सदस्य)</td>
+              <td class="c">${totalCount}</td>
+              <td class="c">—</td>
+              <td class="c">₹${totalAmount.toLocaleString()}</td>
+              <td class="c">₹${totalPending.toLocaleString()}</td>
+            </tr>
+          </tbody>
+        </table>
+        ${previewList.some(r => r.notCharged) ? `
+        <div class="warn">
+          <b>ध्यान दें :</b> ${previewList.filter(r => r.notCharged).length} सदस्य के लिए इस ग्रुप में कोई क्लोजिंग राशि दर्ज नहीं है,
+          इसलिए उनकी राशि ₹0 दिख रही है। इनसे वसूली न करें जब तक क्लोजिंग एंट्री ठीक न हो जाए।
+        </div>` : ''}
+        ${previewList.some(r => r.chargeMismatch) ? `
+        <div class="warn">
+          <b>चेतावनी :</b> ${previewList.filter(r => r.chargeMismatch).length} सदस्य की दर्ज राशि उनकी क्लोजिंग गिनती × किस्त से मेल नहीं खाती।
+          रसीद दर्ज राशि दिखा रही है। कृपया Settings → Closing System Check चलाएँ।
+        </div>` : ''}
+        <div class="note">
+          <b>नोट :</b> "इस रसीद की राशि" = इस सदस्य से इस ग्रुप में वसूली जाने वाली दर्ज राशि
+          (केवल वे क्लोजिंग जिनके लिए यह सदस्य पात्र था — जॉइन डेट और अपनी क्लोजिंग डेट के अनुसार)।
+          "कुल बकाया" = सदस्य की सभी ग्रुप मिलाकर शेष राशि — इसमें पुराने ग्रुप भी शामिल हैं
+          और इसमें से कुछ भुगतान हो चुका हो सकता है। दोनों कॉलम अलग-अलग हैं, एक दूसरे का हिस्सा नहीं।
+        </div>
+        <div class="footer">
+          Generated on ${dayjs().format('DD MMM YYYY hh:mm A')} — SSGMS Trust
+        </div>
+      </div>
     </body></html>`;
   }, [agent, agentMembers, selAgentMembers, selectedGroup, rasidDate, previewList, programList, outstandingByMember]);
 
