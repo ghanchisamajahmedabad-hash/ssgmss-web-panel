@@ -9,6 +9,7 @@ import { PDFDownloadLink } from '@react-pdf/renderer'
 import dayjs from 'dayjs'
 import ClosingRasidPdf from './ClosingRasidPdf'
 import ClosingEntryCard from './ClosingEntryCard'
+import { memberLateness, LATE_LABEL, GRACE_DAYS } from './closingLateness'
 
 const fmtDate = (d) => {
   if (!d) return '—'
@@ -65,6 +66,13 @@ const ClosingEntriesList = ({
         ['Events',  stored.count,   docTotals.count],
       ].filter(([, s, d]) => s !== d)
     : []
+
+  // ── 45-day rule ────────────────────────────────────────────────────────────
+  // Each closing instalment is due GRACE_DAYS after that closing's own date.
+  const late = React.useMemo(
+    () => memberLateness(closingEntries || []),
+    [closingEntries]
+  )
 
   const [rechecking, setRechecking] = useState(false)
 
@@ -152,6 +160,61 @@ const ClosingEntriesList = ({
             </div>
           }
         />
+      )}
+
+      {/* 45-day payment discipline */}
+      {late.total > 0 && (
+        <Card size="small" style={{ borderRadius: 8 }}
+          title={<span style={{ fontSize: 12 }}>
+            <ClockCircleOutlined style={{ marginRight: 6 }} />
+            भुगतान समय — प्रत्येक क्लोजिंग की तारीख से {GRACE_DAYS} दिन के अंदर
+          </span>}>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+            {[
+              { t: 'समय पर',        v: late.paidOnTime, c: '#52c41a' },
+              { t: 'देर से भुगतान',  v: late.paidLate,   c: '#faad14' },
+              { t: 'अतिदेय (बकाया)', v: late.overdue,    c: '#ff4d4f' },
+              { t: 'समय बाकी',      v: late.pendingDue, c: '#1890ff' },
+            ].map((x, i) => (
+              <div key={i} className="bg-gray-50 rounded-lg p-2 text-center">
+                <div className="text-lg font-bold" style={{ color: x.c }}>{x.v}</div>
+                <div className="text-2xs text-gray-500">{x.t}</div>
+              </div>
+            ))}
+          </div>
+
+          <div className="mt-2 text-xs text-gray-600 space-y-1">
+            {late.paidLate > 0 && (
+              <div>
+                देर से चुकाई गई किस्तों में अधिकतम <b style={{ color: '#faad14' }}>{late.maxDaysLate} दिन</b> की देरी
+                {late.avgDaysLate > 0 && <> · औसत <b>{late.avgDaysLate} दिन</b></>}
+              </div>
+            )}
+            {late.overdue > 0 && (
+              <div style={{ color: '#ff4d4f' }}>
+                <b>{late.overdue}</b> किस्त अभी बकाया — सबसे पुरानी <b>{late.maxOverdueDays} दिन</b> से अतिदेय
+              </div>
+            )}
+            {late.overdue === 0 && late.nextDueDate && (
+              <div>अगली अंतिम तिथि : <b>{late.nextDueDate.format('DD-MM-YYYY')}</b></div>
+            )}
+            {late.unknown > 0 && (
+              <div style={{ color: '#9ca3af' }}>
+                {late.unknown} क्लोजिंग की तारीख उपलब्ध नहीं — उनकी देरी नहीं गिनी गई
+              </div>
+            )}
+          </div>
+
+          {late.hasApproximate && (
+            <Alert
+              type="info" showIcon style={{ marginTop: 8, borderRadius: 6 }}
+              message={<span style={{ fontSize: 10 }}>
+                कुछ ग्रुप आंशिक रूप से चुकाए गए हैं। भुगतान ग्रुप स्तर पर दर्ज होता है, किस्त-वार नहीं —
+                इसलिए किस किस्त का भुगतान हुआ यह राशि के आधार पर (पुरानी पहले) अनुमानित है।
+              </span>}
+            />
+          )}
+        </Card>
       )}
 
       {/* Filter + PDF bar */}

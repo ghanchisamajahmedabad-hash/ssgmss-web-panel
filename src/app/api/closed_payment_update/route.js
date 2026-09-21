@@ -133,6 +133,21 @@ export async function POST(req) {
     }
 
     // ── Agent ──────────────────────────────────────────────────────────────
+
+    // A member with no agent would reach db.collection('agents').doc('') below,
+    // which Firestore rejects with the opaque "documentPath is not a valid
+    // resource path" — an error that says nothing about the real problem. Fail
+    // early with something the user can act on.
+    if (!agentId || typeof agentId !== 'string' || !agentId.trim()) {
+      // The idempotency key was already claimed above; release it so a genuine
+      // retry (once an agent is assigned) isn't rejected as a duplicate.
+      await releaseIdempotency();
+      return NextResponse.json({
+        success: false,
+        message: 'This member has no agent assigned, so the payment cannot be recorded against one. Assign an agent to the member first.',
+      }, { status: 400 });
+    }
+
     const agentRef = db.collection('agents').doc(agentId);
     const agentDoc = await agentRef.get();
     if (!agentDoc.exists) throw new Error('Agent not found');

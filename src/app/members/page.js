@@ -734,6 +734,51 @@ const handleDeleteMember = (member) => {
     } catch { message.error('Failed to update member status') }
   }
 
+  // ── Close a member without raising any instalment ──────────────────────────
+  //
+  // The normal close also charges every other eligible member of the yojna,
+  // which is right for a closing happening now and wrong for one that already
+  // happened in the old system — that money was collected outside this app.
+  // This sets the status and the date and nothing else.
+  //
+  // The date is required: api/closed_payment_entry treats a closed member it
+  // cannot date as still open, so a dateless close would keep charging them.
+  const [closeNoPayMember, setCloseNoPayMember] = useState(null)
+  const [closeNoPayDate, setCloseNoPayDate]     = useState(null)
+  const [closeNoPaySaving, setCloseNoPaySaving] = useState(false)
+
+  const openCloseNoPay = (member) => {
+    setCloseNoPayMember(member)
+    setCloseNoPayDate(null)
+  }
+
+  const submitCloseNoPay = async () => {
+    if (!closeNoPayDate) { message.error('समापन दिनांक चुनें'); return }
+    setCloseNoPaySaving(true)
+    try {
+      const token = await auth.currentUser?.getIdToken()
+      const res = await fetch('/api/members/migrate-close', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          memberId: closeNoPayMember.id,
+          closedDate: closeNoPayDate.format('YYYY-MM-DD'),
+        }),
+      })
+      const data = await res.json()
+      if (!data.success) throw new Error(data.message)
+      message.success(data.message)
+      setCloseNoPayMember(null)
+      searchMode === 'search' && filters.search
+        ? searchMembers(filters.search)
+        : fetchMembers(pagination.current, false)
+    } catch (e) {
+      message.error('बंद नहीं हो सका: ' + e.message)
+    } finally {
+      setCloseNoPaySaving(false)
+    }
+  }
+
   const columns = [
     {
       title: 'Sr.',
@@ -934,6 +979,15 @@ const handleDeleteMember = (member) => {
     key: 'toggle',
     label: record.active_flag ? 'Deactivate' : 'Activate',
     onClick: () => handleToggleStatus(record)
+  },
+
+  // Only for a member who isn't closed yet — closing an already-closed
+  // member again would add a second closedStatus entry.
+  can('edit') && !record.member_closed && {
+    key: 'close_no_pay',
+    label: 'बंद करें (बिना किस्त)',
+    icon: <StopOutlined />,
+    onClick: () => openCloseNoPay(record)
   },
 
   can('delete') && { type: 'divider' },
@@ -2088,6 +2142,50 @@ ${filterHtml}
           onDeleteSuccess={handlePaymentDeleteSuccess}
         />
       )}
+
+      {/* Close without raising any instalment — for closings already handled
+          in the old system. */}
+      <Modal
+        open={!!closeNoPayMember}
+        title="सदस्य बंद करें — बिना किस्त"
+        onCancel={() => setCloseNoPayMember(null)}
+        onOk={submitCloseNoPay}
+        okText="बंद करें"
+        cancelText="रुकें"
+        okButtonProps={{ danger: true, loading: closeNoPaySaving, disabled: !closeNoPayDate }}
+        destroyOnClose
+        width={460}
+      >
+        <div className="mb-3">
+          <div className="font-semibold">{closeNoPayMember?.displayName}</div>
+          <div className="text-xs text-gray-500">
+            {closeNoPayMember?.registrationNumber} · {closeNoPayMember?.phone || '—'}
+          </div>
+        </div>
+
+        <div className="mb-2 text-xs text-gray-500">समापन दिनांक *</div>
+        <DatePicker
+          style={{ width: '100%' }}
+          format="DD-MM-YYYY"
+          value={closeNoPayDate}
+          onChange={setCloseNoPayDate}
+          disabledDate={(d) => d && d > dayjs().endOf('day')}
+          placeholder="दिनांक चुनें"
+        />
+
+        <Alert
+          type="info"
+          showIcon
+          className="mt-3"
+          message="कोई किस्त नहीं जुड़ेगी"
+          description={
+            <span className="text-xs">
+              सिर्फ़ स्थिति <b>बंद</b> और समापन दिनांक दर्ज होगी। न कोई रसीद बनेगी,
+              न किसी सदस्य या एजेंट का बकाया बदलेगा।
+            </span>
+          }
+        />
+      </Modal>
 
       <PdfAutoDownloader pdfMeta={pdfMeta} onDone={() => setPdfMeta(null)} />
     </div>

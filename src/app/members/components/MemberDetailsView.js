@@ -28,6 +28,7 @@ import PaymentHistoryPdf from './MemberPdf/PaymentHistoryPdf'
 import MemberDetailsPdf from './MemberPdf/MemberDetailsPdf'
 import ClosingRasidPdf from './ClosingRasidPdf'
 import ClosingEntriesList from './ClosingEntriesList'
+import MemberCredentialsCard from './MemberCredentialsCard'
 import { collection, query, where, getDocs, orderBy, doc, getDoc } from 'firebase/firestore'
 import { getAuth } from 'firebase/auth'
 import dayjs from 'dayjs'
@@ -108,7 +109,17 @@ const MemberDetailDrawer = ({ member: memberProp, visible, onClose, programList,
       const headers = { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }
 
       const paymentDate = values.paymentDate?.format('YYYY-MM-DD') || dayjs().format('YYYY-MM-DD')
+
+      // Both payment APIs record the payment against the member's agent. With
+      // no agent the request used to reach Firestore as .doc('') and come back
+      // as "documentPath is not a valid resource path" — which tells the user
+      // nothing. Catch it here, before the round trip.
       const agentId = member?.agentId || ''
+      if (!agentId) {
+        message.error('This member has no agent assigned. Assign one before recording a payment.')
+        setPaymentSubmitting(false)
+        return
+      }
 
       let res, data
       if (paymentType === 'joinFee') {
@@ -128,7 +139,15 @@ const MemberDetailDrawer = ({ member: memberProp, visible, onClose, programList,
       } else {
         // Closing payment — requires a selected closing group
         if (!selectedClosingGroup) { message.error('Please select a closing group'); setPaymentSubmitting(false); return }
+        // closing_payment docs are keyed `${memberId}_${groupId}`, so the id is a
+        // fallback source for the group. If neither yields one, stop — sending
+        // an undefined group would write the payment against nothing.
         const closingGroupId = selectedClosingGroup.closingGroupId || selectedClosingGroup.id?.split('_')[1]
+        if (!closingGroupId) {
+          message.error('This closing entry has no group reference — it cannot be paid from here.')
+          setPaymentSubmitting(false)
+          return
+        }
         res = await fetch('/api/closed_payment_update', {
           method: 'POST',
           headers,
@@ -502,7 +521,9 @@ const MemberDetailDrawer = ({ member: memberProp, visible, onClose, programList,
                     .filter(Boolean).join(', '),
     yojana:       programData?.hindiName || programData?.name || entry.programName || member?.programName || '',
     ageGroup:     member?.memberGroupName || member?.ageGroupName || '',
-    sahyogRashi:  entry.perMemberAmount ?? entry.amount ?? '',
+    // The closing_payment doc stores the per-closing instalment as `payAmount`;
+    // perMemberAmount/amount don't exist on it, so this printed blank.
+    sahyogRashi:  entry.payAmount ?? entry.perMemberAmount ?? entry.amount ?? '',
     totalAmount:  entry.totalAmount || 0,
     worker:       entry.agentName
                     ? `${entry.agentCode ? `(${entry.agentCode}) ` : ''}${entry.agentName}${entry.agentPhone ? ' ' + entry.agentPhone : ''}`
@@ -779,6 +800,12 @@ const MemberDetailDrawer = ({ member: memberProp, visible, onClose, programList,
               </div>
               {renderProgramCard()}
 
+              {/* App login — superadmin only, shown regardless of programme */}
+              <MemberCredentialsCard
+                member={member}
+                isSuperAdmin={user?.role === 'superadmin'}
+              />
+
               {/* Financial breakdown — Join Fees */}
               {member?.programId && (
                 <div className="mt-4 pt-4 border-t">
@@ -964,6 +991,7 @@ const MemberDetailDrawer = ({ member: memberProp, visible, onClose, programList,
           <ClosingEntriesList
             member={member}
             closingEntries={closingEntries}
+            isSuperAdmin={user?.role === 'superadmin'}
             closingTransactions={closingTransactions}
             loading={loading}
             buildPdfData={buildPdfData}

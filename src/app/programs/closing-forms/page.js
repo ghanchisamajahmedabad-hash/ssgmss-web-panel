@@ -28,6 +28,7 @@ import { useAuth } from '@/components/Base/AuthProvider'
 import MemberDetailDrawer from '@/app/members/components/MemberDetailsView'
 import MarriageClosingDrawer from './components/MarriageClosingDrawer'
 import ClosingRasidGenerator from './components/ClosingRasidGenerator'
+import ClosingFormDrawer from './components/ClosingFormDrawer'
 import {
   fetchClosedPage, getClosedStats, fetchAllClosedForExport
 } from './components/closingFirestore'
@@ -275,6 +276,9 @@ const ClosingMembersPage = () => {
   // range filter, because a Firestore range filter excludes documents that lack
   // the field entirely. This copies the date across so they become queryable.
   const [syncingDates, setSyncingDates] = useState(false)
+
+  // सदस्यता समापन पत्र — settlement form for one closed member
+  const [formMember, setFormMember] = useState(null)
 
   const handleSyncDates = async () => {
     setSyncingDates(true)
@@ -705,10 +709,46 @@ const ClosingMembersPage = () => {
     },
     { title: 'Note', key: 'note', width: 200, render: (_, r) => <span style={{ fontSize: 12, color: '#555' }}>{r.closed_note || '—'}</span> },
     {
-      title: 'Action', key: 'action', width: 120,
+      // Settlement status — green once the money has actually been handed over,
+      // so an unpaid form is never mistaken for a completed one.
+      title: 'समापन पत्र', key: 'closingForm', width: 150,
+      render: (_, r) => {
+        const f = r.closingFormData
+        if (!f) return <Tag color="default" style={{ fontSize: 10 }}>नहीं बना</Tag>
+        return f.paymentDone ? (
+          <div>
+            <Tag color="success" icon={<CheckCircleOutlined />} style={{ fontSize: 10 }}>
+              भुगतान हो गया
+            </Tag>
+            <div style={{ fontSize: 10, color: colors.success }}>
+              ₹{Number(f.netAmount || 0).toLocaleString('en-IN')}
+              {f.paymentDate ? ` · ${dayjs(f.paymentDate).format('DD-MM-YYYY')}` : ''}
+            </div>
+          </div>
+        ) : (
+          <div>
+            <Tag color="warning" icon={<ClockCircleOutlined />} style={{ fontSize: 10 }}>
+              भुगतान बाकी
+            </Tag>
+            <div style={{ fontSize: 10, color: colors.muted }}>
+              ₹{Number(f.netAmount || 0).toLocaleString('en-IN')}
+            </div>
+          </div>
+        )
+      },
+    },
+    {
+      title: 'Action', key: 'action', width: 150,
       render: (_, r) => (
         <Space size={0}>
           <Tooltip title="View"><Button type="text" icon={<EyeOutlined />} onClick={() => handleViewMember(r)} /></Tooltip>
+          <Tooltip title={r.closingFormData ? 'समापन पत्र — सहेजा हुआ' : 'समापन पत्र बनाएं'}>
+            <Button
+              type="text"
+              icon={<FileTextOutlined style={{ color: r.closingFormData ? colors.success : colors.primary }} />}
+              onClick={() => setFormMember(r)}
+            />
+          </Tooltip>
           <Tooltip title="Edit Closing Date"><Button type="text" icon={<EditOutlined />} onClick={() => openEditDate(r)} /></Tooltip>
           <Tooltip title="Mark Active"><Button type="text" danger icon={<RollbackOutlined />} loading={markingActiveId === r.id} onClick={() => handleMarkActive(r)} /></Tooltip>
         </Space>
@@ -820,6 +860,7 @@ const ClosingMembersPage = () => {
             </div>
           </div>
           <Table columns={memberColumns} dataSource={closedRows} rowKey="id" loading={closedLoading}
+            rowClassName={r => r.closingFormData?.paymentDone ? 'closing-paid-row' : ''}
             pagination={{
               current: closedCurrent, pageSize: PAGE, total: closedTotal,
               showSizeChanger: false, showTotal: t => `${t} closed members`,
@@ -852,7 +893,13 @@ const ClosingMembersPage = () => {
 
   return (
     <div style={{ padding: 20, background: colors.background, minHeight: '100vh' }}>
-      <style>{`.row-reversed td { opacity: 0.55; }`}</style>
+      <style>{`
+        .row-reversed td { opacity: 0.55; }
+        /* Settled members read green across the whole row, so a full page of
+           closed members can be scanned without reading each status tag. */
+        .closing-paid-row > td { background: #f0fdf4 !important; }
+        .closing-paid-row:hover > td { background: #dcfce7 !important; }
+      `}</style>
 
       <Card style={{ marginBottom: 16 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
@@ -926,6 +973,21 @@ const ClosingMembersPage = () => {
         group={rasidGroup}
         programList={programList}
         onClose={() => { setRasidModalVisible(false); setRasidGroup(null) }}
+      />
+
+      {/* सदस्यता समापन पत्र for one closed member */}
+      <ClosingFormDrawer
+        open={!!formMember}
+        member={formMember}
+        programList={programList}
+        onClose={() => setFormMember(null)}
+        onSaved={(memberId, data) => {
+          // Keep the row in step so the icon turns green without a refetch.
+          setClosedRows(rows => rows.map(r =>
+            r.id === memberId ? { ...r, closingFormData: data } : r
+          ))
+          setFormMember(m => (m && m.id === memberId ? { ...m, closingFormData: data } : m))
+        }}
       />
 
       {selectedMember && (

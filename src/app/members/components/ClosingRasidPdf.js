@@ -18,6 +18,7 @@ const BLUE   = '#1B385A';
 const BLACK  = '#000000';
 const BORDER = '#aaaaaa';
 const GREY   = '#f7f7f7';
+const GREEN  = '#16a34a';   // paid receipts
 
 // Fixed row count so every receipt fills the page identically, exactly as the
 // join-fees rasid does — short lists get blank ruled rows rather than a
@@ -118,6 +119,15 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20, paddingVertical: 3,
   },
   badgeText: { fontSize: 11, fontWeight: 'bold', color: RED, textAlign: 'center' },
+  // Paid receipts carry the same layout in green, so a settled receipt is
+  // distinguishable from an outstanding one at a glance on a printed pile.
+  badgePaid:     { borderColor: GREEN },
+  badgeTextPaid: { color: GREEN },
+  paidStamp: {
+    marginTop: 3, borderWidth: 1, borderColor: GREEN, borderRadius: 3,
+    paddingHorizontal: 10, paddingVertical: 1,
+  },
+  paidStampText: { fontSize: 9, fontWeight: 'bold', color: GREEN, textAlign: 'center' },
 
   // ════════ INFO ROWS ════════
   infoRow: { flexDirection: 'row', marginBottom: 4, alignItems: 'center' },
@@ -139,10 +149,18 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: BORDER,
   },
+  // FIXED height, and every cell is a single line.
+  //
+  // Without a height, a long name or village wrapped onto a second line, that
+  // row grew, and because the table holds a fixed TOTAL_ROWS inside a flex:1
+  // box the extra height pushed the following rows over each other. Pinning the
+  // height and clipping the text keeps the grid aligned.
   tableRow: {
     flexDirection: 'row',
     borderBottomWidth: 0.5,
     borderBottomColor: BORDER,
+    height: 20,
+    alignItems: 'center',
   },
 
   cellNo: {
@@ -152,7 +170,9 @@ const styles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
   cellCode: {
-    width: 62,
+    // 62pt held only ~11 characters at the 10pt cell font, so a 12-character
+    // registration number (MEM605866450) spilled into the name column.
+    width: 86,
     borderRightWidth: 0.5, borderRightColor: BORDER,
     paddingHorizontal: 3, paddingVertical: 3,
     alignItems: 'center', justifyContent: 'center',
@@ -308,6 +328,15 @@ const numberToHindiWords = (num) => {
 };
 
 // ─── Single receipt page ─────────────────────────────────────────────────────
+// Cells are a single fixed-height line, so anything longer than its column has
+// to be cut here — otherwise react-pdf wraps it and the row overlaps the next.
+// Limits are approximate character counts for each column width at 7.5pt.
+const clip = (value, max) => {
+  const t = String(value ?? '').trim();
+  if (!t) return '';
+  return t.length > max ? t.slice(0, Math.max(1, max - 1)) + '…' : t;
+};
+
 const ClosingPage = ({ data }) => {
   const entries = data.entries || [];
   const filledEntries = [
@@ -316,6 +345,10 @@ const ClosingPage = ({ data }) => {
   ];
 
   const total = Number(data.totalAmount || 0);
+  // `status` comes straight off the closing_payment doc ('paid' | 'partial' |
+  // 'pending'), so the receipt reflects what was actually recorded rather than
+  // which button produced it.
+  const isPaid = data.status === 'paid';
 
   return (
     <Page size="A4" style={styles.page}>
@@ -371,11 +404,18 @@ const ClosingPage = ({ data }) => {
           <Text style={styles.regText}>Reg. No: A/5231</Text>
         </View>
 
-        {/* ══ Badge ══ */}
+        {/* ══ Badge — green when this receipt is fully paid ══ */}
         <View style={styles.badgeWrap}>
-          <View style={styles.badge}>
-            <Text style={styles.badgeText}>सहयोग राशि रसीद</Text>
+          <View style={[styles.badge, isPaid && styles.badgePaid]}>
+            <Text style={[styles.badgeText, isPaid && styles.badgeTextPaid]}>
+              सहयोग राशि रसीद
+            </Text>
           </View>
+          {isPaid && (
+            <View style={styles.paidStamp}>
+              <Text style={styles.paidStampText}>भुगतान प्राप्त — PAID</Text>
+            </View>
+          )}
         </View>
 
         {/* ══ Serial No + Date ══ */}
@@ -456,19 +496,19 @@ const ClosingPage = ({ data }) => {
                 </Text>
               </View>
               <View style={styles.cellCode}>
-                <Text style={styles.cellTextCenter}>{entry ? entry.code || '' : ''}</Text>
+                <Text style={styles.cellTextCenter} maxLines={1} ellipsizeMode="tail">{entry ? clip(entry.code, 15) : ''}</Text>
               </View>
               <View style={styles.cellName}>
                 {/* Village appended to the name — no separate column */}
-                <Text style={styles.cellTextLeft}>
-                  {entry ? [entry.name, entry.village].filter(Boolean).join('  ') : ''}
+                <Text style={styles.cellTextLeft} maxLines={1} ellipsizeMode="tail">
+                  {entry ? clip([entry.name, entry.village].filter(Boolean).join('  '), 46) : ''}
                 </Text>
               </View>
               <View style={styles.cellDate}>
-                <Text style={styles.cellTextCenter}>{entry ? fmtDate(entry.date) : ''}</Text>
+                <Text style={styles.cellTextCenter} maxLines={1}>{entry ? fmtDate(entry.date) : ''}</Text>
               </View>
               <View style={styles.cellMobile}>
-                <Text style={styles.cellTextCenter}>{entry ? entry.mobile || '' : ''}</Text>
+                <Text style={styles.cellTextCenter} maxLines={1} ellipsizeMode="tail">{entry ? clip(entry.mobile, 13) : ''}</Text>
               </View>
             </View>
           ))}

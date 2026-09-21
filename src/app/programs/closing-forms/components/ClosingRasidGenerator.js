@@ -296,7 +296,9 @@ const ClosingRasidGenerator = ({ open, onClose, group, programList }) => {
     if (!memberRows.length) return ''
     const ROWS = 20
     const pages = memberRows.map((m, idx) => {
-      let serial = 10000 + ((group?.id || '').charCodeAt(0) || 0) + idx
+      // Plain running number, matching the group table's # column on the
+      // first page — a member is row 3 there and क्र. सं. 3 on their slip.
+      const serial = idx + 1
       return `
         <div class="page">
           ${orgHeader()}

@@ -316,6 +316,11 @@ win.document.write(`<!DOCTYPE html><html lang="hi"><head>
     .print-info{font-size:13px;color:rgba(255,255,255,.8);margin-left:10px}
 
     /* ── A4 page ── */
+    /* @page declares the paper and its margin. Without it the printer supplies
+       its own (~10mm a side), and a .page fixed at 210x297mm then exceeds the
+       printable area — each receipt spilled onto a second sheet with the first
+       left half empty. */
+    @page{size:A4 portrait;margin:6mm}
     .page{
       width:210mm;height:297mm;
       background:#fff;
@@ -466,9 +471,19 @@ win.document.write(`<!DOCTYPE html><html lang="hi"><head>
     .footer-eoe{font-size:12px;font-weight:700;color:#111;width:60px;text-align:right;white-space:nowrap}
 
     @media print{
-      body{background:#fff}
+      html,body{background:#fff;margin:0;padding:0}
       .print-bar{display:none!important}
-      .page{margin:0;box-shadow:none;width:210mm;height:297mm;padding:1mm 5mm}
+      /* Fill the @page box; don't re-declare an mm size on top of the margin. */
+      .page{
+        width:auto;height:auto;min-height:0;
+        margin:0;padding:0;box-shadow:none;
+        display:block;                      /* margin-top:auto needs flex, not used in print */
+        overflow:visible;                   /* never clip a receipt row */
+        page-break-after:always;break-after:page;
+      }
+      .page:last-child{page-break-after:auto;break-after:auto}
+      .page::before{display:none}
+      tr{page-break-inside:avoid;break-inside:avoid}
     }
   </style>
 </head><body>
@@ -804,7 +819,7 @@ const RasidGroupClosingDrawer = ({ open, setOpen, agentId, preselectedGroupId, a
         : '—';
       return `
         <tr>
-          <td class="c">${idx + 1}</td>
+          <td class="c">${r.serialNo || (idx + 1)}</td>
           <td class="l">${name}</td>
           <td class="c">${am.registrationNumber || r.registrationNumber || '—'}${
             (getOldRegNo(am) || r.oldRegNo)
@@ -872,7 +887,18 @@ const RasidGroupClosingDrawer = ({ open, setOpen, agentId, preselectedGroupId, a
            fall. A fixed 297mm height here is what caused the half-empty pages:
            once rows grew to two lines the content no longer fitted the box, the
            box grew past one physical page, and the printer split it arbitrarily. */
-        .page{width:210mm;background:#fff;margin:18px auto;padding:6mm 7mm;box-shadow:0 6px 28px rgba(0,0,0,.25);position:relative}
+        /* ON SCREEN: a full A4 sheet, so a short summary still looks like a
+           page rather than a floating strip. min-height (not height) so a long
+           list simply grows and the browser paginates it.
+           IN PRINT this min-height is removed — see @media print — because a
+           297mm minimum inside an already-margined @page box is what pushed
+           content onto a second sheet. */
+        .page{
+          width:210mm;min-height:297mm;
+          background:#fff;margin:18px auto;padding:6mm 7mm;
+          box-shadow:0 6px 28px rgba(0,0,0,.25);position:relative;
+          display:flex;flex-direction:column;
+        }
         .warn{margin-top:5px;padding:5px 7px;border:1px solid #D3292F;background:#fff3f0;font-size:8.5px;color:#D3292F;line-height:1.45}
         .note{margin-top:5px;font-size:8.5px;color:#555;line-height:1.45}
         .oldreg{font-size:7.5px;color:#777;line-height:1.2;margin-top:1px}
@@ -893,12 +919,17 @@ const RasidGroupClosingDrawer = ({ open, setOpen, agentId, preselectedGroupId, a
         th.name,td.name{text-align:left;padding-left:6px}
         tr:nth-child(even){background:#fafafa}
         .total-row td{font-weight:700;background:#fff3f0;font-size:10px}
-        .footer{text-align:center;margin-top:10px;padding-top:5px;border-top:1.5px solid #D3292F;font-size:8.5px;color:#666}
+        .footer{text-align:center;margin-top:auto;padding-top:5px;border-top:1.5px solid #D3292F;font-size:8.5px;color:#666}
         @media print{
           html,body{background:#fff;margin:0;padding:0}
           .print-bar{display:none!important}
           /* @page owns the paper and its margins; the sheet just fills it. */
-          .page{width:auto;margin:0;padding:0;box-shadow:none}
+          .page{
+            width:auto;min-height:0;height:auto;
+            margin:0;padding:0;box-shadow:none;
+            display:block;                    /* margin-top:auto needs flex; not wanted here */
+          }
+          .footer{margin-top:10px}            /* auto only works under flex */
           .page::before{display:none}            /* absolute watermark can spawn a blank sheet */
 
           /* The browser repeats these on every printed page, so each sheet
@@ -1036,52 +1067,15 @@ const RasidGroupClosingDrawer = ({ open, setOpen, agentId, preselectedGroupId, a
     // paying member's own group.
     const closingAgeGroup = entries.find(e => e.ageGroup)?.ageGroup || '';
 
-    // Receipt number: DETERMINISTIC, from the member + group.
-    //
-    // This was `10000 + (Date.now() % 9000)`, incremented per member — derived
-    // from the clock, so every rebuild of the preview produced a different set
-    // of numbers. Printing the receipt and printing the summary at two different
-    // moments gave the same member two different क्र. सं. (11982 vs 14649), and
-    // reprinting a receipt never reproduced the original number. A receipt
-    // number that changes is not an identifier.
-    //
-    // Hashing memberId + groupId means the same member in the same closing
-    // group always gets the same number, on every rebuild and every reprint,
-    // without needing to store anything.
-    const serialFor = (memberId) => {
-      const key = `${selectedGroup.id || selectedGroupId || ''}:${memberId}`;
-      let h = 2166136261;                       // FNV-1a
-      for (let i = 0; i < key.length; i++) {
-        h ^= key.charCodeAt(i);
-        h = Math.imul(h, 16777619);
-      }
-      return String(10000 + (Math.abs(h) % 90000));   // stable 5-digit
-    };
-
-    // Two members could hash to the same number. Resolve collisions over the
-    // member ids in SORTED order rather than in selection order, so which member
-    // keeps the base number doesn't depend on who happened to be ticked first —
-    // the same member always ends up with the same receipt number.
-    const serialByMember = (() => {
-      const ids = agentMembers
-        .filter(m => selAgentMembers.has(m.id))
-        .map(m => m.id)
-        .sort();
-      const used = new Set();
-      const out = {};
-      for (const id of ids) {
-        let n = Number(serialFor(id));
-        while (used.has(n)) n = n >= 99999 ? 10000 : n + 1;
-        used.add(n);
-        out[id] = String(n);
-      }
-      return out;
-    })();
-    const uniqueSerial = (memberId) => serialByMember[memberId] || serialFor(memberId);
+    // क्र. सं. is a plain running number — 1, 2, 3 … — and it is set ONCE here,
+    // on the rasid row. The summary prints the same `serialNo` off the same
+    // array, so the receipt and the summary can never show a different number
+    // for the same member. (It used to be a 5-digit receipt code, which meant
+    // the two documents numbered the same person differently.)
 
     return agentMembers
       .filter(m => selAgentMembers.has(m.id))
-      .map(am => {
+      .map((am, idx) => {
         const payAmt = am.payAmount || 0;
 
         // Charge what this member was ACTUALLY billed for, not the whole
@@ -1130,7 +1124,7 @@ const RasidGroupClosingDrawer = ({ open, setOpen, agentId, preselectedGroupId, a
           displayName:  am.displayName || '',
           fatherName:   am.fatherName || '',
           memberPending: Number(am.closing_pendingAmount || 0),
-          serialNo:     uniqueSerial(am.id),
+          serialNo:     String(idx + 1),
           date:         dateStr,
           // Printed receipt shows the code ahead of the name:
           // "V100151 महेश / राजुभाई"
