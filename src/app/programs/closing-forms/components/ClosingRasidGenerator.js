@@ -39,6 +39,12 @@ const RASID_CSS = `
   .print-bar{position:sticky;top:0;z-index:100;padding:12px 24px;background:#1B385A;display:flex;gap:12px;align-items:center}
   .btn-print{background:#D3292F;color:#fff;border:none;padding:10px 28px;border-radius:6px;cursor:pointer;font-weight:700;font-size:14px;font-family:inherit}
   .btn-close{background:rgba(255,255,255,.15);color:#fff;border:1px solid rgba(255,255,255,.3);padding:10px 20px;border-radius:6px;cursor:pointer;font-size:14px;font-family:inherit}
+  /* Declare the paper. Without an @page rule the printer applies its own
+     default margin (~10mm a side), so a .page that is exactly 210x297mm no
+     longer fits the printable area — it spilled onto a second sheet and left
+     the first half empty. @page now owns the paper and the margin, and in
+     print the sheet simply fills that box (see the @media print block). */
+  @page{size:A4 portrait;margin:8mm}
   .page{width:210mm;min-height:297mm;background:#fff;margin:18px auto;padding:5mm 8mm;box-shadow:0 6px 28px rgba(0,0,0,.25);position:relative}
   .page::before{content:'';position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:60%;height:60%;background:url('/Images/logoT.png') center/contain no-repeat;opacity:.04;pointer-events:none;z-index:0}
   .page>*{position:relative;z-index:1}
@@ -69,7 +75,18 @@ const RASID_CSS = `
   tr:nth-child(even){background:#fafafa}
   .total-row td{font-weight:700;background:#fff3f0;font-size:12px}
   .footer{text-align:center;margin-top:12px;padding-top:6px;border-top:1.5px solid #D3292F;font-size:10px;color:#666}
-  @media print{body{background:#fff}.print-bar{display:none!important}.page{margin:0;box-shadow:none}}
+  @media print{
+    html,body{background:#fff;margin:0;padding:0}
+    .print-bar{display:none!important}
+    /* Fill the @page box rather than carrying an mm size of our own. */
+    .page{width:auto;min-height:0;height:auto;margin:0;padding:0;box-shadow:none;
+          page-break-after:always;break-after:page}
+    .page:last-child{page-break-after:auto;break-after:auto}
+    .page::before{display:none}          /* absolute watermark can spawn a blank sheet */
+    thead{display:table-header-group}    /* repeat column headings across pages */
+    tr{page-break-inside:avoid;break-inside:avoid}
+    .total-row{page-break-inside:avoid}
+  }
 `
 
 // Org header block shared by all pages
