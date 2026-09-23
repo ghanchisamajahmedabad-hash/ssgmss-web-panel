@@ -480,10 +480,18 @@ win.document.write(`<!DOCTYPE html><html lang="hi"><head>
         display:block;                      /* margin-top:auto needs flex, not used in print */
         overflow:visible;                   /* never clip a receipt row */
         page-break-after:always;break-after:page;
+        /* One receipt = one sheet. This rule exists on screen but was dropped
+           when .page is re-declared here, so in print a receipt that ended
+           close to the page edge was allowed to split — and the footer's last
+           line ("Exclusive jurisdiction…") landed alone on a second sheet. */
+        page-break-inside:avoid;break-inside:avoid;
       }
       .page:last-child{page-break-after:auto;break-after:auto}
       .page::before{display:none}
       tr{page-break-inside:avoid;break-inside:avoid}
+      /* Belt and braces: the footer is two lines plus a rule, and must never be
+         torn in half even if a receipt somehow does span a break. */
+      .footer{page-break-inside:avoid;break-inside:avoid}
     }
   </style>
 </head><body>
@@ -929,7 +937,9 @@ const RasidGroupClosingDrawer = ({ open, setOpen, agentId, preselectedGroupId, a
             margin:0;padding:0;box-shadow:none;
             display:block;                    /* margin-top:auto needs flex; not wanted here */
           }
-          .footer{margin-top:10px}            /* auto only works under flex */
+          /* margin-top:auto only works under flex; and the footer is two lines
+             plus a rule, so it must never be torn across a page break. */
+          .footer{margin-top:10px;page-break-inside:avoid;break-inside:avoid}
           .page::before{display:none}            /* absolute watermark can spawn a blank sheet */
 
           /* The browser repeats these on every printed page, so each sheet

@@ -26,6 +26,11 @@ const GREEN  = '#16a34a';   // paid receipts
 const TOTAL_ROWS = 20;
 
 // ─── Styles — mirrored from RasidPdfCom so both receipts are identical ────────
+// Height set aside at the bottom of every page for the footer, which is pinned
+// there rather than flowing after the note. 1pt border + 4pt padding + two 9pt
+// lines with their leading, rounded up so a slightly taller line still fits.
+const FOOTER_SPACE = 44;
+
 const styles = StyleSheet.create({
 
   page: {
@@ -37,7 +42,9 @@ const styles = StyleSheet.create({
     width: '100%',
     height: '100%',
     paddingTop: 10,
-    paddingBottom: 10,
+    // Room reserved for the pinned footer below. The footer is no longer part of
+    // this column, so without this the table's flex:1 would grow underneath it.
+    paddingBottom: FOOTER_SPACE,
     paddingLeft: 12,
     paddingRight: 12,
     flexDirection: 'column',
@@ -226,14 +233,22 @@ const styles = StyleSheet.create({
   noteText: { fontSize: 9, color: '#444', marginTop: 1, lineHeight: 1.4, fontWeight: 'normal' },
 
   // ════════ FOOTER ════════
+  // Pinned to the bottom of the PAGE, not laid out after the note.
+  //
+  // In flow, the footer sat at the end of a column whose height was already
+  // 100% of the page. When the content above came within a line of the bottom,
+  // react-pdf split the footer and pushed its last line ("Exclusive
+  // jurisdiction…") onto a second, otherwise-empty page. Anchoring it to the
+  // page means it cannot be split or moved, whatever the rows above do.
   footer: {
+    position: 'absolute',
+    left: 12, right: 12, bottom: 10,
     borderTopWidth: 1,
     borderTopColor: RED,
     paddingTop: 4,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginTop: 4,
   },
   footerCenter:  { flex: 1, alignItems: 'center' },
   footerContact: { fontSize: 9, fontWeight: 'bold', color: RED, textAlign: 'center', marginBottom: 1 },
@@ -536,20 +551,20 @@ const ClosingPage = ({ data }) => {
         {/* ══ Note ══ */}
         <Text style={styles.noteText}>Note : {data.note || ''}</Text>
 
-        {/* ══ Footer ══ */}
-        <View style={styles.footer}>
-          <View style={{ width: 50 }} />
-          <View style={styles.footerCenter}>
-            <Text style={styles.footerContact}>
-              संपर्क सूत्र : 9374934004, 9825289998, 9426517804, 9824017977
-            </Text>
-            <Text style={styles.footerSub}>
-              Exclusive jurisdiction Ahmedabad, Gujarat
-            </Text>
-          </View>
-          <Text style={styles.footerEoe}>E. &amp; O.E.</Text>
-        </View>
+      </View>
 
+      {/* ══ Footer — anchored to the page, never breaks to a second page ══ */}
+      <View style={styles.footer} fixed>
+        <View style={{ width: 50 }} />
+        <View style={styles.footerCenter}>
+          <Text style={styles.footerContact}>
+            संपर्क सूत्र : 9374934004, 9825289998, 9426517804, 9824017977
+          </Text>
+          <Text style={styles.footerSub}>
+            Exclusive jurisdiction Ahmedabad, Gujarat
+          </Text>
+        </View>
+        <Text style={styles.footerEoe}>E. &amp; O.E.</Text>
       </View>
     </Page>
   );

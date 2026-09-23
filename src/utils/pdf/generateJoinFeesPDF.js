@@ -139,6 +139,12 @@ export const generateJoinFeesPDF = (
     @media print {
       body{-webkit-print-color-adjust:exact;print-color-adjust:exact}
       .no-print{display:none}
+      /* The footer is a rule plus two centred lines. Without this the browser
+         is free to break between them, leaving "Exclusive jurisdiction…"
+         alone on an otherwise-empty last sheet. */
+      .doc-footer{page-break-inside:avoid;break-inside:avoid}
+      tr{page-break-inside:avoid;break-inside:avoid}
+      thead{display:table-header-group}
     }
   </style>
   </head><body>
