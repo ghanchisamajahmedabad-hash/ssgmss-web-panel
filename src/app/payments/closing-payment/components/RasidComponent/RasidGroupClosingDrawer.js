@@ -473,25 +473,47 @@ win.document.write(`<!DOCTYPE html><html lang="hi"><head>
     @media print{
       html,body{background:#fff;margin:0;padding:0}
       .print-bar{display:none!important}
-      /* Fill the @page box; don't re-declare an mm size on top of the margin. */
+
+      /* ── One receipt = exactly one sheet, by construction ──────────────────
+         height:auto let the receipt be as tall as its content, so a full
+         20-row list ran past the bottom of the paper and the footer was
+         carried onto a second, otherwise-empty sheet. Telling the browser not
+         to break it only moved the whole footer instead of splitting it — the
+         receipt was still too tall.
+
+         So the sheet is now a FIXED-HEIGHT flex column: 283mm, i.e. A4's 297mm
+         less the 6mm @page margins (with 2mm spare for rounding). The table is
+         the one flexible item, so any leftover — or shortfall — is absorbed
+         there, and the footer is pushed to the bottom of the sheet by
+         margin-top:auto. Nothing can spill past the page, because the page
+         cannot grow. */
       .page{
-        width:auto;height:auto;min-height:0;
+        width:auto;
+        height:283mm;max-height:283mm;
         margin:0;padding:0;box-shadow:none;
-        display:block;                      /* margin-top:auto needs flex, not used in print */
-        overflow:visible;                   /* never clip a receipt row */
+        display:flex;flex-direction:column;   /* margin-top:auto needs flex */
+        overflow:hidden;
         page-break-after:always;break-after:page;
-        /* One receipt = one sheet. This rule exists on screen but was dropped
-           when .page is re-declared here, so in print a receipt that ended
-           close to the page edge was allowed to split — and the footer's last
-           line ("Exclusive jurisdiction…") landed alone on a second sheet. */
         page-break-inside:avoid;break-inside:avoid;
       }
       .page:last-child{page-break-after:auto;break-after:auto}
       .page::before{display:none}
+
+      /* The only item allowed to give. min-height:0 is required or a flex item
+         refuses to shrink below its content. */
+      .table-wrap{flex:1;min-height:0;overflow:hidden;margin-top:6px}
+
+      /* Slightly tighter rows in print so all 20 fit the fixed sheet with room
+         to spare — the table must never have to shrink below its rows, because
+         a table row clips rather than compresses. 20 x 26px = 520px, against
+         roughly 650px of space left once everything else is placed. */
+      .main-table td{height:26px;font-size:12.5px}
+      .main-table th{padding:4px 3px;font-size:13px}
+
       tr{page-break-inside:avoid;break-inside:avoid}
-      /* Belt and braces: the footer is two lines plus a rule, and must never be
-         torn in half even if a receipt somehow does span a break. */
-      .footer{page-break-inside:avoid;break-inside:avoid}
+
+      /* Pinned to the bottom of the fixed sheet, and never torn in half. */
+      .footer{margin-top:auto;page-break-inside:avoid;break-inside:avoid}
     }
   </style>
 </head><body>
