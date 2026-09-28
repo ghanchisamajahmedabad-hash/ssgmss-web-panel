@@ -55,7 +55,24 @@ const styles = StyleSheet.create({
 
   footer: { borderTopWidth: 1, borderTopColor: RED, paddingTop: 4, marginTop: 6, alignItems: 'center' },
   footerText: { fontSize: 8, fontWeight: 'bold', color: RED, textAlign: 'center' },
+
+  // Compact heading for continuation sheets — the full letterhead belongs on
+  // the first page only, and repeating it would cost ~8 rows on every sheet.
+  contTitle: { fontSize: 11, color: BLUE, fontWeight: 'bold', textAlign: 'center', marginBottom: 4 },
+  contRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
+  contLabel: { fontSize: 8, color: '#666' },
 });
+
+// ── How many rows fit on a sheet ─────────────────────────────────────────────
+// A4 landscape is 595pt tall; outerView takes 14pt of padding a side, leaving
+// 567pt. Row height is 14pt, the column heading 16pt and the footer ~20pt.
+//
+// The first sheet also carries the full letterhead (blessings, logos, address,
+// SINCE bar, badge, filters, summary) which comes to roughly 130pt, so it holds
+// fewer rows than the ones after it. Both numbers are set a little below what
+// actually fits so a slightly taller line can never push a row off the sheet.
+const ROWS_FIRST = 25;
+const ROWS_REST  = 32;
 
 const clip = (value, max) => {
   const s = String(value ?? '').trim();
@@ -89,83 +106,125 @@ const ClosedMembersPdf = ({ members, filters, programList, agentList, closingGro
   const filterStr = filterParts.length > 0 ? filterParts.join('  |  ') : null;
 
   const today = dayjs().format('DD-MM-YYYY');
-  const rows = (members || []).map((m, i) => (
-    <View key={m.id} style={[styles.tr, i % 2 === 1 && styles.trEven]} wrap={false}>
-      <Text style={[styles.td, { width: 24 }]}>{m.srNo ?? i + 1}</Text>
-      <Text style={[styles.td, { width: 84, fontWeight: 'bold', color: BLUE }]}>{clip(m.registrationNumber, 18)}</Text>
+  const list  = members || [];
+
+  // ── Split the list into sheets ourselves ──────────────────────────────────
+  //
+  // Every row used to be handed to react-pdf inside one <Page> and one wrapping
+  // <View>, leaving it to break the list up. It does not cope with a wrapper
+  // holding hundreds of rows: the column heading appeared only on sheet one,
+  // and the overflow ended up crushed on top of itself on the last sheet.
+  // Chunking into explicit pages makes the layout deterministic instead.
+  const chunks = [];
+  for (let i = 0; i < list.length; ) {
+    const take = chunks.length === 0 ? ROWS_FIRST : ROWS_REST;
+    chunks.push(list.slice(i, i + take));
+    i += take;
+  }
+  if (chunks.length === 0) chunks.push([]);
+
+  const renderRow = (m, absIndex, i) => (
+    <View key={m.id || absIndex} style={[styles.tr, i % 2 === 1 && styles.trEven]} wrap={false}>
+      <Text style={[styles.td, { width: 24 }]}>{absIndex + 1}</Text>
+      <Text style={[styles.td, { width: 84, color: BLUE, fontWeight: 'bold' }]}>
+        {clip(m.registrationNumber, 16)}
+      </Text>
       <Text style={[styles.tdL, { flex: 1 }]}>
-        {clip(`${m.displayName || ''}${m.fatherName ? ` / ${m.fatherName}` : ''}`, 44)}
+        {clip(`${m.displayName || m.name || '-'} / ${m.fatherName || '-'}`, 46)}
       </Text>
-      <Text style={[styles.td, { width: 64 }]}>{clip(m.phone, 13) || '-'}</Text>
-      <Text style={[styles.td, { width: 88 }]}>{clip(progName(m.member_closed_program || m.programId), 20)}</Text>
-      <Text style={[styles.td, { width: 60 }]}>{clip(getGroupName(m.closingGroupId), 14)}</Text>
-      <Text style={[styles.td, { width: 58 }]}>{clip(fmtDate(m.closed_date), 12) || '-'}</Text>
-      <Text style={[styles.td, { width: 78 }]}>{clip(getAgentName(m.agentId), 18)}</Text>
-      <Text style={[styles.td, { width: 68, color: m.closed_invitation_url ? '#16a34a' : '#888' }]}>
-        {m.closed_invitation_url ? 'Yes' : 'No'}
-      </Text>
+      <Text style={[styles.td, { width: 64 }]}>{clip(m.phone, 12)}</Text>
+      <Text style={[styles.td, { width: 88 }]}>{clip(progName(m.programId), 18)}</Text>
+      <Text style={[styles.td, { width: 60 }]}>{clip(getGroupName(m.closingGroupId), 12)}</Text>
+      <Text style={[styles.td, { width: 58 }]}>{fmtDate(m.closed_date)}</Text>
+      <Text style={[styles.td, { width: 78 }]}>{clip(getAgentName(m.agentId), 16)}</Text>
+      <Text style={[styles.td, { width: 68 }]}>{m.closed_invitation_url ? 'Yes' : 'No'}</Text>
     </View>
-  ));
+  );
+
+  const tableHead = (
+    <View style={styles.thRow}>
+      <Text style={[styles.thCell, { width: 24 }]}>#</Text>
+      <Text style={[styles.thCell, { width: 84 }]}>Reg No</Text>
+      <Text style={[styles.thCell, { flex: 1 }]}>नाम / पिता</Text>
+      <Text style={[styles.thCell, { width: 64 }]}>फोन</Text>
+      <Text style={[styles.thCell, { width: 88 }]}>योजना</Text>
+      <Text style={[styles.thCell, { width: 60 }]}>ग्रुप</Text>
+      <Text style={[styles.thCell, { width: 58 }]}>क्लोजिंग</Text>
+      <Text style={[styles.thCell, { width: 78 }]}>एजेंट</Text>
+      <Text style={[styles.thCell, { width: 68 }]}>Invitation Card</Text>
+    </View>
+  );
 
   return (
     <Document>
-      <Page size="A4" orientation="landscape" style={styles.page}>
-        <View style={styles.outerView}>
-          <Image src="/Images/logoT.png" style={styles.watermark} />
+      {chunks.map((chunk, pageIdx) => {
+        // Running number so row 26 on sheet two still reads "26", not "1".
+        const offset = pageIdx === 0 ? 0 : ROWS_FIRST + (pageIdx - 1) * ROWS_REST;
 
-          <View style={styles.topText}>
-            <Text style={styles.smallText}>॥ श्री गणेशाय नमः ॥</Text>
-            <Text style={styles.smallText}>॥ श्री शनिदेवाय नमः ॥</Text>
-            <Text style={styles.smallText}>॥ श्री सांवलाजी महाराज नमः ॥</Text>
-          </View>
+        return (
+          <Page key={pageIdx} size="A4" orientation="landscape" style={styles.page}>
+            <View style={styles.outerView}>
+              <Image src="/Images/logoT.png" style={styles.watermark} />
 
-          <View style={styles.headerSection}>
-            <View style={styles.imageBox}><Image src="/Images/logoT.png" style={styles.logoImage} /></View>
-            <View style={styles.centerContent}>
-              <Text style={styles.mainTitle}>श्री क्षत्रिय घांची मोदी समाज सेवा संस्थान ट्रस्ट</Text>
-              <Text style={styles.subTitle}>अहमदाबाद, गुजरात</Text>
-              <Text style={styles.addrLine}>हेड ऑफिस : 68, वृंदावन शॉपिंग सेंटर, गुजरात हाउसिंग बोर्ड, चांदखेडा, साबरमती, अहमदाबाद 382424</Text>
-              <Text style={styles.contactLine}>संपर्क : 9374934004, 9825289998, 9426517804, 9824017977</Text>
+              {pageIdx === 0 ? (
+                <>
+                  <View style={styles.topText}>
+                    <Text style={styles.smallText}>॥ श्री गणेशाय नमः ॥</Text>
+                    <Text style={styles.smallText}>॥ श्री शनिदेवाय नमः ॥</Text>
+                    <Text style={styles.smallText}>॥ श्री सांवलाजी महाराज नमः ॥</Text>
+                  </View>
+
+                  <View style={styles.headerSection}>
+                    <View style={styles.imageBox}><Image src="/Images/logoT.png" style={styles.logoImage} /></View>
+                    <View style={styles.centerContent}>
+                      <Text style={styles.mainTitle}>श्री क्षत्रिय घांची मोदी समाज सेवा संस्थान ट्रस्ट</Text>
+                      <Text style={styles.subTitle}>अहमदाबाद, गुजरात</Text>
+                      <Text style={styles.addrLine}>हेड ऑफिस : 68, वृंदावन शॉपिंग सेंटर, गुजरात हाउसिंग बोर्ड, चांदखेडा, साबरमती, अहमदाबाद 382424</Text>
+                      <Text style={styles.contactLine}>संपर्क : 9374934004, 9825289998, 9426517804, 9824017977</Text>
+                    </View>
+                    <View style={styles.imageBox}><Image src="/Images/sanidevImg.jpeg" style={styles.logoImage} /></View>
+                  </View>
+
+                  <View style={styles.sinceRegRow}>
+                    <Text style={styles.sinceRegText}>SINCE : 2024</Text>
+                    <Text style={styles.sinceRegText}>Reg. No: A/5231</Text>
+                  </View>
+
+                  <View style={styles.badgeWrap}>
+                    <View style={styles.badge}><Text style={styles.badgeText}>क्लोजिंग सदस्य सूची</Text></View>
+                  </View>
+
+                  {filterStr && <Text style={styles.filterRow}>Filters: {filterStr}</Text>}
+
+                  <View style={styles.summaryRow}>
+                    <Text style={styles.summaryCount}>कुल क्लोजिंग: {list.length}</Text>
+                    <Text style={styles.summaryDate}>{today}</Text>
+                  </View>
+                </>
+              ) : (
+                <>
+                  <Text style={styles.contTitle}>क्लोजिंग सदस्य सूची</Text>
+                  <View style={styles.contRow}>
+                    <Text style={styles.contLabel}>कुल क्लोजिंग: {list.length}</Text>
+                    <Text style={styles.contLabel}>{today}</Text>
+                  </View>
+                </>
+              )}
+
+              <View style={styles.table}>
+                {tableHead}
+                {chunk.map((m, i) => renderRow(m, offset + i, i))}
+              </View>
+
+              <View style={styles.footer}>
+                <Text style={styles.footerText}>
+                  Generated by SSGMS Web Panel • {dayjs().format('DD-MM-YYYY HH:mm')} • पृष्ठ {pageIdx + 1} / {chunks.length}
+                </Text>
+              </View>
             </View>
-            <View style={styles.imageBox}><Image src="/Images/sanidevImg.jpeg" style={styles.logoImage} /></View>
-          </View>
-
-          <View style={styles.sinceRegRow}>
-            <Text style={styles.sinceRegText}>SINCE : 2024</Text>
-            <Text style={styles.sinceRegText}>Reg. No: A/5231</Text>
-          </View>
-
-          <View style={styles.badgeWrap}>
-            <View style={styles.badge}><Text style={styles.badgeText}>क्लोजिंग सदस्य सूची</Text></View>
-          </View>
-
-          {filterStr && <Text style={styles.filterRow}>Filters: {filterStr}</Text>}
-
-          <View style={styles.summaryRow}>
-            <Text style={styles.summaryCount}>कुल क्लोजिंग: {(members || []).length}</Text>
-            <Text style={styles.summaryDate}>{today}</Text>
-          </View>
-
-          <View style={styles.table}>
-            <View style={styles.thRow}>
-              <Text style={[styles.thCell, { width: 24 }]}>#</Text>
-              <Text style={[styles.thCell, { width: 84 }]}>Reg No</Text>
-              <Text style={[styles.thCell, { flex: 1 }]}>नाम / पिता</Text>
-              <Text style={[styles.thCell, { width: 64 }]}>फोन</Text>
-              <Text style={[styles.thCell, { width: 88 }]}>योजना</Text>
-              <Text style={[styles.thCell, { width: 60 }]}>ग्रुप</Text>
-              <Text style={[styles.thCell, { width: 58 }]}>क्लोजिंग</Text>
-              <Text style={[styles.thCell, { width: 78 }]}>एजेंट</Text>
-              <Text style={[styles.thCell, { width: 68 }]}>Invitation Card</Text>
-            </View>
-            {rows}
-          </View>
-
-          <View style={styles.footer}>
-            <Text style={styles.footerText}>Generated by SSGMS Web Panel • {dayjs().format('DD-MM-YYYY HH:mm')}</Text>
-          </View>
-        </View>
-      </Page>
+          </Page>
+        );
+      })}
     </Document>
   );
 };

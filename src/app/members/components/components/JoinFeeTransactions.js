@@ -1,9 +1,11 @@
 // components/JoinFeeTransactions.jsx
 import React, { useState, useEffect } from 'react'
 import { Card, Table, Tag, Typography, Space, Button, Modal, Form, Input, DatePicker, message } from 'antd'
-import { collection, query, where, getDocs, addDoc, serverTimestamp } from 'firebase/firestore'
+import { EditOutlined } from '@ant-design/icons'
+import { collection, query, where, getDocs, addDoc, serverTimestamp, updateDoc, doc } from 'firebase/firestore'
 import dayjs from 'dayjs'
 import { db } from '../../../../../lib/firbase-client'
+import { formatPaymentDate, parseAnyDate } from '@/utils/formatDate'
 
 const { Text } = Typography
 
@@ -12,6 +14,40 @@ const JoinFeeTransactions = ({ memberId, memberName, registrationNumber }) => {
   const [loading, setLoading] = useState(false)
   const [showAddModal, setShowAddModal] = useState(false)
   const [form] = Form.useForm()
+
+  // ── Correct a wrongly-entered payment date ─────────────────────────────────
+  const [dateEditId, setDateEditId] = useState(null)
+  const [dateSaving, setDateSaving] = useState(false)
+  const [dateForm] = Form.useForm()
+
+  const openDateEdit = (record) => {
+    setDateEditId(record.id)
+    dateForm.setFieldsValue({
+      transactionDate:
+        parseAnyDate(record.transactionDate || record.paymentDate || record.date) || dayjs(),
+    })
+  }
+
+  const saveDateEdit = async () => {
+    try {
+      const values = await dateForm.validateFields()
+      setDateSaving(true)
+      await updateDoc(doc(db, 'memberJoinFees', dateEditId), {
+        transactionDate: values.transactionDate.format('YYYY-MM-DD'),
+        dateCorrectedAt: serverTimestamp(),
+      })
+      message.success('Payment date updated')
+      setDateEditId(null)
+      dateForm.resetFields()
+      fetchTransactions()
+    } catch (err) {
+      if (err?.errorFields) return
+      console.error('Failed to update payment date:', err)
+      message.error('Could not update the payment date')
+    } finally {
+      setDateSaving(false)
+    }
+  }
 
   useEffect(() => {
     if (memberId) {
@@ -54,7 +90,10 @@ const JoinFeeTransactions = ({ memberId, memberName, registrationNumber }) => {
         amount: parseFloat(values.amount),
         paymentMode: values.paymentMode,
         transactionId: values.transactionId,
-        transactionDate: values.transactionDate.format('DD-MM-YYYY'),
+        // 'YYYY-MM-DD' to match what join-fees-add / closed_payment_update
+        // write. This used to store 'DD-MM-YYYY', so the same field held two
+        // different shapes depending on which screen recorded the payment.
+        transactionDate: values.transactionDate.format('YYYY-MM-DD'),
         notes: values.notes,
         status: 'completed',
         verified: true,
@@ -75,11 +114,27 @@ const JoinFeeTransactions = ({ memberId, memberName, registrationNumber }) => {
 
   const columns = [
     {
-      title: 'Date',
+      // dayjs('28-12-2026') with no format hint is Invalid Date — and this
+      // component writes transactionDate in exactly that shape, while the
+      // payment APIs write 'YYYY-MM-DD'. formatPaymentDate parses both.
+      title: 'Payment Date',
       dataIndex: 'transactionDate',
       key: 'date',
-      render: (date) => dayjs(date).format('DD-MM-YYYY'),
-      width: 100,
+      render: (date, r) => (
+        <div>
+          <div>{formatPaymentDate(date, r?.paymentDate, r?.date)}</div>
+          {/* Lets a mistyped date be corrected without reverting the payment.
+              Date only — the amount drives the rollups and isn't touched. */}
+          <Button
+            type="link" size="small" icon={<EditOutlined />}
+            onClick={() => openDateEdit(r)}
+            style={{ padding: 0, height: 18, fontSize: 11 }}
+          >
+            Edit
+          </Button>
+        </div>
+      ),
+      width: 130,
     },
     {
       title: 'Amount',
@@ -226,6 +281,35 @@ const JoinFeeTransactions = ({ memberId, memberName, registrationNumber }) => {
             name="notes"
           >
             <Input.TextArea rows={2} placeholder="Additional notes about this payment" />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      {/* Correct payment date — date only, amount untouched */}
+      <Modal
+        title="Correct Payment Date"
+        open={!!dateEditId}
+        onCancel={() => { setDateEditId(null); dateForm.resetFields() }}
+        onOk={saveDateEdit}
+        okText="Save Date"
+        confirmLoading={dateSaving}
+        width={400}
+        destroyOnClose
+      >
+        <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 12 }}>
+          Only the payment date changes. The amount and payment mode are not affected.
+        </div>
+        <Form form={dateForm} layout="vertical">
+          <Form.Item
+            name="transactionDate"
+            label="Payment Date"
+            rules={[{ required: true, message: 'Please pick the correct date' }]}
+          >
+            <DatePicker
+              style={{ width: '100%' }}
+              format="DD/MM/YYYY"
+              disabledDate={d => d && d > dayjs()}
+            />
           </Form.Item>
         </Form>
       </Modal>

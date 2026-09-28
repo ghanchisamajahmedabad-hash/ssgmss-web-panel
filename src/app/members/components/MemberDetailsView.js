@@ -29,12 +29,13 @@ import MemberDetailsPdf from './MemberPdf/MemberDetailsPdf'
 import ClosingRasidPdf from './ClosingRasidPdf'
 import ClosingEntriesList from './ClosingEntriesList'
 import MemberCredentialsCard from './MemberCredentialsCard'
-import { collection, query, where, getDocs, orderBy, doc, getDoc } from 'firebase/firestore'
+import { collection, query, where, getDocs, orderBy, doc, getDoc, updateDoc, serverTimestamp } from 'firebase/firestore'
 import { getAuth } from 'firebase/auth'
 import dayjs from 'dayjs'
 import relativeTime from 'dayjs/plugin/relativeTime'
 import { db } from '../../../../lib/firbase-client'
 import { useAuth } from '@/components/Base/AuthProvider'
+import { formatPaymentDate, formatDateTime, parseAnyDate } from '@/utils/formatDate'
 
 dayjs.extend(relativeTime)
 
@@ -71,6 +72,153 @@ const MemberDetailDrawer = ({ member: memberProp, visible, onClose, programList,
   const [selectedClosingGroup, setSelectedClosingGroup] = useState(null)
 
   const pendingClosingEntries = closingEntries.filter(e => e.status === 'pending' || e.status === 'partial')
+
+  // ── Correct a wrongly-entered payment date ───────────────────────────────────
+  // Date-only edit, deliberately. The amount is what every rollup is derived
+  // from (member paid/pending, agent totals, group paid state), so changing it
+  // here would silently desync those — that's what the revert APIs are for.
+  // The date feeds nothing but display and receipts, so it is safe to correct
+  // in place.
+  // Admin and superadmin only — this rewrites a recorded financial date, so it
+  // shouldn't be open to read-only roles.
+  const canEditPaymentDate = user?.role === 'superadmin' || user?.role === 'admin'
+
+  const [dateEdit, setDateEdit] = useState(null)   // { id, collection, label }
+  const [dateSaving, setDateSaving] = useState(false)
+  const [dateForm] = Form.useForm()
+
+  const openDateEdit = (record, collectionName, label) => {
+    const current = parseAnyDate(record.transactionDate || record.paymentDate || record.date)
+    setDateEdit({
+      id: record.id,
+      collection: collectionName,
+      label,
+      // Links to the paymentGroups doc that Payments → History displays.
+      groupId: record.groupId || null,
+    })
+    dateForm.setFieldsValue({ transactionDate: current || dayjs() })
+  }
+
+  // A payment date lives in TWO places, which is why correcting only one of
+  // them appeared to do nothing:
+  //
+  //   memberJoinFees / memberClosingFees  .transactionDate  ← this drawer
+  //   paymentGroups/{groupId}             .paymentDate      ← Payments → History
+  //
+  // The History page reads the paymentGroups doc, so a fix applied only to the
+  // per-member row left that page still showing the old date. Both are updated
+  // now.
+  //
+  // One paymentGroups doc can cover several members (a batch collection), and
+  // its date is shared by all of them — so when that's the case the admin is
+  // asked before the whole batch is re-dated.
+  const writeDateUpdate = async ({ recordId, collectionName, groupId, newDate, alsoGroup }) => {
+    const iso = newDate.format('YYYY-MM-DD')
+
+    await updateDoc(doc(db, collectionName, recordId), {
+      transactionDate: iso,
+      // Audit trail, so a corrected date is distinguishable from the original.
+      dateCorrectedAt: serverTimestamp(),
+      dateCorrectedBy: user?.uid || null,
+    })
+
+    if (alsoGroup && groupId) {
+      await updateDoc(doc(db, 'paymentGroups', groupId), {
+        // Stored as a real Date here, matching what the payment APIs write.
+        paymentDate: newDate.startOf('day').toDate(),
+        dateCorrectedAt: serverTimestamp(),
+        dateCorrectedBy: user?.uid || null,
+      })
+    }
+  }
+
+  const refreshAfterDateEdit = (collectionName) => {
+    if (collectionName === 'memberJoinFees') fetchTransactions()
+    else fetchClosingTransactions()
+  }
+
+  const saveDateEdit = async () => {
+    if (!dateEdit) return
+    try {
+      const values = await dateForm.validateFields()
+      const newDate = values.transactionDate
+      const { id: recordId, collection: collectionName, groupId } = dateEdit
+      setDateSaving(true)
+
+      // No group reference (older records) — the row is all there is to fix.
+      if (!groupId) {
+        await writeDateUpdate({ recordId, collectionName, groupId: null, newDate, alsoGroup: false })
+        message.success('Payment date updated')
+        setDateEdit(null); dateForm.resetFields()
+        refreshAfterDateEdit(collectionName)
+        return
+      }
+
+      // How many members does this payment batch cover?
+      const siblingSnap = await getDocs(
+        query(collection(db, collectionName), where('groupId', '==', groupId))
+      )
+      const siblingCount = siblingSnap.size
+
+      if (siblingCount > 1) {
+        setDateSaving(false)
+        Modal.confirm({
+          title: 'This payment is part of a batch',
+          width: 460,
+          content: (
+            <div style={{ fontSize: 13 }}>
+              <p>
+                This payment was recorded together with <b>{siblingCount - 1} other
+                member payment{siblingCount - 1 === 1 ? '' : 's'}</b> in one batch,
+                and the batch shares a single date.
+              </p>
+              <p style={{ marginBottom: 0 }}>
+                Change the date for the <b>whole batch</b> so Payments → History
+                matches, or only this member&apos;s row?
+              </p>
+            </div>
+          ),
+          okText: 'Change whole batch',
+          cancelText: 'Only this row',
+          onOk: async () => {
+            try {
+              setDateSaving(true)
+              await writeDateUpdate({ recordId, collectionName, groupId, newDate, alsoGroup: true })
+              message.success(`Payment date updated for all ${siblingCount} payments in this batch`)
+              setDateEdit(null); dateForm.resetFields()
+              refreshAfterDateEdit(collectionName)
+            } catch (e) {
+              message.error('Could not update the batch date: ' + (e?.message || ''))
+            } finally { setDateSaving(false) }
+          },
+          onCancel: async () => {
+            try {
+              setDateSaving(true)
+              await writeDateUpdate({ recordId, collectionName, groupId, newDate, alsoGroup: false })
+              message.warning('Only this row was updated — Payments → History still shows the batch date')
+              setDateEdit(null); dateForm.resetFields()
+              refreshAfterDateEdit(collectionName)
+            } catch (e) {
+              message.error('Could not update the date: ' + (e?.message || ''))
+            } finally { setDateSaving(false) }
+          },
+        })
+        return
+      }
+
+      // Single-member batch — safe to re-date the group too.
+      await writeDateUpdate({ recordId, collectionName, groupId, newDate, alsoGroup: true })
+      message.success('Payment date updated')
+      setDateEdit(null); dateForm.resetFields()
+      refreshAfterDateEdit(collectionName)
+    } catch (err) {
+      if (err?.errorFields) return   // form validation already shown
+      console.error('Failed to update payment date:', err)
+      message.error('Could not update the payment date: ' + (err?.message || 'unknown error'))
+    } finally {
+      setDateSaving(false)
+    }
+  }
 
   const openPaymentModal = (type = 'joinFee') => {
     setPaymentType(type)
@@ -432,7 +580,11 @@ const MemberDetailDrawer = ({ member: memberProp, visible, onClose, programList,
               <div className="font-semibold">
                 {r.transactionType === 'join_fee' ? 'Join Fee Payment' : r.transactionType === 'join_fee_approval' ? 'Approval Payment' : 'Additional Payment'}
               </div>
-              <div className="text-xs text-gray-500">{dayjs(r.date).format('DD MMM YYYY, hh:mm A')}</div>
+              {/* Labelled explicitly: this is when the record was entered, not
+                  the payment date. The payment date has its own column now —
+                  previously only this timestamp was shown, so the date the
+                  admin chose in "Add Payment" never appeared anywhere. */}
+              <div className="text-xs text-gray-400">Recorded {formatDateTime(r.date)}</div>
             </div>
           </div>
           {r.notes && <div className="text-xs text-gray-500 bg-gray-50 p-2 rounded">{r.notes}</div>}
@@ -448,6 +600,36 @@ const MemberDetailDrawer = ({ member: memberProp, visible, onClose, programList,
             {r.paymentMode}
           </Tag>
           {r.transactionId && <div className="text-xs font-mono bg-gray-100 px-2 py-1 rounded">Txn: {r.transactionId}</div>}
+        </div>
+      ),
+    },
+    {
+      // The date the payment was actually made, as chosen in Add Payment and
+      // stored on the record as transactionDate. This column did not exist, so
+      // that date was collected and saved but never displayed.
+      title: 'Payment Date', key: 'txnDate', width: 130,
+      render: (_, r) => (
+        <div>
+          <div className="text-sm font-medium">
+            {formatPaymentDate(r.transactionDate, r.paymentDate, r.date)}
+          </div>
+          {/* Correcting a mistyped date shouldn't mean reverting and re-adding
+              the whole payment. Legacy synthesised rows have no document to
+              update, so they're excluded. */}
+          {canEditPaymentDate && r.id !== 'initial-join-fee' && (
+            <Button
+              type="link" size="small" icon={<EditOutlined />}
+              onClick={() => openDateEdit(r, 'memberJoinFees', 'Join Fee Payment')}
+              style={{ padding: 0, height: 18, fontSize: 11 }}
+            >
+              Edit
+            </Button>
+          )}
+          {r.dateCorrectedAt && (
+            <Tooltip title="This date was corrected after the payment was recorded">
+              <Tag style={{ fontSize: 9, marginTop: 2 }}>corrected</Tag>
+            </Tooltip>
+          )}
         </div>
       ),
     },
@@ -475,7 +657,7 @@ const MemberDetailDrawer = ({ member: memberProp, visible, onClose, programList,
             </div>
             <div>
               <div className="font-semibold text-sm">Closing Payment</div>
-              <div className="text-xs text-gray-500">{dayjs(r.date).format('DD MMM YYYY, hh:mm A')}</div>
+              <div className="text-xs text-gray-400">Recorded {formatDateTime(r.date)}</div>
             </div>
           </div>
           <div className="flex flex-wrap gap-1 mt-1">
@@ -499,9 +681,29 @@ const MemberDetailDrawer = ({ member: memberProp, visible, onClose, programList,
       ),
     },
     {
-      title: 'Date', key: 'txnDate', width: 100,
+      // Was rendering transactionDate raw, which the APIs store as
+      // 'YYYY-MM-DD' — so this showed "2026-09-28" instead of a DD/MM/YYYY date.
+      title: 'Payment Date', key: 'txnDate', width: 130,
       render: (_, r) => (
-        <div className="text-sm">{r.transactionDate || dayjs(r.date).format('DD/MM/YYYY')}</div>
+        <div>
+          <div className="text-sm font-medium">
+            {formatPaymentDate(r.transactionDate, r.paymentDate, r.date)}
+          </div>
+          {canEditPaymentDate && (
+            <Button
+              type="link" size="small" icon={<EditOutlined />}
+              onClick={() => openDateEdit(r, 'memberClosingFees', 'Closing Payment')}
+              style={{ padding: 0, height: 18, fontSize: 11 }}
+            >
+              Edit
+            </Button>
+          )}
+          {r.dateCorrectedAt && (
+            <Tooltip title="This date was corrected after the payment was recorded">
+              <Tag style={{ fontSize: 9, marginTop: 2 }}>corrected</Tag>
+            </Tooltip>
+          )}
+        </div>
       ),
     },
   ]
@@ -1160,6 +1362,45 @@ const MemberDetailDrawer = ({ member: memberProp, visible, onClose, programList,
 
           <Form.Item name="paymentNote" label="Note (optional)">
             <Input placeholder="Any note about this payment" />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      {/* ── Correct payment date ──
+          Only the date changes. The amount, mode and transaction ID are left
+          alone, because every paid/pending rollup is derived from the amount —
+          editing that here would leave the member, agent and group totals
+          disagreeing with the transaction list. */}
+      <Modal
+        title={<Space><EditOutlined />Correct Payment Date</Space>}
+        open={!!dateEdit}
+        onCancel={() => { setDateEdit(null); dateForm.resetFields() }}
+        onOk={saveDateEdit}
+        okText="Save Date"
+        confirmLoading={dateSaving}
+        width={420}
+        destroyOnClose
+      >
+        <div className="text-xs text-gray-500 mb-3">
+          Changing the date of this {dateEdit?.label?.toLowerCase() || 'payment'}.
+          The amount and payment mode are not affected.
+          {dateEdit?.groupId && (
+            <div className="mt-1">
+              This also updates the date shown on <b>Payments → History</b>.
+            </div>
+          )}
+        </div>
+        <Form form={dateForm} layout="vertical">
+          <Form.Item
+            name="transactionDate"
+            label="Payment Date"
+            rules={[{ required: true, message: 'Please pick the correct date' }]}
+          >
+            <DatePicker
+              style={{ width: '100%' }}
+              format="DD/MM/YYYY"
+              disabledDate={d => d && d > dayjs()}
+            />
           </Form.Item>
         </Form>
       </Modal>

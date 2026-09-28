@@ -269,7 +269,7 @@ const ClosingFormPdf = ({ member = {}, settlement = {}, programName = '' }) => {
             <View style={styles.signRow}>
               <View style={styles.signBox}>
                 <View style={styles.signLine} />
-                <Text style={styles.signLabel}>वारिसदार हस्ताक्षर</Text>
+                <Text style={styles.signLabel}>सदस्य/नॉमिनी हस्ताक्षर</Text>
               </View>
               <View style={styles.signBox}>
                 <View style={styles.signLine} />
@@ -279,7 +279,10 @@ const ClosingFormPdf = ({ member = {}, settlement = {}, programName = '' }) => {
               <View style={styles.signBox}>
                 <View style={styles.signLine} />
                 <Text style={styles.signLabel}>संस्थापक हस्ताक्षर</Text>
-                <Text style={styles.signName}>श्री वोरारामजी टी. बोराणा</Text>
+                <Text style={styles.signName}>श्री क्षत्रिय घांची मोदी समाज सेवा संस्थान ट्रस्ट</Text>
+                   <Text style={styles.signName}>
+                                    अहमदाबाद
+                                  </Text>
               </View>
             </View>
           </View>
