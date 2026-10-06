@@ -168,8 +168,12 @@ const ApproveModal = ({ open, setOpen, selectedMember, setSelectedMember, fetchA
         fatherName:         selectedMember.fatherName,
         surname:            selectedMember.surname,
         phone:              selectedMember.phone,
+        phoneAlt:           selectedMember.phoneAlt,
         aadhaarNo:          selectedMember.aadhaarNo,
         registrationNumber: finalRegNumber,
+        // Carried over from the request so an approved member stays findable by
+        // the number the old system knew them under.
+        legacyApplicationNo: selectedMember.legacyApplicationNo,
         village:            selectedMember.village,
         city:               selectedMember.city,
         district:           selectedMember.district,

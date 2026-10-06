@@ -170,6 +170,7 @@ const buildMenuItems = (user, pendingCount, collapsed) => {
         { key: '/settings/fix-age-groups', label: 'Fix Age Group & Fees', module: 'settings' },
         { key: '/settings/fix-closing', label: 'Closing System Check', module: 'settings' },
         { key: '/settings/closing-date-import', label: 'Closing Date Import', module: 'settings' },
+        { key: '/settings/search-index', label: 'Search Index Rebuild', module: 'settings' },
       ],
     },
     {

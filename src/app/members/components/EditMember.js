@@ -12,6 +12,10 @@ import {
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage'
 import { db, storage } from '../../../../lib/firbase-client'
 import { notifyAgent } from '@/app/utils/notifyAgent'
+// Same index builder the create path uses — editing must produce the same
+// shape, or a member becomes findable by different terms depending on whether
+// they were just created or just edited.
+import { createSearchIndex } from '@/app/members/components/components/firebaseUtils'
 
 // Import form section components
 import BasicInfoForm    from './components/BasicInfoForm'
@@ -466,6 +470,34 @@ const EditMember = ({ open, setOpen, programs, agents, currentUser, memberId, on
         search_caste:              selectedCasteName?.toLowerCase()    || '',
         search_guardian:           values.guardian?.toLowerCase()      || '',
         search_programName:        programDetail?.programName?.toLowerCase() || '',
+
+        // The search BOX queries this array (search_keywords array-contains),
+        // not the scalar search_* fields above. It was written when the member
+        // was created and never again, so after an edit the member was still
+        // findable only under their OLD name, phone or village — and a member
+        // whose name had just been corrected could not be found at all.
+        // Rebuilt from the same helper the create path uses, so both produce an
+        // identical index.
+        search_keywords: createSearchIndex({
+          name:          finalName,
+          fatherName:    values.fatherName,
+          surname:       values.surname,
+          phone:         values.phone,
+          phoneAlt:      values.phoneAlt,
+          aadhaarNo:     values.aadhaarNo,
+          // Not editable here, but it must stay in the index or editing a
+          // member would make them unsearchable by registration number.
+          registrationNumber: memberData?.registrationNumber || '',
+          legacyApplicationNo: memberData?.legacyApplicationNo || '',
+          village:       values.village,
+          city:          selectedCityName,
+          district:      selectedDistrictName,
+          state:         selectedStateName,
+          caste:         selectedCasteName,
+          guardian:      values.guardian,
+          programName:   programDetail?.programName,
+          ageGroupName:  programDetail?.ageGroupName,
+        }),
 
         updated_at: serverTimestamp(),
       }

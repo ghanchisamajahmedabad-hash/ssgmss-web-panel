@@ -8,6 +8,7 @@ import dayjs from 'dayjs'
 import { auth, db, storage } from '../../../../../lib/firbase-client'
 import { message } from 'antd'
 import { notifyAgent } from '@/app/utils/notifyAgent'
+import { createSearchIndex } from '@/utils/searchIndex'
 
 // Auto-generate a cash reference ID so cash payments are searchable in history
 const generateCashId = () => {
@@ -263,45 +264,14 @@ export const generateRegistrationNumber = async (programId) => {
 };
 
 // Create search index
-export function createSearchIndex(data) {
-  const indexSet = new Set();
-
-  const addPrefixes = (text) => {
-    const str = String(text).toLowerCase().trim();
-    if (!str) return;
-
-    indexSet.add(str);
-    
-    str.split(/\s+/).forEach(word => {
-      if (word.length > 1) {
-        indexSet.add(word);
-        let prefix = "";
-        for (const ch of word) {
-          prefix += ch;
-          if (prefix.length > 1) {
-            indexSet.add(prefix);
-          }
-        }
-      }
-    });
-  };
-
-  const traverse = (value) => {
-    if (value === null || value === undefined) return;
-    if (typeof value === "object") {
-      if (Array.isArray(value)) {
-        value.forEach(v => traverse(v));
-      } else {
-        Object.values(value).forEach(v => traverse(v));
-      }
-    } else {
-      addPrefixes(value);
-    }
-  };
-
-  traverse(data);
-  return Array.from(indexSet).filter(item => item.length > 0);
-}
+//
+// Re-exported from utils/searchIndex so there is exactly one implementation.
+// This used to be a second copy of the same function, and a third lived in
+// utils/memberUtils — three copies that could drift, for an index the search
+// box depends on.
+// Imported above for use inside this file; re-exported so existing callers
+// (AddMember, ApproveModal) keep importing it from here.
+export { createSearchIndex };
 
 // Record join fee transaction
 // Also creates a paymentGroups document so this payment appears in
@@ -652,6 +622,9 @@ export const handleSubmit = async (values, context, message) => {
       fatherName: values.fatherName,
       surname: values.surname,
       phone: values.phone,
+      // Indexed too, so a member reached on their alternate number is still
+      // findable by it — and so create, approve and edit all build the same set.
+      phoneAlt: values.phoneAlt,
       aadhaarNo: values.aadhaarNo,
       registrationNumber,
       village: values.village,
@@ -728,6 +701,14 @@ export const handleSubmit = async (values, context, message) => {
       // ✅ Financial fields
       payAmount: selectedProgramDetail.payAmount || 0,
       joinFees: totalJoinFees,
+      // The period's fixed join fee. The Add Member form reads it from the
+      // period and shows it next to Join Fees, but it was never written to the
+      // member — so a member added from the admin panel came out with no
+      // fixedJoinFees at all, while the same member added through a request
+      // (ApproveModal) or later edited (EditMember) did have it. That is why
+      // "Fixed Fees" was blank on the members table and the certificate's
+      // pending line came out wrong for admin-added members.
+      fixedJoinFees: selectedProgramDetail.fixedJoinFees || 0,
       joinFeesDone: joinFeesDone,
       paymentMode: joinFeesDone ? paymentMode : null,
       paidAmount: actualPaidAmount,
