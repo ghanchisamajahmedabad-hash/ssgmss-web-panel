@@ -77,6 +77,16 @@ const EditMember = ({ open, setOpen, programs, agents, currentUser, memberId, on
   const [states,    setStates]    = useState([])
   const [districts, setDistricts] = useState([])
   const [cities,    setCities]    = useState([])
+  // The CURRENT selection, not the member's stored one.
+  //
+  // These used to be read straight off memberData, which never changes while
+  // the drawer is open. So the District select was enabled only if the member
+  // already had a state — a member saved without one could never pick a
+  // district, because choosing a State left memberData.stateId undefined and
+  // the field stayed disabled. Same for City when a member had a state but no
+  // district. Tracking the live choice is what AddMember already does.
+  const [selectedState,    setSelectedState]    = useState(null)
+  const [selectedDistrict, setSelectedDistrict] = useState(null)
   const [castes,    setCastes]    = useState([])
   const [relations, setRelations] = useState([])
 
@@ -175,6 +185,8 @@ const EditMember = ({ open, setOpen, programs, agents, currentUser, memberId, on
       })
 
       // Load location dropdowns
+      setSelectedState(data.stateId || null)
+      setSelectedDistrict(data.districtId || null)
       if (data.stateId) await fetchDistricts(data.stateId, data.districtId)
 
       setDataLoaded(true)
@@ -200,13 +212,31 @@ const EditMember = ({ open, setOpen, programs, agents, currentUser, memberId, on
   }
 
   const handleStateChange = async (value) => {
+    setSelectedState(value || null)
+    setSelectedDistrict(null)
     if (value) { await fetchDistricts(value) } else { setDistricts([]); setCities([]) }
     form.setFieldsValue({ district: undefined, city: undefined })
   }
 
   const handleDistrictChange = async (value) => {
+    setSelectedDistrict(value || null)
     if (value) { await fetchCities(value) } else { setCities([]) }
     form.setFieldsValue({ city: undefined })
+  }
+
+  // A district or city added from the form's "+ Add" button. Without these the
+  // new entry was written to Firestore but never appeared in the dropdown, so
+  // it looked like nothing had happened.
+  const handleDistrictAdded = (newDistrict) => {
+    setDistricts(prev => [...prev, newDistrict])
+    setSelectedDistrict(newDistrict.id)
+    form.setFieldsValue({ district: newDistrict.id, city: undefined })
+    setCities([])
+  }
+
+  const handleCityAdded = (newCity) => {
+    setCities(prev => [...prev, newCity])
+    form.setFieldsValue({ city: newCity.id })
   }
 
   // ── Single-program detail calculation ────────────────────────────────────────
@@ -513,7 +543,20 @@ const EditMember = ({ open, setOpen, programs, agents, currentUser, memberId, on
       if (values.password?.trim()) updateData.password = values.password
 
       // ── Save ─────────────────────────────────────────────────────────────────
-      await updateDoc(doc(db, 'members', memberId), updateData)
+      //
+      // Drop any undefined before writing. Firestore is initialised without
+      // ignoreUndefinedProperties, so a single undefined makes updateDoc throw
+      // and NOTHING is saved — the edit just fails. That happened on members
+      // with incomplete records: an optional field the member never had
+      // (surname, guardian, aadhaar…) comes back from the form as undefined.
+      //
+      // Dropping the key leaves the stored value alone, which is what we want:
+      // a field the user actually cleared arrives as '' , not undefined.
+      const cleanUpdate = Object.fromEntries(
+        Object.entries(updateData).filter(([, v]) => v !== undefined)
+      )
+
+      await updateDoc(doc(db, 'members', memberId), cleanUpdate)
 
       // Record transaction if payment amount changed
       if (paymentDiff !== 0 && joinFeesDone) {
@@ -626,10 +669,12 @@ const EditMember = ({ open, setOpen, programs, agents, currentUser, memberId, on
 
             <AddressForm
               states={states} districts={districts} cities={cities}
-              selectedState={memberData?.stateId} selectedDistrict={memberData?.districtId}
+              selectedState={selectedState} selectedDistrict={selectedDistrict}
               handleStateChange={handleStateChange}
               handleDistrictChange={handleDistrictChange}
               form={form}
+              onDistrictAdded={handleDistrictAdded}
+              onCityAdded={handleCityAdded}
             />
 
             <GuardianForm relations={relations} />
