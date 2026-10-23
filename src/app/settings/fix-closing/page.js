@@ -45,6 +45,7 @@ const ISSUE_INFO = {
   MEMBER_PAID:    { label: 'Member paid wrong',      color: 'red',     hint: "Member's paid doesn't match the sum of their groups." },
   MEMBER_PENDING: { label: 'Member pending wrong',   color: 'red',     hint: 'Pending ≠ total − paid. This is the “total 400 but pending 600” case.' },
   MEMBER_COUNT:   { label: 'Member count wrong',     color: 'red',     hint: "Member's event count doesn't match their groups." },
+  MEMBER_PAID_COUNT: { label: 'Paid closings wrong', color: 'red',  hint: "Paid / pending closing count (e.g. 1/5) doesn't match the money paid on the groups." },
   DUP_EVENT:      { label: 'Duplicate event',        color: 'magenta', hint: 'The same closing charged twice on one group.' },
   AFTER_CLOSED:   { label: 'Event after closing',    color: 'volcano', hint: 'Charged for a closing that happened after this member was closed.' },
   BEFORE_JOIN:    { label: 'Event before joining',   color: 'volcano', hint: 'Charged for a closing that happened before they joined.' },

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { paidClosingsInDoc } from '../../../utils/closingCounts';
 import admin from "../db/firebaseAdmin";
 import { verifyToken } from "../../../../middleware/authMiddleware";
 
@@ -376,14 +377,14 @@ export async function POST(req) {
         total     += Number(d.totalAmount  || 0);
         paid      += Number(d.paidAmount   || 0);
         count     += Number(d.closingCount || 0);
-        if (d.status === "paid") paidCount += Number(d.closingCount || 0);
+        paidCount += paidClosingsInDoc(d);
       }
 
       if (thisGroupDoc) {
         total     += Number(thisGroupDoc.totalAmount  || 0);
         paid      += Number(thisGroupDoc.paidAmount   || 0);
         count     += Number(thisGroupDoc.closingCount || 0);
-        if (thisGroupDoc.status === "paid") paidCount += Number(thisGroupDoc.closingCount || 0);
+        paidCount += paidClosingsInDoc(thisGroupDoc);
       }
 
       const pending = Math.max(0, total - paid);

@@ -41,6 +41,11 @@ export async function GET(req) {
 
     const allSnap = await groupsQuery.get();
     let allGroups = allSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+    // Direct member-advance deposits (/api/members/advance) are not join-fees
+    // or closing payments — this list treats every group as one of those two
+    // and would revert them with the wrong endpoint. They have their own
+    // history on the member (Advance drawer).
+    allGroups = allGroups.filter(g => g.paymentType !== 'memberAdvance');
 
     // Sort by createdAt desc in JS (no composite index needed)
     allGroups.sort((a, b) => {

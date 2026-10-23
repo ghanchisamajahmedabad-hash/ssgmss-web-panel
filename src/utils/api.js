@@ -318,8 +318,11 @@ export const paymentApi={
       method: 'POST',
       body: JSON.stringify(data),
     });
-    
+
   },
+  // How much of a UTR's bank amount is already used (see api/db/utrLedger.js)
+  utrCheck: (utr) =>
+    apiRequest(`/api/utr-check?utr=${encodeURIComponent(utr)}`, { method: 'GET' }),
   reverseClosing: (payload) =>
     apiRequest(`/api/closed_payment_entry`, {
       method: 'DELETE',

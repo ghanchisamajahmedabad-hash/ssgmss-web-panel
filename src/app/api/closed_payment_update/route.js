@@ -3,6 +3,9 @@ import admin from "../db/firebaseAdmin";
 import { checkRole, verifyToken } from "../../../../middleware/authMiddleware";
 import { creditCommissionStandalone } from "../commission/route";
 import { sendToAgent } from "../db/fcm";
+import { checkUtrCapacity } from "../db/utrLedger";
+import { memberAdvanceOf, creditOps, debitOps, applyOps } from "../db/memberAdvance";
+import { recomputeMemberClosingCounts } from "../db/closingCounts";
 
 const db = admin.firestore();
 const INC = admin.firestore.FieldValue.increment;
@@ -55,7 +58,14 @@ export async function POST(req) {
     const {
       closingPayments, memberPayments, paymentDate, paymentMethod, paymentNote,
       totalAmount, transactionId, fileUrl, agentId, programId, idempotencyKey,
+      // Bank amount of the UTR — lets one transfer be split across members,
+      // agents and closing/join-fees payments (see db/utrLedger.js).
+      utrTotalAmount,
+      // [{ memberId, amount }] — part a member paid beyond their dues,
+      // kept as that member's advance.
+      memberAdvanceCredits,
     } = body;
+    const isMemberAdvancePay = paymentMethod === 'memberAdvance';
 
     // ── Idempotency guard ─────────────────────────────────────────────────────
     // The UTR check below only fires when the user typed a transaction ID, so
@@ -111,26 +121,9 @@ export async function POST(req) {
       ? transactionId.trim()
       : paymentMethod === 'cash' ? generateCashId() : '';
 
-    // ── Duplicate UTR / transaction ID check (online only) ───────────────────
-    if (transactionId && transactionId.trim() !== '') {
-      const utrSnap = await db.collection('paymentGroups')
-        .where('transactionId', '==', transactionId.trim())
-        .limit(1)
-        .get();
-      if (!utrSnap.empty) {
-        const existing = utrSnap.docs[0].data();
-        const existingDate = existing.paymentDate?.toDate
-          ? existing.paymentDate.toDate().toLocaleDateString('en-IN')
-          : existing.paymentDate || '';
-        await releaseIdempotency();
-        return NextResponse.json({
-          success: false,
-          message: `Duplicate transaction: UTR/Transaction ID "${transactionId.trim()}" was already used in a ${existing.paymentType === 'joinFees' ? 'Join Fees' : 'Closing'} payment on ${existingDate}. Please verify and use a different ID.`,
-          duplicate: true,
-          existingPaymentGroupId: utrSnap.docs[0].id,
-        }, { status: 409 });
-      }
-    }
+    // ── UTR check happens after the member loop (below), once we know the
+    //    amount actually applied. A UTR may now be reused until its bank
+    //    amount is used up — see db/utrLedger.js.
 
     // ── Agent ──────────────────────────────────────────────────────────────
 
@@ -174,6 +167,13 @@ export async function POST(req) {
     let grandTotalCount = 0;
     const memberAllocations = {};
     const commissionMembers = [];
+    // Member advance spent in this payment (paymentMethod 'memberAdvance'):
+    // memberId → { amount, memberData }. A member can appear in several
+    // closing-group entries, so track what's already been taken.
+    const advanceSpent = {};
+    const memberDataCache = {};
+    // closing_payment docs changed in this batch → used to recompute counts
+    const cpOverrides = {};
 
     // ── Helper: update single closing_payment doc ──────────────────────────
     const updateClosingPaymentDoc = (cpDoc, coverAmount) => {
@@ -182,6 +182,7 @@ export async function POST(req) {
       const newDocPaid   = docPaidSoFar + coverAmount;
       const docFullyPaid = newDocPaid >= docTotal;
       const cpRef        = db.collection("closing_payment").doc(cpDoc.id);
+      cpOverrides[cpDoc.id] = { paidAmount: newDocPaid, status: docFullyPaid ? "paid" : "partial" };
 
       batch.update(cpRef, {
         paidAmount:        newDocPaid,
@@ -206,7 +207,16 @@ export async function POST(req) {
         }),
       });
 
-      return { docFullyPaid, wasPending: cpDoc.status === 'pending', closingGroupId: cpDoc.closingGroupId };
+      // Closing counts are counts of CLOSINGS (marriage events), not of
+      // closing_payment docs: one group doc can hold several closings
+      // (closingCount). A closing counts as paid only when its doc is FULLY
+      // paid — the same rule closed_payment_entry and closing/audit use.
+      // This used to add 1 per doc that was 'pending' (even on a partial
+      // payment), so paying a 2-closing group showed "1/5" instead of "2/5".
+      const closingsInDoc   = Number(cpDoc.closingCount || cpDoc.closingDetails?.length || 1);
+      const closingsNowPaid = (docFullyPaid && cpDoc.status !== 'paid') ? closingsInDoc : 0;
+
+      return { docFullyPaid, closingsNowPaid, closingGroupId: cpDoc.closingGroupId };
     };
 
     // ── Per-member/per-group loop ────────────────────────────────────────────
@@ -237,7 +247,19 @@ export async function POST(req) {
         continue;
       }
 
-      const deduction = Math.min(requestedAmount, closingPending);
+      memberDataCache[memberId] = memberData;
+
+      let deduction = Math.min(requestedAmount, closingPending);
+
+      // Paying out of the member's own advance — never more than they have.
+      if (isMemberAdvancePay) {
+        const spentSoFar = advanceSpent[memberId]?.amount || 0;
+        const available  = memberAdvanceOf(memberData) - spentSoFar;
+        deduction = Math.min(deduction, Math.max(0, available));
+        if (deduction > 0) {
+          advanceSpent[memberId] = { amount: spentSoFar + deduction, memberData };
+        }
+      }
       if (deduction <= 0) continue;
 
       let paidDocsCount = 0;
@@ -254,7 +276,7 @@ export async function POST(req) {
             const coverAmount = Math.min(deduction, docPending);
             if (coverAmount > 0) {
               const result = updateClosingPaymentDoc(cpData, coverAmount);
-              if (result.wasPending) paidDocsCount += 1;
+              paidDocsCount += result.closingsNowPaid;
               paidGroupIds.push({ closingGroupId: result.closingGroupId, amount: coverAmount });
             }
           }
@@ -270,7 +292,7 @@ export async function POST(req) {
             const coverAmount = Math.min(remainingDeduction, docPending);
             const result = updateClosingPaymentDoc(cpDoc, coverAmount);
             remainingDeduction -= coverAmount;
-            if (result.wasPending) paidDocsCount += 1;
+            paidDocsCount += result.closingsNowPaid;
             paidGroupIds.push({ closingGroupId: result.closingGroupId, amount: coverAmount });
           }
         }
@@ -305,8 +327,7 @@ export async function POST(req) {
         closing_paidAmount:         INC(deduction),
         closing_pendingAmount:      INC(-deduction),
         closing_paymentPercentage:  Number(paymentPct.toFixed(2)),
-        paidClosingCount:           INC(paidDocsCount),
-        pendingClosingCount:        decrementCnt > 0 ? INC(-decrementCnt) : INC(0),
+        // paid/pending closing COUNTS are recomputed after this loop
         updated_at:                 timestamp,
         ...groupUpdates,
       });
@@ -316,16 +337,12 @@ export async function POST(req) {
         batch.set(db.collection('programs').doc(pId), {
           totalClosingPaidAmount:    INC(deduction),
           totalClosingPendingAmount: INC(-deduction),
-          paidClosingCount:          INC(paidDocsCount),
-          pendingClosingCount:       decrementCnt > 0 ? INC(-decrementCnt) : INC(0),
           updated_at:                timestamp,
         }, { merge: true });
 
         if (!programDeltas[pId]) programDeltas[pId] = { paid: 0, pending: 0, paidCount: 0, pendingCount: 0 };
         programDeltas[pId].paid        += deduction;
         programDeltas[pId].pending     -= deduction;
-        programDeltas[pId].paidCount   += paidDocsCount;
-        programDeltas[pId].pendingCount -= decrementCnt;
       }
 
       // ── Commission ──────────────────────────────────────────────────────
@@ -340,7 +357,6 @@ export async function POST(req) {
       const closingGroupIdsStr = paidGroupIds.map(g => g.closingGroupId).filter(Boolean).join(',');
       memberAllocations[memberId] = { programId: pId, programName, amount: deduction, paidDocsCount, closingGroupIds: closingGroupIdsStr };
       grandTotalPaid  += deduction;
-      grandTotalCount += paidDocsCount;
 
       // ── Transaction record ─────────────────────────────────────────────
       const fatherName = memberData.fatherName || '';
@@ -374,12 +390,100 @@ export async function POST(req) {
       });
     }
 
+    // ── Closing counts: recompute from the closing_payment docs ─────────────
+    // Paid closings are counted from the money on each group doc (see
+    // utils/closingCounts.js), and written as ABSOLUTE values instead of a
+    // running +1/−1 — the counter used to drift (₹800 paid = 2 closings, yet
+    // "1/5" shown). Agent / program / org counters move by the change.
+    let countPendingDelta = 0;
+    for (const [memberId, alloc] of Object.entries(memberAllocations)) {
+      const counts = await recomputeMemberClosingCounts(memberId, cpOverrides);
+      if (!counts) continue;                       // legacy: no group docs
+      const old      = memberDataCache[memberId] || {};
+      const dPaid    = counts.paidClosingCount    - Number(old.paidClosingCount    || 0);
+      const dPending = counts.pendingClosingCount - Number(old.pendingClosingCount || 0);
+      batch.update(db.collection('members').doc(memberId), counts);
+      alloc.paidDocsCount = Math.max(0, dPaid);
+      grandTotalCount    += dPaid;
+      countPendingDelta  += dPending;
+      if (alloc.programId) {
+        const pd = (programDeltas[alloc.programId] ||= { paid: 0, pending: 0, paidCount: 0, pendingCount: 0 });
+        pd.paidCount    += dPaid;
+        pd.pendingCount += dPending;
+      }
+    }
+    for (const [pId, d] of Object.entries(programDeltas)) {
+      if (!d.paidCount && !d.pendingCount) continue;
+      batch.set(db.collection('programs').doc(pId), {
+        paidClosingCount:    INC(d.paidCount),
+        pendingClosingCount: INC(d.pendingCount),
+        updated_at:          timestamp,
+      }, { merge: true });
+    }
+
+    // ── Member advance spent (paymentMethod 'memberAdvance') ────────────────
+    for (const [memberId, s] of Object.entries(advanceSpent)) {
+      applyOps(batch, debitOps({
+        memberId, memberData: s.memberData, amount: s.amount,
+        paymentGroupId: paymentGroupRef.id, transactionId: finalTxId,
+        note: paymentNote || null, createdBy: currentUser.uid, agentId,
+      }));
+    }
+
+    // ── Extra amount → member advance ───────────────────────────────────────
+    // Only real money (cash / online) can create advance; paying from an
+    // advance can't create more of it.
+    let advanceCreditedTotal = 0;
+    const advanceCreditMap = {};
+    if (!isMemberAdvancePay && paymentMethod !== 'advance' && Array.isArray(memberAdvanceCredits)) {
+      for (const c of memberAdvanceCredits) {
+        const amt = Math.round(Number(c?.amount || 0) * 100) / 100;
+        if (!c?.memberId || amt <= 0) continue;
+        let mData = memberDataCache[c.memberId];
+        if (!mData) {
+          const s = await db.collection('members').doc(c.memberId).get();
+          if (!s.exists) continue;
+          mData = s.data();
+        }
+        if (mData.delete_flag === true) continue;
+        applyOps(batch, creditOps({
+          memberId: c.memberId, memberData: mData, amount: amt,
+          paymentGroupId: paymentGroupRef.id, transactionId: finalTxId,
+          paymentMethod, note: paymentNote || null, createdBy: currentUser.uid, agentId,
+        }));
+        advanceCreditMap[c.memberId] = (advanceCreditMap[c.memberId] || 0) + amt;
+        advanceCreditedTotal += amt;
+      }
+    }
+
     // ── Guard: nothing was actually applied — don't write a phantom group ────
-    if (grandTotalPaid <= 0) {
+    if (grandTotalPaid + advanceCreditedTotal <= 0) {
+      await releaseIdempotency();
       return NextResponse.json({
         success: false,
-        message: 'No payment applied — all selected members were skipped (nothing pending, deleted, or not found).',
+        message: isMemberAdvancePay
+          ? 'No payment applied — the selected members have no advance balance (or nothing pending).'
+          : 'No payment applied — all selected members were skipped (nothing pending, deleted, or not found).',
       }, { status: 400 });
+    }
+
+    // ── UTR capacity check ──────────────────────────────────────────────────
+    // A UTR can be shared by several payments (different agents, closing +
+    // join fees) as long as the total doesn't exceed the bank amount.
+    if (transactionId && transactionId.trim() !== '') {
+      const utrCheck = await checkUtrCapacity({
+        utr: transactionId,
+        amount: grandTotalPaid + advanceCreditedTotal,
+        utrTotalAmount,
+        createdBy: currentUser.uid,
+      });
+      if (!utrCheck.ok) {
+        await releaseIdempotency();
+        return NextResponse.json({ success: false, message: utrCheck.message, duplicate: true }, { status: 409 });
+      }
+      if (utrCheck.registryWrite) {
+        batch.set(utrCheck.registryWrite.ref, utrCheck.registryWrite.data, { merge: true });
+      }
     }
 
     // ── Agent main doc — use dot-notation INC per programId (atomic, no race) ──
@@ -412,7 +516,7 @@ export async function POST(req) {
       closing_paidAmount:    INC(grandTotalPaid),
       closing_pendingAmount: Math.max(0, curPending   - grandTotalPaid),
       paidClosingCount:      INC(grandTotalCount),
-      pendingClosingCount:   Math.max(0, curPendCount - grandTotalCount),
+      pendingClosingCount:   Math.max(0, curPendCount + countPendingDelta),
       updated_at:            timestamp,
     };
     for (const [pid, delta] of Object.entries(programDeltas)) {
@@ -432,6 +536,10 @@ export async function POST(req) {
       totalAmount:     grandTotalPaid,
       requestedAmount: numTotalAmount,
       actualTotalPaid: grandTotalPaid,
+      // Extra kept as member advance — counts toward the UTR's usage
+      advanceCredited:      advanceCreditedTotal,
+      memberAdvanceCredits: advanceCreditMap,
+      utrTotalAmount:       Number(utrTotalAmount || 0) || null,
     });
 
     // ── Org stats ──────────────────────────────────────────────────────────
@@ -439,7 +547,7 @@ export async function POST(req) {
       totalClosingPaidAmount:    INC(grandTotalPaid),
       totalClosingPendingAmount: INC(-grandTotalPaid),
       paidClosingCount:          INC(grandTotalCount),
-      pendingClosingCount:       INC(-grandTotalCount),
+      pendingClosingCount:       INC(countPendingDelta),
       updated_at:                timestamp,
     }, { merge: true });
 
@@ -486,8 +594,9 @@ export async function POST(req) {
     await sendToAgent(
       agentId,
       "Closing Payment Received",
-      `₹${grandTotalPaid} received for ${grandTotalCount} member(s): ${closingMemberNames || agentName}`,
-      { type: 'closingPayment', amount: String(grandTotalPaid), memberCount: String(grandTotalCount) }
+      `₹${grandTotalPaid} received for ${commissionMembers.length} member(s): ${closingMemberNames || agentName}` +
+        (advanceCreditedTotal > 0 ? ` (+₹${advanceCreditedTotal} kept as member advance)` : ''),
+      { type: 'closingPayment', amount: String(grandTotalPaid), memberCount: String(commissionMembers.length) }
     );
 
     return NextResponse.json({
@@ -498,6 +607,7 @@ export async function POST(req) {
         totalAmount:          grandTotalPaid,
         totalClosingEntries:  grandTotalCount,
         allocations:          memberAllocations,
+        advanceCredited:      advanceCreditedTotal,
       },
     });
 

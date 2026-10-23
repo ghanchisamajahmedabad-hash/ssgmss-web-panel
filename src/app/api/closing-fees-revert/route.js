@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import admin from "../db/firebaseAdmin";
 import { checkRole, verifyToken } from "../../../../middleware/authMiddleware";
 import { reverseCommissionForPayment } from "../commission/route";
+import { planReversal, applyOps } from "../db/memberAdvance";
+import { recomputeMemberClosingCounts } from "../db/closingCounts";
 
 const db = admin.firestore();
 const INC = admin.firestore.FieldValue.increment;
@@ -105,7 +107,8 @@ export async function POST(req) {
       if (programId) {
         if (!programDeltas[programId]) programDeltas[programId] = { paid: 0, count: 0 };
         programDeltas[programId].paid  += Number(amount);
-        programDeltas[programId].count += 1;
+        // .count is filled in step 5 — it counts CLOSINGS moving back to
+        // pending, which depends on the closing_payment docs, not on fee docs
       }
     }
 
@@ -119,48 +122,12 @@ export async function POST(req) {
       const member = memberMap[memberId];
       if (!member) continue;
 
-      const { totalAmount, paidDocsCount, closingGroupIds } = delta;
+      const { totalAmount, closingGroupIds, programId: memberProgramId } = delta;
       grandTotal += totalAmount;
-      grandCount += paidDocsCount;
 
-      // Revert member closing payment fields
-      const memberRef = db.collection('members').doc(memberId);
-      const currentPaid    = Number(member.closing_paidAmount    || 0);
-      const currentPending = Number(member.closing_pendingAmount || 0);
-      const closingTotal   = Number(member.closing_totalAmount   || 0);
-
-      const newPaid    = Math.max(0, currentPaid - totalAmount);
-      // Derive pending from total − paid rather than growing it by the reverted
-      // amount. The unbounded `currentPending + totalAmount` could push pending
-      // above total (member showing total ₹400, pending ₹600) whenever the
-      // charge behind the payment no longer existed. A payment reversal never
-      // changes total, so this is equivalent on sound data and self-correcting
-      // on unsound data.
-      const newPending = Math.max(0, closingTotal - newPaid);
-      const paymentPct = closingTotal > 0 ? Math.min((newPaid / closingTotal) * 100, 100) : 0;
-
-      const newPaidCount    = Math.max(0, Number(member.paidClosingCount || 0) - paidDocsCount);
-      const totalCount      = Number(member.totalClosingCount || 0);
-      const newPendingCount = totalCount > 0
-        ? Math.max(0, totalCount - newPaidCount)
-        : Number(member.pendingClosingCount || 0) + paidDocsCount;
-
-      if (currentPending !== closingTotal - currentPaid) {
-        console.warn(
-          `[ClosingRevert] member ${memberId} pending was inconsistent before revert ` +
-          `(stored ${currentPending}, expected ${closingTotal - currentPaid}) — corrected to ${newPending}`
-        );
-      }
-
-      const memberUpdate = {
-        closing_paidAmount:        newPaid,
-        closing_pendingAmount:     newPending,
-        closing_paymentPercentage: Number(paymentPct.toFixed(2)),
-        paidClosingCount:          newPaidCount,
-        pendingClosingCount:       newPendingCount,
-        updated_at:                ts,
-      };
-      mb.update(memberRef, memberUpdate);
+      // Closings (closingCount) that go from fully paid back to pending
+      let closingsUnpaid = 0;
+      const cpOverrides = {};   // this member's group docs as they'll be after the revert
 
       // Revert each closing_payment doc this member is in (for this payment group)
       for (const closingGroupId of closingGroupIds) {
@@ -182,6 +149,10 @@ export async function POST(req) {
               const newCpPending = Math.max(0, cpTotal - newCpPaid);
               const newStatus    = newCpPaid <= 0 ? 'pending' : newCpPaid < cpTotal ? 'partial' : 'paid';
               const newPct       = cpTotal > 0 ? Number(((newCpPaid / cpTotal) * 100).toFixed(2)) : 0;
+              if (cpData.status === 'paid' && newStatus !== 'paid') {
+                closingsUnpaid += Number(cpData.closingCount || cpData.closingDetails?.length || 1);
+              }
+              cpOverrides[cpRef.id] = { paidAmount: newCpPaid, status: newStatus };
 
               mb.update(cpRef, {
                 paidAmount:        newCpPaid,
@@ -196,6 +167,54 @@ export async function POST(req) {
           console.warn(`closing_payment revert skipped for ${memberId}_${closingGroupId}:`, e.message);
         }
       }
+
+      // Member doc — written after the closing_payment docs so the closing
+      // counts reflect which groups actually stop being fully paid.
+      // Recount paid closings from the group docs (utils/closingCounts.js)
+      const recount = await recomputeMemberClosingCounts(memberId, cpOverrides);
+      if (recount) closingsUnpaid = Math.max(0, Number(member.paidClosingCount || 0) - recount.paidClosingCount);
+
+      grandCount += closingsUnpaid;
+      if (memberProgramId && programDeltas[memberProgramId]) programDeltas[memberProgramId].count += closingsUnpaid;
+
+      // Revert member closing payment fields
+      const memberRef = db.collection('members').doc(memberId);
+      const currentPaid    = Number(member.closing_paidAmount    || 0);
+      const currentPending = Number(member.closing_pendingAmount || 0);
+      const closingTotal   = Number(member.closing_totalAmount   || 0);
+
+      const newPaid    = Math.max(0, currentPaid - totalAmount);
+      // Derive pending from total − paid rather than growing it by the reverted
+      // amount. The unbounded `currentPending + totalAmount` could push pending
+      // above total (member showing total ₹400, pending ₹600) whenever the
+      // charge behind the payment no longer existed. A payment reversal never
+      // changes total, so this is equivalent on sound data and self-correcting
+      // on unsound data.
+      const newPending = Math.max(0, closingTotal - newPaid);
+      const paymentPct = closingTotal > 0 ? Math.min((newPaid / closingTotal) * 100, 100) : 0;
+
+      const newPaidCount    = recount ? recount.paidClosingCount : Math.max(0, Number(member.paidClosingCount || 0) - closingsUnpaid);
+      const totalCount      = Number(member.totalClosingCount || 0);
+      const newPendingCount = recount ? recount.pendingClosingCount : totalCount > 0
+        ? Math.max(0, totalCount - newPaidCount)
+        : Number(member.pendingClosingCount || 0) + closingsUnpaid;
+
+      if (currentPending !== closingTotal - currentPaid) {
+        console.warn(
+          `[ClosingRevert] member ${memberId} pending was inconsistent before revert ` +
+          `(stored ${currentPending}, expected ${closingTotal - currentPaid}) — corrected to ${newPending}`
+        );
+      }
+
+      const memberUpdate = {
+        closing_paidAmount:        newPaid,
+        closing_pendingAmount:     newPending,
+        closing_paymentPercentage: Number(paymentPct.toFixed(2)),
+        paidClosingCount:          newPaidCount,
+        pendingClosingCount:       newPendingCount,
+        updated_at:                ts,
+      };
+      mb.update(memberRef, memberUpdate);
     }
 
     // ── 6. Reverse program stats ──────────────────────────────────────────
@@ -244,6 +263,16 @@ export async function POST(req) {
         updated_at:                ts,
       }, { merge: true });
     }
+
+    // ── 8b. Undo member-advance movements of this payment ─────────────────
+    //   extra amount that was kept as advance → taken back
+    //   advance that was spent (paymentMode 'memberAdvance') → given back
+    const advPlan = await planReversal({
+      paymentGroupId, refundFees: feesDocs, createdBy: auth.user.uid,
+    });
+    if (!advPlan.ok)
+      return NextResponse.json({ success: false, message: advPlan.message }, { status: 400 });
+    applyOps(mb, advPlan.ops);
 
     // ── 9. Delete all memberClosingFees docs ──────────────────────────────
     for (const fee of feesDocs) {

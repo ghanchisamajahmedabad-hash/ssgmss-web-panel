@@ -3,6 +3,7 @@ import admin from "../db/firebaseAdmin";
 import { checkRole, verifyToken } from "../../../../middleware/authMiddleware";
 import { creditCommissionStandalone } from "../commission/route";
 import { sendToAgent } from "../db/fcm";
+import { checkUtrCapacity } from "../db/utrLedger";
 
 const db = admin.firestore();
 
@@ -39,7 +40,8 @@ export async function POST(req) {
     const body = await req.json();
     const {
       memberPayments, paymentDate, paymentMethod, paymentNote,
-      totalAmount, transactionId, fileUrl, agentId, idempotencyKey
+      totalAmount, transactionId, fileUrl, agentId, idempotencyKey,
+      utrTotalAmount,   // bank amount of the UTR — see db/utrLedger.js
     } = body;
 
     // ── Idempotency guard ─────────────────────────────────────────────────────
@@ -97,26 +99,9 @@ export async function POST(req) {
       ? transactionId.trim()
       : paymentMethod === 'cash' ? generateCashId() : '';
 
-    // ── Duplicate UTR / transaction ID check (online only) ───────────────────
-    if (transactionId && transactionId.trim() !== '') {
-      const utrSnap = await db.collection('paymentGroups')
-        .where('transactionId', '==', transactionId.trim())
-        .limit(1)
-        .get();
-      if (!utrSnap.empty) {
-        const existing = utrSnap.docs[0].data();
-        const existingDate = existing.paymentDate?.toDate
-          ? existing.paymentDate.toDate().toLocaleDateString('en-IN')
-          : existing.paymentDate || '';
-        await releaseIdempotency();
-        return NextResponse.json({
-          success: false,
-          message: `Duplicate transaction: UTR/Transaction ID "${transactionId.trim()}" was already used in a ${existing.paymentType === 'joinFees' ? 'Join Fees' : 'Closing'} payment on ${existingDate}. Please verify and use a different ID.`,
-          duplicate: true,
-          existingPaymentGroupId: utrSnap.docs[0].id,
-        }, { status: 409 });
-      }
-    }
+    // ── UTR check happens after the member loop (below), once the actually
+    //    applied amount is known. A UTR may be reused until its bank amount
+    //    is used up — see db/utrLedger.js.
 
     // ── Agent doc ─────────────────────────────────────────────────────────────
 
@@ -286,6 +271,23 @@ export async function POST(req) {
         success: false,
         message: "No payment applied — all selected members were skipped (fully paid, deleted, or not found).",
       }, { status: 400 });
+    }
+
+    // ── UTR capacity check ──────────────────────────────────────────────────
+    if (transactionId && transactionId.trim() !== '') {
+      const utrCheck = await checkUtrCapacity({
+        utr: transactionId,
+        amount: actualTotalPaid,
+        utrTotalAmount,
+        createdBy: currentUser.uid,
+      });
+      if (!utrCheck.ok) {
+        await releaseIdempotency();
+        return NextResponse.json({ success: false, message: utrCheck.message, duplicate: true }, { status: 409 });
+      }
+      if (utrCheck.registryWrite) {
+        batch.set(utrCheck.registryWrite.ref, utrCheck.registryWrite.data, { merge: true });
+      }
     }
 
     // ── Agent totals — use dot-notation INC per programId (atomic, no race) ──

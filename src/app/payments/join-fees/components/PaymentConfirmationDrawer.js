@@ -10,6 +10,7 @@ import {
   CheckCircleOutlined, BankOutlined, WalletOutlined,
   MobileOutlined
 } from '@ant-design/icons';
+import UtrAmountField from '../../components/UtrAmountField';
 
 const { Title, Text } = Typography;
 const { TextArea } = Input;
@@ -26,6 +27,8 @@ const PaymentConfirmationDrawer = ({
   uploadedFile, setUploadedFile,
   advanceBalance = 0,
   colors,
+  // UTR shared across payments — see components/UtrAmountField
+  utrTotalAmount, setUtrTotalAmount, utrBlocked = false, setUtrBlocked, agentList = [],
 }) => {
   const isOnline  = paymentMethod === 'online';
   const isAdvance = paymentMethod === 'advance';
@@ -34,6 +37,7 @@ const PaymentConfirmationDrawer = ({
   const confirmDisabled =
     uploading ||
     (isOnline  && !transactionId?.trim()) ||
+    (isOnline  && utrBlocked) ||
     insufficientAdvance;
 
   return (
@@ -162,6 +166,14 @@ const PaymentConfirmationDrawer = ({
                   size="middle"
                   prefix={<MobileOutlined style={{ color: colors.primary }} />}
                   allowClear
+                />
+                <UtrAmountField
+                  transactionId={transactionId}
+                  utrTotalAmount={utrTotalAmount}
+                  setUtrTotalAmount={setUtrTotalAmount}
+                  payingAmount={totalPaymentAmount}
+                  agentList={agentList}
+                  onBlockedChange={setUtrBlocked}
                 />
                 <div style={{ marginTop: 12 }}>
                   <Text type="secondary" style={{ fontSize: 12 }}>Payment Screenshot (Optional)</Text>

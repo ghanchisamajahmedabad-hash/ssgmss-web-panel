@@ -137,6 +137,9 @@ const MemberPaymentPage = () => {
   const [globalPaymentAmount,  setGlobalPaymentAmount]  = useState('');
   const [paymentMethod,        setPaymentMethod]        = useState('cash');
   const [transactionId,        setTransactionId]        = useState('');
+  // UTR shared across payments — bank amount of the transfer
+  const [utrTotalAmount,       setUtrTotalAmount]       = useState(null);
+  const [utrBlocked,           setUtrBlocked]           = useState(false);
   const [memberPayments,       setMemberPayments]       = useState({});
   const [programOptions,       setProgramOptions]       = useState([]);
 
@@ -416,6 +419,7 @@ const MemberPaymentPage = () => {
         paymentDate:     paymentDate.toISOString(),
         paymentMethod: paymentMethod === 'advance' ? 'advance' : paymentMethod,
         paymentNote, transactionId,
+        utrTotalAmount: paymentMethod === 'online' ? (utrTotalAmount || null) : null,
         fileUrl,
         totalAmount: totalAmt,
         agentId,
@@ -972,6 +976,11 @@ const MemberPaymentPage = () => {
         setPaymentMethod={setPaymentMethod}
         transactionId={transactionId}
         setTransactionId={setTransactionId}
+        utrTotalAmount={utrTotalAmount}
+        setUtrTotalAmount={setUtrTotalAmount}
+        utrBlocked={utrBlocked}
+        setUtrBlocked={setUtrBlocked}
+        agentList={agentList}
         totalPaymentAmount={totalPaymentAmount}
         paymentDate={paymentDate}
         setPaymentDate={setPaymentDate}

@@ -29,6 +29,7 @@ import ClosingPaymentConfirmationDrawer from '../components/PaymentConfirmationD
 import ClosingPaymentHistoryDrawer from '../components/PaymentHistoryDrawer';
 import RasidGroupClosingDrawer from '../components/RasidComponent/RasidGroupClosingDrawer';
 import AgentAdvancePanel from '../../join-fees/components/AgentAdvancePanel';
+import MemberAdvanceDrawer from '../components/MemberAdvanceDrawer';
 import { uploadFile } from '@/utils/uploadUtils/common';
 
 const { Title, Text } = Typography;
@@ -86,6 +87,18 @@ const waterfallDistribute = (totalAmount, sortedIds, membersMap) => {
   }
   return result;
 };
+
+// Member's own advance (extra paid earlier) — see api/db/memberAdvance.js
+const memberAdvanceOf = (m) => Number(m?.memberAdvanceBalance || 0);
+
+// Most a member can be charged with the chosen method:
+//   memberAdvance → their pending, but no more than their advance
+//   others        → their pending (cash/online may go beyond — the extra
+//                   becomes member advance, handled separately)
+const payCap = (m, method) =>
+  method === 'memberAdvance'
+    ? Math.min(m?.closing_pendingAmount || 0, memberAdvanceOf(m))
+    : (m?.closing_pendingAmount || 0);
 
 // ─── Compact Stat Card ────────────────────────────────────────────────────────
 const CompactStatCard = ({ label, value, sub, color, icon, extra }) => (
@@ -154,9 +167,20 @@ const ClosingMemberPaymentPage = () => {
   const [paymentNote,                setPaymentNote]                = useState('');
   const [uploadedFile,               setUploadedFile]               = useState(null);
   const [uploading,                  setUploading]                  = useState(false);
-  const [processingPayments,         setProcessingPayments]         = useState([]);
   const [closingGroupsMap,           setClosingGroupsMap]           = useState({});
   const [openRasidDrawer,            setOpenRasidDrawer]            = useState(false);
+  const [advanceMember,              setAdvanceMember]              = useState(null);   // member whose advance drawer is open
+  // Review drawer: which members are being paid, and which closing groups
+  const [reviewMemberIds,            setReviewMemberIds]            = useState([]);
+  const [selectedGroupIds,           setSelectedGroupIds]           = useState([]);
+  const [keepExtraAsAdvance,         setKeepExtraAsAdvance]         = useState(true);
+  // UTR shared across payments — bank amount of the transfer
+  const [utrTotalAmount,             setUtrTotalAmount]             = useState(null);
+  const [utrBlocked,                 setUtrBlocked]                 = useState(false);
+
+  // Only real money (cash / online) may exceed pending; the extra goes to
+  // the member's advance.
+  const allowsExtra = paymentMethod === 'cash' || paymentMethod === 'online';
 
   // Idempotency key for the in-flight payment. Held in a ref so retrying the
   // SAME submission reuses it (server rejects the replay), while a new payment
@@ -199,6 +223,68 @@ const ClosingMemberPaymentPage = () => {
   const paidCount     = activeMembers.filter(m => m.closing_pendingAmount === 0 && (m.closing_paidAmount || 0) > 0).length;
   const fullyPaidCount = activeMembers.filter(m => m.closing_pendingAmount === 0).length;
   const selectedMembersData = members.filter(m => selectedMembers.includes(m.id) && !m.isDeleted && parseFloat(memberPayments[m.id]) > 0);
+  const membersWithAdvance  = activeMembers.filter(m => memberAdvanceOf(m) > 0);
+  const totalMemberAdvance  = membersWithAdvance.reduce((s, m) => s + memberAdvanceOf(m), 0);
+
+  // ── Review: split each member's amount over the TICKED closing groups ────
+  // Amount above the member's total pending = "extra" → member advance.
+  // Amount meant for an unticked group is simply not charged this time.
+  const review = useMemo(() => {
+    const entries = [];
+    const credits = [];
+    const notCharged = [];   // amount that found no ticked group with pending
+    const groupInfo = {};
+    for (const id of reviewMemberIds) {
+      const m = membersMap[id];
+      if (!m) continue;
+      const amt     = parseFloat(memberPayments[id]) || 0;
+      const pending = m.closing_pendingAmount || 0;
+      const groups  = closingGroupsMap[id] || [];
+
+      // group options are built from ALL of the member's pending groups
+      for (const g of groups) {
+        if (!groupInfo[g.closingGroupId]) {
+          const names = (g.closingDetails || []).map(d => d.closed_memberName).filter(Boolean);
+          groupInfo[g.closingGroupId] = {
+            id: g.closingGroupId,
+            name: names[0]
+              ? `${names[0]}${names.length > 1 ? ` +${names.length - 1}` : ''}`
+              : (g.closingGroupName || g.closingGroupId?.slice(-8) || '—'),
+            subtitle: g.closingGroupName || '',
+            pending: 0, paying: 0, memberCount: 0, order: Object.keys(groupInfo).length,
+          };
+        }
+        groupInfo[g.closingGroupId].pending += g.pendingAmount;
+        groupInfo[g.closingGroupId].memberCount += 1;
+      }
+
+      let remaining = Math.min(amt, pending);
+      for (const g of groups) {
+        if (remaining <= 0) break;
+        if (!selectedGroupIds.includes(g.closingGroupId)) continue;
+        const alloc = Math.min(remaining, g.pendingAmount);
+        if (alloc > 0) {
+          entries.push({ memberId: id, memberName: m.displayName, closingGroupId: g.closingGroupId, amount: alloc });
+          groupInfo[g.closingGroupId].paying += alloc;
+          remaining -= alloc;
+        }
+      }
+
+      if (remaining > 0) notCharged.push({ memberId: id, memberName: m.displayName, amount: remaining });
+
+      const extra = allowsExtra ? Math.max(0, amt - pending) : 0;
+      if (extra > 0) credits.push({ memberId: id, memberName: m.displayName, amount: extra });
+    }
+    const applied    = entries.reduce((s, e) => s + e.amount, 0);
+    const extraTotal = credits.reduce((s, c) => s + c.amount, 0);
+    return {
+      entries, credits, extraTotal, applied, notCharged,
+      notChargedTotal: notCharged.reduce((s, x) => s + x.amount, 0),
+      total: applied + (keepExtraAsAdvance ? extraTotal : 0),
+      groupOptions: Object.values(groupInfo).sort((a, b) => a.order - b.order),
+    };
+  }, [reviewMemberIds, membersMap, memberPayments, closingGroupsMap, selectedGroupIds, allowsExtra, keepExtraAsAdvance]);
+  const processingPayments = review.entries;
 
   const waterfallOrder = useMemo(() => {
     const order = {};
@@ -309,6 +395,24 @@ const ClosingMemberPaymentPage = () => {
     }
   };
 
+  // Waterfall a lump sum over the selected members. With cash/online, any
+  // amount left after clearing everyone's pending is put on the LAST member
+  // in the order as extra (→ their advance); the user can move it by editing
+  // the amounts.
+  const distribute = (amount, sortedIds, { announce = false } = {}) => {
+    const capped = {};
+    const capMap = Object.fromEntries(sortedIds.map(id => [id, { ...membersMap[id], closing_pendingAmount: payCap(membersMap[id], paymentMethod) }]));
+    Object.assign(capped, waterfallDistribute(amount, sortedIds, capMap));
+    const used = Object.values(capped).reduce((s, v) => s + v, 0);
+    const left = amount - used;
+    if (left > 0 && allowsExtra && sortedIds.length) {
+      const lastId = sortedIds[sortedIds.length - 1];
+      capped[lastId] = (capped[lastId] || 0) + left;
+      if (announce) message.info(`₹${left.toLocaleString()} extra → ${membersMap[lastId]?.displayName || 'last member'} ke advance me jayega (amount badal sakte ho)`);
+    }
+    return capped;
+  };
+
   // ── Selection ─────────────────────────────────────────────────────────────
   const handleMemberSelect = (memberId, checked) => {
     const m = membersMap[memberId];
@@ -317,26 +421,43 @@ const ClosingMemberPaymentPage = () => {
     setSelectedMembers(newSel);
     if (globalPaymentAmount) {
       const sorted = filteredMembers.filter(m => newSel.includes(m.id)).map(m => m.id);
-      setMemberPayments(prev => ({ ...prev, ...waterfallDistribute(Number(globalPaymentAmount), sorted, membersMap) }));
+      const reset = checked ? {} : { [memberId]: 0 };
+      setMemberPayments(prev => ({ ...prev, ...reset, ...distribute(Number(globalPaymentAmount), sorted) }));
     } else if (checked) {
       // Same behaviour as join fees: ticking a member fills their full pending
       // amount, so "Review & Pay" is usable without typing anything.
-      setMemberPayments(prev => ({ ...prev, [memberId]: m?.closing_pendingAmount || 0 }));
+      setMemberPayments(prev => ({ ...prev, [memberId]: payCap(m, paymentMethod) }));
     } else {
       setMemberPayments(prev => ({ ...prev, [memberId]: 0 }));
     }
   };
+
+  // Switching method changes what each member can be charged — re-fill the
+  // ticked members so nothing above the new limit is left behind.
+  useEffect(() => {
+    if (!selectedMembers.length) return;
+    setMemberPayments(prev => {
+      const next = { ...prev };
+      for (const id of selectedMembers) {
+        const cap = payCap(membersMap[id], paymentMethod);
+        const cur = parseFloat(prev[id]) || 0;
+        if (paymentMethod === 'memberAdvance' || !allowsExtra) next[id] = Math.min(cur || cap, cap);
+      }
+      return next;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [paymentMethod]);
 
   const handleSelectAll = (checked) => {
     const selectable = filteredMembers.filter(m => !m.isDeleted && m.closing_pendingAmount > 0).map(m => m.id);
     const newSel = checked ? selectable : [];
     setSelectedMembers(newSel);
     if (globalPaymentAmount && checked)
-      setMemberPayments(prev => ({ ...prev, ...waterfallDistribute(Number(globalPaymentAmount), newSel, membersMap) }));
+      setMemberPayments(prev => ({ ...prev, ...distribute(Number(globalPaymentAmount), newSel) }));
     else if (checked) {
       // Auto-fill each member's full pending amount (join-fees behaviour)
       const filled = {};
-      selectable.forEach(id => { filled[id] = membersMap[id]?.closing_pendingAmount || 0; });
+      selectable.forEach(id => { filled[id] = payCap(membersMap[id], paymentMethod); });
       setMemberPayments(prev => ({ ...prev, ...filled }));
     } else if (!checked) {
       const cleared = {};
@@ -348,7 +469,14 @@ const ClosingMemberPaymentPage = () => {
   const handlePaymentAmountChange = (memberId, value) => {
     const m = membersMap[memberId];
     if (m?.isDeleted) return;
-    if (value > m.closing_pendingAmount) { message.warning(`Cannot exceed ₹${m.closing_pendingAmount.toLocaleString()}`); return; }
+    // cash / online may go above pending — the extra becomes member advance
+    const cap = payCap(m, paymentMethod);
+    if (!allowsExtra && value > cap) {
+      message.warning(paymentMethod === 'memberAdvance'
+        ? `Member advance ₹${memberAdvanceOf(m).toLocaleString()} hai — isse zyada nahi`
+        : `Cannot exceed ₹${cap.toLocaleString()}`);
+      return;
+    }
     setMemberPayments(prev => ({ ...prev, [memberId]: value || 0 }));
   };
 
@@ -357,7 +485,7 @@ const ClosingMemberPaymentPage = () => {
     const amount = Number(globalPaymentAmount);
     if (isNaN(amount) || amount <= 0) { message.warning('Enter a valid amount'); return; }
     const sortedSelected = filteredMembers.filter(m => selectedMembers.includes(m.id)).map(m => m.id);
-    const dist = waterfallDistribute(amount, sortedSelected, membersMap);
+    const dist = distribute(amount, sortedSelected, { announce: true });
     setMemberPayments(prev => ({ ...prev, ...dist }));
     message.success(`₹${amount.toLocaleString()} distributed across ${Object.values(dist).filter(v => v > 0).length} member(s)`);
   };
@@ -366,7 +494,7 @@ const ClosingMemberPaymentPage = () => {
     const valid = selectedMembers.filter(id => {
       const amt = parseFloat(memberPayments[id]) || 0;
       const m = membersMap[id];
-      return !m?.isDeleted && amt > 0 && amt <= m.closing_pendingAmount;
+      return !m?.isDeleted && amt > 0 && (allowsExtra || amt <= payCap(m, paymentMethod));
     });
     if (!valid.length) { message.warning('No valid payment amounts entered.'); return; }
     if (paymentMethod === 'online' && !transactionId) { message.warning('Enter Transaction ID'); return; }
@@ -411,30 +539,12 @@ const ClosingMemberPaymentPage = () => {
     await Promise.all(cgPromises);
     setClosingGroupsMap(cgMap);
 
-    // ── Build per-group payment entries ───────────────────────────────────────
-    // For each member, distribute their payment amount across their pending groups (oldest-first)
-    const allEntries = [];
-    for (const id of valid) {
-      const m = membersMap[id];
-      const memberAmt = parseFloat(memberPayments[id]) || 0;
-      const groups = cgMap[id] || [];
-      let remaining = memberAmt;
-      for (const g of groups) {
-        if (remaining <= 0) break;
-        const allocAmt = Math.min(remaining, g.pendingAmount);
-        if (allocAmt > 0) {
-          allEntries.push({
-            memberId: id,
-            memberName: m.displayName,
-            closingGroupId: g.closingGroupId,
-            amount: allocAmt,
-          });
-          remaining -= allocAmt;
-        }
-      }
-    }
-
-    setProcessingPayments(allEntries);
+    // Per-group entries are built by `review` (useMemo above) from the
+    // members and the closing groups ticked in the drawer — all ticked to start.
+    const allGroupIds = [...new Set(valid.flatMap(id => (cgMap[id] || []).map(g => g.closingGroupId)))];
+    setReviewMemberIds(valid);
+    setSelectedGroupIds(allGroupIds);
+    setKeepExtraAsAdvance(true);
     setIsPaymentDrawerVisible(true);
   };
 
@@ -453,12 +563,16 @@ const ClosingMemberPaymentPage = () => {
         const result = await uploadFile(uploadedFile, `memberpayments/JoinFees/${agentId}/${Date.now()}_${uploadedFile.name}`);
         fileUrl = result?.url || null;
       }
-      const totalAmt = processingPayments.reduce((s, p) => s + p.amount, 0);
+      const totalAmt = review.total;
+      if (totalAmt <= 0) { message.warning('Kuch bhi pay nahi ho raha — koi closing group select karo.'); return; }
+      const advanceCredits = keepExtraAsAdvance ? review.credits.map(c => ({ memberId: c.memberId, amount: c.amount })) : [];
       const res = await paymentApi.closedPaymentUpdate({
         closingPayments: processingPayments,
+        memberAdvanceCredits: advanceCredits,
         paymentDate: paymentDate.toISOString(),
-        paymentMethod: paymentMethod === 'advance' ? 'advance' : paymentMethod,
+        paymentMethod,
         paymentNote, transactionId,
+        utrTotalAmount: paymentMethod === 'online' ? (utrTotalAmount || null) : null,
         fileUrl,
         totalAmount: totalAmt,
         agentId,
@@ -484,12 +598,18 @@ const ClosingMemberPaymentPage = () => {
           const deductResult = await deductFromAdvance(totalAmt, `Closing Payment — ${processingPayments.length} member(s)`);
           if (!deductResult.success) message.warning('Payment recorded but advance deduction failed: ' + deductResult.message);
         }
-        message.success(`Processed ${processingPayments.length} closing payment(s)`);
+        const credited = res.data?.advanceCredited || 0;
+        message.success(
+          `Processed ${processingPayments.length} closing payment(s)` +
+          (credited > 0 ? ` · ₹${credited.toLocaleString()} member advance me jama` : '')
+        );
         setIsPaymentDrawerVisible(false);
         fetchMember();
         setSelectedMembers([]);
         setMemberPayments({});
         setGlobalPaymentAmount('');
+        setReviewMemberIds([]);
+        setUtrTotalAmount(null);
       }
     } catch (e) {
       if (e.message?.toLowerCase().includes('duplicate transaction')) {
@@ -567,6 +687,13 @@ const ClosingMemberPaymentPage = () => {
                   </Tag>
                 )}
                 {r.isDeleted && <Tag color="red" style={{ fontSize: 9, margin: 0, padding: '0 4px', lineHeight: '16px' }}>Del</Tag>}
+                {memberAdvanceOf(r) > 0 && !r.isDeleted && (
+                  <Tooltip title="Member advance (extra paid earlier) — use with the 'Member Advance' method">
+                    <Tag color="cyan" style={{ fontSize: 9, margin: 0, padding: '0 4px', lineHeight: '16px', borderRadius: 10 }}>
+                      Adv ₹{memberAdvanceOf(r).toLocaleString()}
+                    </Tag>
+                  </Tooltip>
+                )}
                 {pct === 100 && !r.isDeleted && <CheckCircleOutlined style={{ color: C.success, fontSize: 11 }} />}
               </Flex>
               <div style={{ fontSize: 10, color: C.textLight }}>
@@ -635,8 +762,8 @@ const ClosingMemberPaymentPage = () => {
           <div>
             <Text style={{ fontSize: 11, fontWeight: 600, color: C.error }}>₹{pending.toLocaleString()}</Text>
             {paying > 0 && (
-              <div style={{ fontSize: 9, color: after === 0 ? C.success : C.warning }}>
-                → {after === 0 ? 'Cleared' : `₹${after.toLocaleString()}`}
+              <div style={{ fontSize: 9, color: after <= 0 ? C.success : C.warning }}>
+                → {after === 0 ? 'Cleared' : after < 0 ? `Cleared +₹${(-after).toLocaleString()} adv` : `₹${after.toLocaleString()}`}
               </div>
             )}
           </div>
@@ -669,7 +796,7 @@ const ClosingMemberPaymentPage = () => {
             value={val || null}
             onChange={v => handlePaymentAmountChange(r.id, v)}
             disabled={!isSelected}
-            min={0} max={r.closing_pendingAmount} precision={0}
+            min={0} max={allowsExtra ? undefined : payCap(r, paymentMethod)} precision={0}
             style={{
               width: '100%',
               borderColor: val > 0 ? C.primary : undefined,
@@ -682,8 +809,19 @@ const ClosingMemberPaymentPage = () => {
       },
     },
     {
-      title: '', key: 'hist', width: 40, fixed: 'right',
+      title: '', key: 'hist', width: 72, fixed: 'right',
       render: (_, r) => (
+        <Space size={0}>
+        <Tooltip title="Advance jama karo (pehle se paisa)">
+          <Button
+            type="text"
+            size="small"
+            icon={<WalletOutlined />}
+            disabled={r.isDeleted}
+            onClick={() => setAdvanceMember(r)}
+            style={{ color: '#059669' }}
+          />
+        </Tooltip>
         <Tooltip title="History">
           <Button
             type="text"
@@ -697,6 +835,7 @@ const ClosingMemberPaymentPage = () => {
             style={{ color: C.info }}
           />
         </Tooltip>
+        </Space>
       ),
     },
   ];
@@ -904,6 +1043,13 @@ const ClosingMemberPaymentPage = () => {
                     Advance ₹{advanceBalance.toLocaleString()}
                   </Radio.Button>
                 )}
+                {totalMemberAdvance > 0 && (
+                  <Tooltip title={`${membersWithAdvance.length} member(s) have advance from extra paid earlier`}>
+                    <Radio.Button value="memberAdvance" style={{ color: paymentMethod === 'memberAdvance' ? undefined : '#0891b2' }}>
+                      Member Adv ₹{totalMemberAdvance.toLocaleString()}
+                    </Radio.Button>
+                  </Tooltip>
+                )}
               </Radio.Group>
               {paymentMethod === 'online' ? (
                 <Input
@@ -913,6 +1059,10 @@ const ClosingMemberPaymentPage = () => {
                   style={{ width: 160 }}
                   size="small"
                 />
+              ) : paymentMethod === 'memberAdvance' ? (
+                <div style={{ background: '#ecfeff', border: '1px solid #a5f3fc', borderRadius: 6, padding: '2px 10px' }}>
+                  <Text style={{ fontSize: 11, color: '#155e75' }}>Har member apne advance se hi katega</Text>
+                </div>
               ) : paymentMethod === 'advance' ? (
                 <div style={{ background: '#f0fdf4', border: '1px solid #a7f3d0', borderRadius: 6, padding: '2px 10px' }}>
                   <Text style={{ fontSize: 11, color: '#065f46' }}>Available:</Text>
@@ -1034,7 +1184,22 @@ const ClosingMemberPaymentPage = () => {
         currentAgent={currentAgent}
         paymentMethod={paymentMethod}
         transactionId={transactionId}
-        totalPaymentAmount={totalPaymentAmount}
+        totalPaymentAmount={review.total}
+        groupOptions={review.groupOptions}
+        selectedGroupIds={selectedGroupIds}
+        setSelectedGroupIds={setSelectedGroupIds}
+        advanceCredits={review.credits}
+        extraTotal={review.extraTotal}
+        notCharged={review.notCharged}
+        notChargedTotal={review.notChargedTotal}
+        allowsExtra={allowsExtra}
+        keepExtraAsAdvance={keepExtraAsAdvance}
+        setKeepExtraAsAdvance={setKeepExtraAsAdvance}
+        utrTotalAmount={utrTotalAmount}
+        setUtrTotalAmount={setUtrTotalAmount}
+        utrBlocked={utrBlocked}
+        setUtrBlocked={setUtrBlocked}
+        agentList={agentList}
         paymentDate={paymentDate}
         setPaymentDate={setPaymentDate}
         paymentNote={paymentNote}
@@ -1042,6 +1207,14 @@ const ClosingMemberPaymentPage = () => {
         uploadedFile={uploadedFile}
         setUploadedFile={setUploadedFile}
         colors={C}
+      />
+      <MemberAdvanceDrawer
+        open={!!advanceMember}
+        onClose={() => setAdvanceMember(null)}
+        member={advanceMember}
+        agentList={agentList}
+        isSuperAdmin={isSuperAdmin}
+        onDone={() => fetchMember()}
       />
       <RasidGroupClosingDrawer
         open={openRasidDrawer}

@@ -352,7 +352,11 @@ const clip = (value, max) => {
   return t.length > max ? t.slice(0, Math.max(1, max - 1)) + '…' : t;
 };
 
-const ClosingPage = ({ data }) => {
+// Browser: images come from /public. Server-side rendering (api/agent-rasid)
+// has no /public to fetch from, so it passes the base64 versions instead.
+const DEFAULT_IMAGES = { logo: '/Images/logoT.png', right: '/Images/sanidevImg.jpeg' };
+
+const ClosingPage = ({ data, images = DEFAULT_IMAGES }) => {
   const entries = data.entries || [];
   const filledEntries = [
     ...entries,
@@ -370,7 +374,7 @@ const ClosingPage = ({ data }) => {
       <View style={styles.outerView}>
 
         {/* Watermark */}
-        <Image src="/Images/logoT.png" style={styles.watermark} />
+        <Image src={images.logo} style={styles.watermark} />
 
         {/* ══ Blessing Row ══ */}
         <View style={styles.topText}>
@@ -382,7 +386,7 @@ const ClosingPage = ({ data }) => {
         {/* ══ Header ══ */}
         <View style={styles.headerSection}>
           <View style={styles.imageBox}>
-            <Image src="/Images/logoT.png" style={styles.logoImage} />
+            <Image src={images.logo} style={styles.logoImage} />
           </View>
 
           <View style={styles.centerContent}>
@@ -409,7 +413,7 @@ const ClosingPage = ({ data }) => {
           </View>
 
           <View style={styles.imageBox}>
-            <Image src="/Images/sanidevImg.jpeg" style={styles.logoImage1} />
+            <Image src={images.right} style={styles.logoImage1} />
           </View>
         </View>
 
@@ -515,8 +519,12 @@ const ClosingPage = ({ data }) => {
               </View>
               <View style={styles.cellName}>
                 {/* Village appended to the name — no separate column */}
-                <Text style={styles.cellTextLeft} maxLines={1} ellipsizeMode="tail">
-                  {entry ? clip([entry.name, entry.village].filter(Boolean).join('  '), 46) : ''}
+                {/* One line, cut at the column's REAL width (maxLines + ellipsis),
+                    not at a guessed character count — the old 46-char clip
+                    put "…" on names that still had plenty of room. The 120
+                    clip only guards against absurdly long values. */}
+                <Text style={[styles.cellTextLeft, { textOverflow: 'ellipsis' }]} maxLines={1}>
+                  {entry ? clip([entry.name, entry.village].filter(Boolean).join('  '), 120) : ''}
                 </Text>
               </View>
               <View style={styles.cellDate}>
@@ -573,7 +581,7 @@ const ClosingPage = ({ data }) => {
 // ─── Main component ──────────────────────────────────────────────────────────
 // Accepts the same shape as before. Lists longer than TOTAL_ROWS are split
 // across pages so the layout stays fixed instead of overflowing.
-const ClosingRasidPdf = ({ entries = [] }) => {
+const ClosingRasidPdf = ({ entries = [], images = DEFAULT_IMAGES }) => {
   const pages = [];
 
   entries.forEach((receipt, rIdx) => {
@@ -588,6 +596,7 @@ const ClosingRasidPdf = ({ entries = [] }) => {
         <ClosingPage
           key={`${receipt.id || rIdx}_${cIdx}`}
           data={{ ...receipt, entries: chunk, startIndex: cIdx * TOTAL_ROWS }}
+          images={images}
         />
       );
     });

@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import admin from "../db/firebaseAdmin";
 import { checkRole, verifyToken } from "../../../../middleware/authMiddleware";
 import { reverseCommissionForPayment } from "../commission/route";
+import { planReversal, applyOps } from "../db/memberAdvance";
+import { recomputeMemberClosingCounts } from "../db/closingCounts";
 
 const db = admin.firestore();
 const INC = admin.firestore.FieldValue.increment;
@@ -70,11 +72,13 @@ export async function POST(req) {
     // ── 3. Check remaining docs in the group ──────────────────────────────
     let groupDeleted = false;
     let remainingCount = 0;
+    let memberRemainingCount = 0;
     if (paymentGroupId) {
       const remaining = await db.collection('memberClosingFees')
         .where('groupId', '==', paymentGroupId)
         .get();
       remainingCount = remaining.size; // includes the current doc before deletion
+      memberRemainingCount = remaining.docs.filter(d => d.data().memberId === memberId).length;
     }
 
     // ── 4. Read member doc ────────────────────────────────────────────────
@@ -86,6 +90,52 @@ export async function POST(req) {
 
     const mb = new MultiBatch();
     const ts = STS();
+
+    // ── 4b. Work out the closing_payment doc change first ─────────────────
+    // Counts are counts of CLOSINGS (closingCount on the group doc), and a
+    // closing is "paid" only while its doc is fully paid. Reverting moves
+    // that many closings back to pending — only if the doc WAS fully paid.
+    // (This used to always move exactly 1, whatever the group held.)
+    let cpPlan = null;
+    let closingsUnpaid = 0;
+    if (closingGroupId) {
+      const cpRef = db.collection('closing_payment').doc(`${memberId}_${closingGroupId}`);
+      try {
+        const cpSnap = await cpRef.get();
+        if (cpSnap.exists) {
+          const cpData    = cpSnap.data();
+          const cpPaid    = Number(cpData.paidAmount    || 0);
+          const cpTotal   = Number(cpData.totalAmount   || 0);
+          const newCpPaid = Math.max(0, cpPaid - revertAmount);
+          const newStatus = newCpPaid <= 0 ? 'pending' : newCpPaid < cpTotal ? 'partial' : 'paid';
+          if (cpData.status === 'paid' && newStatus !== 'paid') {
+            closingsUnpaid = Number(cpData.closingCount || cpData.closingDetails?.length || 1);
+          }
+          cpPlan = {
+            ref: cpRef,
+            data: {
+              paidAmount:        newCpPaid,
+              pendingAmount:     Math.max(0, cpTotal - newCpPaid),
+              status:            newStatus,
+              paymentPercentage: cpTotal > 0 ? Number(((newCpPaid / cpTotal) * 100).toFixed(2)) : 0,
+              updated_at:        ts,
+            },
+          };
+        }
+      } catch (e) {
+        console.warn(`closing_payment revert skipped for ${memberId}_${closingGroupId}:`, e.message);
+      }
+    }
+
+    // ── 4c. Recount the member's paid closings from the group docs ────────
+    // Same rule as payments (utils/closingCounts.js): paid closings are
+    // counted from the money, so reverting ₹400 on a ₹400/closing member
+    // moves exactly 1 closing back to pending, even from a part-paid group.
+    const recount = await recomputeMemberClosingCounts(
+      memberId,
+      cpPlan ? { [cpPlan.ref.id]: { paidAmount: cpPlan.data.paidAmount, status: cpPlan.data.status } } : {}
+    );
+    if (recount) closingsUnpaid = Math.max(0, Number(member.paidClosingCount || 0) - recount.paidClosingCount);
 
     // ── 5. Update member closing stats ────────────────────────────────────
     const currentPaid    = Number(member.closing_paidAmount    || 0);
@@ -102,11 +152,11 @@ export async function POST(req) {
     const newPending     = Math.max(0, closingTotal - newPaid);
     const paymentPct     = closingTotal > 0 ? Math.min((newPaid / closingTotal) * 100, 100) : 0;
 
-    const newPaidCount    = Math.max(0, Number(member.paidClosingCount || 0) - 1);
+    const newPaidCount    = recount ? recount.paidClosingCount : Math.max(0, Number(member.paidClosingCount || 0) - closingsUnpaid);
     const totalCount      = Number(member.totalClosingCount || 0);
-    const newPendingCount = totalCount > 0
+    const newPendingCount = recount ? recount.pendingClosingCount : totalCount > 0
       ? Math.max(0, totalCount - newPaidCount)
-      : Number(member.pendingClosingCount || 0) + 1;
+      : Number(member.pendingClosingCount || 0) + closingsUnpaid;
 
     if (currentPending !== closingTotal - currentPaid) {
       console.warn(
@@ -124,40 +174,16 @@ export async function POST(req) {
       updated_at:                ts,
     });
 
-    // ── 6. Revert the closing_payment doc ─────────────────────────────────
-    if (closingGroupId) {
-      const cpRef = db.collection('closing_payment').doc(`${memberId}_${closingGroupId}`);
-      try {
-        const cpSnap = await cpRef.get();
-        if (cpSnap.exists) {
-          const cpData    = cpSnap.data();
-          const cpPaid    = Number(cpData.paidAmount    || 0);
-          const cpTotal   = Number(cpData.totalAmount   || 0);
-          const newCpPaid = Math.max(0, cpPaid - revertAmount);
-          const newCpPending = Math.max(0, cpTotal - newCpPaid);
-          const newStatus    = newCpPaid <= 0 ? 'pending' : newCpPaid < cpTotal ? 'partial' : 'paid';
-          const newPct       = cpTotal > 0 ? Number(((newCpPaid / cpTotal) * 100).toFixed(2)) : 0;
-
-          mb.update(cpRef, {
-            paidAmount:        newCpPaid,
-            pendingAmount:     newCpPending,
-            status:            newStatus,
-            paymentPercentage: newPct,
-            updated_at:        ts,
-          });
-        }
-      } catch (e) {
-        console.warn(`closing_payment revert skipped for ${memberId}_${closingGroupId}:`, e.message);
-      }
-    }
+    // ── 6. Revert the closing_payment doc (computed in 4b) ───────────────
+    if (cpPlan) mb.update(cpPlan.ref, cpPlan.data);
 
     // ── 7. Reverse program stats ──────────────────────────────────────────
     if (programId) {
       mb.set(db.collection('programs').doc(programId), {
         totalClosingPaidAmount:    INC(-revertAmount),
         totalClosingPendingAmount: INC(revertAmount),
-        paidClosingCount:          INC(-1),
-        pendingClosingCount:       INC(1),
+        paidClosingCount:          INC(-closingsUnpaid),
+        pendingClosingCount:       INC(closingsUnpaid),
         updated_at:                ts,
       }, { merge: true });
     }
@@ -171,16 +197,16 @@ export async function POST(req) {
       const agentUpdate = {
         closing_paidAmount:    Math.max(0, Number(agentData.closing_paidAmount    || 0) - revertAmount),
         closing_pendingAmount: Number(agentData.closing_pendingAmount || 0) + revertAmount,
-        paidClosingCount:      Math.max(0, Number(agentData.paidClosingCount      || 0) - 1),
-        pendingClosingCount:   Number(agentData.pendingClosingCount   || 0) + 1,
+        paidClosingCount:      Math.max(0, Number(agentData.paidClosingCount      || 0) - closingsUnpaid),
+        pendingClosingCount:   Number(agentData.pendingClosingCount   || 0) + closingsUnpaid,
         updated_at:            ts,
       };
       if (programId) {
         const ps = (agentData.programStats || {})[programId] || {};
         agentUpdate[`programStats.${programId}.totalClosingPaidAmount`]    = Math.max(0, Number(ps.totalClosingPaidAmount || 0) - revertAmount);
         agentUpdate[`programStats.${programId}.totalClosingPendingAmount`] = Number(ps.totalClosingPendingAmount || 0) + revertAmount;
-        agentUpdate[`programStats.${programId}.paidClosingCount`]          = Math.max(0, Number(ps.paidClosingCount || 0) - 1);
-        agentUpdate[`programStats.${programId}.pendingClosingCount`]       = Number(ps.pendingClosingCount || 0) + 1;
+        agentUpdate[`programStats.${programId}.paidClosingCount`]          = Math.max(0, Number(ps.paidClosingCount || 0) - closingsUnpaid);
+        agentUpdate[`programStats.${programId}.pendingClosingCount`]       = Number(ps.pendingClosingCount || 0) + closingsUnpaid;
         agentUpdate[`programStats.${programId}.lastUpdated`]               = ts;
       }
       // update() (not set+merge) — dot-notation only works with update()
@@ -191,10 +217,25 @@ export async function POST(req) {
     mb.set(db.collection('organizationStats').doc('current'), {
       totalClosingPaidAmount:    INC(-revertAmount),
       totalClosingPendingAmount: INC(revertAmount),
-      paidClosingCount:          INC(-1),
-      pendingClosingCount:       INC(1),
+      paidClosingCount:          INC(-closingsUnpaid),
+      pendingClosingCount:       INC(closingsUnpaid),
       updated_at:                ts,
     }, { merge: true });
+
+    // ── 9b. Undo member-advance movements ─────────────────────────────────
+    // Advance spent on this fee is given back. Extra amount this payment kept
+    // as the member's advance is taken back when the member's LAST fee doc in
+    // the group is reverted (a member paying several closing groups has
+    // several fee docs but one advance credit).
+    const advPlan = await planReversal({
+      paymentGroupId,
+      memberIds: memberRemainingCount <= 1 ? [memberId] : [],
+      refundFees: [fee],
+      createdBy: auth.user.uid,
+    });
+    if (!advPlan.ok)
+      return NextResponse.json({ success: false, message: advPlan.message }, { status: 400 });
+    applyOps(mb, advPlan.ops);
 
     // ── 10. Delete the memberClosingFees doc ──────────────────────────────
     mb.delete(feeRef);
@@ -206,6 +247,8 @@ export async function POST(req) {
     } else if (paymentGroupId) {
       mb.update(db.collection('paymentGroups').doc(paymentGroupId), {
         totalAmount: INC(-revertAmount),
+        // keep UTR usage (totalAmount + advanceCredited) in step
+        ...(advPlan.creditReversed > 0 ? { advanceCredited: INC(-advPlan.creditReversed) } : {}),
         updated_at:  ts,
       });
     }

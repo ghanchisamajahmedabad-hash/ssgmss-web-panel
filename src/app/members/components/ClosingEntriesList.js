@@ -1,5 +1,6 @@
 "use client"
 import React, { useState } from 'react'
+import { paidClosingsInDoc } from '@/utils/closingCounts'
 import { Card, Tag, Button, Space, Spin, Table, Text, Progress, Empty, Alert, message } from 'antd'
 import {
   MoneyCollectOutlined, FilePdfOutlined, HistoryOutlined,
@@ -47,8 +48,10 @@ const ClosingEntriesList = ({
     a.total += Number(e.totalAmount   || 0)
     a.paid  += Number(e.paidAmount    || 0)
     a.count += Number(e.closingCount  || 0)
+    a.paidEvents += paidClosingsInDoc(e)
     return a
-  }, { total: 0, paid: 0, count: 0 })
+  }, { total: 0, paid: 0, count: 0, paidEvents: 0 })
+  docTotals.paidEvents = Math.min(docTotals.paidEvents, docTotals.count)
   docTotals.pending = Math.max(0, docTotals.total - docTotals.paid)
 
   const stored = {
@@ -64,6 +67,7 @@ const ClosingEntriesList = ({
         ['Paid',    stored.paid,    docTotals.paid],
         ['Pending', stored.pending, docTotals.pending],
         ['Events',  stored.count,   docTotals.count],
+        ['Paid events', Number(member?.paidClosingCount || 0), docTotals.paidEvents],
       ].filter(([, s, d]) => s !== d)
     : []
 

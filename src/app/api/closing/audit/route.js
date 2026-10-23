@@ -20,6 +20,8 @@
 //     MEMBER_PAID    closing_paidAmount    ≠ Σ doc.paidAmount
 //     MEMBER_PENDING closing_pendingAmount ≠ total − paid
 //     MEMBER_COUNT   totalClosingCount     ≠ Σ doc.closingCount
+//     MEMBER_PAID_COUNT paidClosingCount / pendingClosingCount ≠ closings the
+//                    paid money covers (utils/closingCounts.js)
 //
 //   EVENTS (destructive — removes charged events, so opt-in via removeInvalidEvents)
 //     DUP_EVENT      the same closed_memberId charged twice in one doc.
@@ -42,6 +44,7 @@
 import { NextResponse } from 'next/server';
 import admin from '../../db/firebaseAdmin';
 import { checkRole, verifyToken } from '../../../../../middleware/authMiddleware';
+import { paidClosingsInDoc } from '../../../../utils/closingCounts';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -164,7 +167,7 @@ export async function POST(req) {
       const issues = new Set();
       const docPlans = [];
 
-      let sumTotal = 0, sumPaid = 0, sumCount = 0;
+      let sumTotal = 0, sumPaid = 0, sumCount = 0, sumPaidEvents = 0;
       let removedEvents = 0;
       let overpaid = 0;
 
@@ -242,6 +245,10 @@ export async function POST(req) {
         sumTotal += wantTotal;
         sumPaid  += wantPaid;
         sumCount += wantCount;
+        sumPaidEvents += paidClosingsInDoc({
+          closingCount: wantCount, status: wantStatus, paidAmount: wantPaid,
+          payAmount, totalAmount: wantTotal,
+        });
 
         const docChanged = wantCount !== storedCount || wantTotal !== storedTotal
                         || wantPending !== storedPending || wantPaid !== storedPaid
@@ -277,20 +284,15 @@ export async function POST(req) {
       if (storedAgg.paid       !== sumPaid)     issues.add('MEMBER_PAID');
       if (storedAgg.pending    !== wantPending) issues.add('MEMBER_PENDING');
       if (storedAgg.totalCount !== sumCount)    issues.add('MEMBER_COUNT');
+      const wantPaidCount = Math.min(sumPaidEvents, sumCount);
+      if (storedAgg.paidCount !== wantPaidCount
+          || storedAgg.pendingCount !== Math.max(0, sumCount - wantPaidCount)) issues.add('MEMBER_PAID_COUNT');
 
       if (issues.size === 0) { clean++; continue; }
       issues.forEach(bump);
 
-      // paid/pending event counts: derive from the docs' status
-      let paidCount = 0;
-      for (const p of docPlans) paidCount += p.after.status === 'paid' ? p.after.count : 0;
-      // Docs that needed no change still contribute
-      for (const d of cpSnap.docs) {
-        const cp = d.data();
-        if (cp.isReversed === true) continue;
-        if (docPlans.some(p => p.ref.id === d.id)) continue;
-        if (cp.status === 'paid') paidCount += n(cp.closingCount);
-      }
+      // paid/pending event counts: from the money on each doc (utils/closingCounts.js)
+      const paidCount = wantPaidCount;
 
       const memberUpdate = {
         closing_totalAmount:   sumTotal,
