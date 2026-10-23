@@ -1094,11 +1094,6 @@ const RasidGroupClosingDrawer = ({ open, setOpen, agentId, preselectedGroupId, a
         mobile: m.phone || m.phoneNo || '',
       }));
 
-    // "Group : B" on the receipt is the age group of the members being CLOSED,
-    // not the closing batch name (which reads like "july-26") and not the
-    // paying member's own group.
-    const closingAgeGroup = entries.find(e => e.ageGroup)?.ageGroup || '';
-
     // क्र. सं. is a plain running number — 1, 2, 3 … — and it is set ONCE here,
     // on the rasid row. The summary prints the same `serialNo` off the same
     // array, so the receipt and the summary can never show a different number
@@ -1172,7 +1167,17 @@ const RasidGroupClosingDrawer = ({ open, setOpen, agentId, preselectedGroupId, a
           village:      am.village || '',
           yojana:       yojanaName,
           group:        selectedGroup.groupName || '',
-          ageGroup:     closingAgeGroup || am.ageGroupName || am.memberGroupName || am.ageGroup || '',
+          // "Group" belongs to the member this receipt is FOR, exactly as the
+          // certificate shows it.
+          //
+          // It used to be taken from the first closed member in the batch that
+          // happened to have a group set, so every receipt in a run printed that
+          // one group no matter who was paying — a member in P2 got a receipt
+          // reading P3 while their certificate said P2. The rest of this header
+          // (नाम, रजि. नं., पता, फोन, योजना) is the paying member's, so the group
+          // has to be theirs too; the same chain the certificate uses, so the
+          // two documents can never disagree.
+          ageGroup:     am.ageGroupName || am.memberGroupName || am.ageGroup || '',
           sahyogRashi:  payAmt,
           // The rows THIS member was charged for — not the whole selection.
           entries:      myEntries,

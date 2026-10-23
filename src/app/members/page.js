@@ -33,10 +33,58 @@ import { doc, updateDoc, query, orderBy, collection, getDoc, getCountFromServer 
 import { BlobProvider, PDFDownloadLink } from '@react-pdf/renderer'
 import CertificateCom from './components/MemberPdf/CertificateCom'
 import MemberListPdf, { getOldRegNo, getClosedDate } from './components/MemberPdf/MemberListPdf'
+import MemberListSchemePdf from './components/MemberPdf/MemberListSchemePdf'
 import RasidDrawer from './components/RasidCom/RasidDrawer'
 import PaymentDetailsDrawer from './components/PaymentDetailsDrawer'
 
 // ── Helper: auto-download PDF when blob is ready ──
+// Scheme-wise list — same download mechanics, different document. Kept as its
+// own component rather than a prop on the one above so neither can fire while
+// the other is mid-render.
+const SchemePdfDownloader = ({ pdfMeta, onDone }) => {
+  const [generating, setGenerating] = useState(false)
+  const firedRef = useRef(false)
+  useEffect(() => { if (pdfMeta && !generating) setGenerating(true) }, [pdfMeta, generating])
+  useEffect(() => { if (pdfMeta) firedRef.current = false }, [pdfMeta])
+
+  if (!pdfMeta) return null
+  return (
+    <>
+      {generating && (
+        <div style={{ position:'fixed', bottom:24, right:24, zIndex:1000, background:'#1B385A', color:'#fff', padding:'10px 20px', borderRadius:8, fontWeight:'bold', fontSize:14, boxShadow:'0 4px 12px rgba(0,0,0,0.15)' }}>
+          सदस्य सूची बन रही है...
+        </div>
+      )}
+      <BlobProvider document={
+        <MemberListSchemePdf
+          members={pdfMeta.data} filters={pdfMeta.filters}
+          programList={pdfMeta.programList} agentList={pdfMeta.agentList} />
+      }>
+        {({ blob, url, loading, error }) => {
+          if (error) {
+            if (!firedRef.current) { firedRef.current = true; setTimeout(() => { message.error('PDF error: ' + (error.message || error)); onDone() }, 0) }
+            return null
+          }
+          if (!loading && blob && generating && !firedRef.current) {
+            firedRef.current = true
+            setTimeout(() => {
+              const a = document.createElement('a')
+              a.href = url
+              a.download = `member_list_${pdfMeta.slug || 'all'}_${dayjs().format('YYYY-MM-DD')}.pdf`
+              document.body.appendChild(a)
+              a.click()
+              setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url) }, 2000)
+              message.success(`Downloaded ${pdfMeta.data.length} members`)
+              onDone()
+            }, 0)
+          }
+          return null
+        }}
+      </BlobProvider>
+    </>
+  )
+}
+
 const PdfAutoDownloader = ({ pdfMeta, onDone }) => {
   const [generating, setGenerating] = useState(false)
   const firedRef = useRef(false)
@@ -118,6 +166,7 @@ const Page = () => {
   const [transferLoading, setTransferLoading] = useState(false)
   const [transferResult,  setTransferResult]  = useState(null)  // null = not done yet
   const [pdfMeta, setPdfMeta] = useState(null) // { data, filters, programList }
+  const [schemePdfMeta, setSchemePdfMeta] = useState(null) // scheme-wise list
   const currentUser = auth.currentUser
 
   const [searchMode,    setSearchMode]    = useState('paginated')
@@ -1334,6 +1383,29 @@ ${filterHtml}
                         setAllMembersExportLoading(false)
                       }
                     } },
+                    { key: 'pdf_scheme', icon: <FileTextOutlined />, label: 'Member List — Scheme-wise (A4)', onClick: async () => {
+                      // Always the FULL filtered set, not just the page on
+                      // screen: this list is circulated, and a list that
+                      // silently stops at row 10 is worse than none.
+                      setAllMembersExportLoading(true)
+                      try {
+                        const data = searchMode === 'search' && filters.search
+                          ? searchResults
+                          : (allMembersForExport || await fetchAllMembersForExport())
+                        if (!data || data.length === 0) { message.warning('No members found'); return }
+                        const ag = filters.agentId && filters.agentId !== 'all'
+                          ? agentList.find(a => a.id === filters.agentId) : null
+                        setSchemePdfMeta({
+                          data, filters, programList, agentList,
+                          slug: (ag?.name || 'all_agents').replace(/\s+/g, '_').toLowerCase(),
+                        })
+                      } catch (err) {
+                        console.error('PDF error:', err)
+                        message.error('Failed: ' + (err.message || 'unknown'))
+                      } finally {
+                        setAllMembersExportLoading(false)
+                      }
+                    } },
                     { type: 'divider' },
                     { key: 'print', icon: <PrinterOutlined />, label: 'Print List (A4)', onClick: printMembers },
                     { type: 'divider' },
@@ -2188,6 +2260,7 @@ ${filterHtml}
       </Modal>
 
       <PdfAutoDownloader pdfMeta={pdfMeta} onDone={() => setPdfMeta(null)} />
+      <SchemePdfDownloader pdfMeta={schemePdfMeta} onDone={() => setSchemePdfMeta(null)} />
     </div>
   )
 }
