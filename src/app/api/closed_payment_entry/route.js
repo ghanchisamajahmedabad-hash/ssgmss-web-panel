@@ -9,6 +9,17 @@ const DEL = admin.firestore.FieldValue.delete;
 const STS = admin.firestore.FieldValue.serverTimestamp;
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
+// Gender as stored: 'male'/'female' for new members, the old system's
+// 1 (male) / 2 (female) for migrated ones, sometimes 'Male', 'M' or Hindi.
+// Same mapping as normalizeGender in members/components/firebase-helpers.
+const normalizeGender = (v) => {
+  const g = String(v ?? '').trim().toLowerCase();
+  if (!g) return '';
+  if (['male', 'm', '1', 'पुरुष', 'purush', 'man', 'boy'].includes(g)) return 'male';
+  if (['female', 'f', '2', 'महिला', 'स्त्री', 'mahila', 'woman', 'girl'].includes(g)) return 'female';
+  return 'other';
+};
+
 const chunkArr = (arr, n) =>
   Array.from({ length: Math.ceil(arr.length / n) }, (_, i) =>
     arr.slice(i * n, i * n + n)
@@ -489,7 +500,7 @@ export async function POST(req) {
 
       // ── Gender scope: closing pending only for the chosen gender(s) ──────
       if (effectiveGenders.length) {
-        const g = String(m.gender || '').toLowerCase();
+        const g = normalizeGender(m.gender);
         if (!g) {
           genderUnknown.push({
             memberId,

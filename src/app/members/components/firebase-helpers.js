@@ -15,6 +15,66 @@ import {
 import { db } from "../../../../lib/firbase-client";
 
 /* =====================================================
+   GENDER — one meaning for every way it is stored
+   New members are written as 'male' / 'female' (web form and app).
+   Members migrated from the old system carry its codes: 1 = male,
+   2 = female (checked against the names in app_forms.json — the "2"
+   records are the …ben / …bai / …kumari names). Some data also has
+   'Male', 'M', or Hindi. Every gender comparison goes through this.
+===================================================== */
+export const normalizeGender = (v) => {
+  const g = String(v ?? "").trim().toLowerCase();
+  if (!g) return "";
+  if (["male", "m", "1", "पुरुष", "purush", "man", "boy"].includes(g)) return "male";
+  if (["female", "f", "2", "महिला", "स्त्री", "mahila", "woman", "girl"].includes(g)) return "female";
+  return "other";
+};
+
+/* =====================================================
+   CLIENT-SIDE FILTERS
+   These can't be expressed as Firestore conditions (or would need
+   new composite indexes), so they run on the loaded rows:
+     • gender               — stored in several forms, see above
+     • paymentStatus partial — a range on paymentPercentage
+     • closingPaymentStatus — derived from several fields
+     • status 'active'      — active AND not closed. active_flag stays
+                              true when a member is closed, so on its
+                              own it listed closed members as active.
+   Because they drop rows AFTER a page is read, applying them to one
+   page gave short pages and a total that ignored them. When any is in
+   use the members page loads the full filtered set and pages locally.
+===================================================== */
+export const needsClientFiltering = (f = {}) =>
+  (f.gender && f.gender !== "all") ||
+  f.paymentStatus === "partial" ||
+  (f.closingPaymentStatus && f.closingPaymentStatus !== "all") ||
+  f.status === "active";
+
+export const applyClientFilters = (list = [], f = {}) => {
+  let data = list;
+  if (f.status === "active") {
+    data = data.filter(m => m.member_closed !== true);
+  }
+  if (f.paymentStatus === "partial") {
+    data = data.filter(m => (m.paymentPercentage || 0) > 0 && (m.paymentPercentage || 0) < 100);
+  }
+  if (f.gender && f.gender !== "all") {
+    data = data.filter(m => normalizeGender(m.gender) === f.gender);
+  }
+  if (f.closingPaymentStatus === "closedPaid") {
+    data = data.filter(m => (m.closing_paymentPercentage || 0) === 100 || ((m.closing_totalAmount || 0) > 0 && (m.closing_pendingAmount || 0) === 0));
+  } else if (f.closingPaymentStatus === "closedPending") {
+    data = data.filter(m => (m.closing_totalAmount || 0) > 0 && (m.closing_paidAmount || 0) === 0);
+  } else if (f.closingPaymentStatus === "closedPartial") {
+    data = data.filter(m => {
+      const pct = m.closing_paymentPercentage || 0;
+      return pct > 0 && pct < 100;
+    });
+  }
+  return data;
+};
+
+/* =====================================================
    BUILD MEMBERS QUERY (SEARCH + FILTER + PAGINATION)
    Program is now a flat field (programId) on member doc
 ===================================================== */
@@ -160,27 +220,8 @@ export const fetchAllFilteredMembers = async (filters = {}) => {
     updated_at: doc.data().updated_at?.toDate?.() || null
   }));
 
-  // Client-side filters — identical to fetchMembersPaginated
-  if (filters.paymentStatus === "partial") {
-    data = data.filter(m => (m.paymentPercentage || 0) > 0 && (m.paymentPercentage || 0) < 100);
-  }
-
-  if (filters.gender && filters.gender !== "all") {
-    data = data.filter(m => (m.gender || "").toLowerCase() === filters.gender);
-  }
-
-  if (filters.closingPaymentStatus === "closedPaid") {
-    data = data.filter(m => (m.closing_paymentPercentage || 0) === 100 || ((m.closing_totalAmount || 0) > 0 && (m.closing_pendingAmount || 0) === 0));
-  } else if (filters.closingPaymentStatus === "closedPending") {
-    data = data.filter(m => (m.closing_totalAmount || 0) > 0 && (m.closing_paidAmount || 0) === 0);
-  } else if (filters.closingPaymentStatus === "closedPartial") {
-    data = data.filter(m => {
-      const pct = m.closing_paymentPercentage || 0;
-      return pct > 0 && pct < 100;
-    });
-  }
-
-  return data;
+  // Client-side filters — the same function the paginated path uses
+  return applyClientFilters(data, filters);
 };
 
 /* =====================================================
@@ -270,27 +311,8 @@ export const fetchMembersPaginated = async (filters = {}) => {
       updated_at: doc.data().updated_at?.toDate?.() || null
     }));
 
-    // Client-side filter for partial (join fees)
-    if (filters.paymentStatus === "partial") {
-      members = members.filter(m => m.paymentPercentage > 0 && m.paymentPercentage < 100);
-    }
-
-    // Client-side filter for gender
-    if (filters.gender && filters.gender !== "all") {
-      members = members.filter(m => (m.gender || '').toLowerCase() === filters.gender);
-    }
-
-    // Client-side filter for closing payment status
-    if (filters.closingPaymentStatus === "closedPaid") {
-      members = members.filter(m => (m.closing_paymentPercentage || 0) === 100 || ((m.closing_totalAmount || 0) > 0 && (m.closing_pendingAmount || 0) === 0));
-    } else if (filters.closingPaymentStatus === "closedPending") {
-      members = members.filter(m => (m.closing_totalAmount || 0) > 0 && (m.closing_paidAmount || 0) === 0);
-    } else if (filters.closingPaymentStatus === "closedPartial") {
-      members = members.filter(m => {
-        const pct = m.closing_paymentPercentage || 0;
-        return pct > 0 && pct < 100;
-      });
-    }
+    // Client-side filters (gender, partial, closing status, active-not-closed)
+    members = applyClientFilters(members, filters);
 
     const lastVisible = querySnapshot.docs[querySnapshot.docs.length - 1];
 

@@ -20,6 +20,7 @@ import { Colors } from '@/constent/antdTheme'
 import {
   fetchAllMembersForSearch,
   fetchMembersPaginated,
+  normalizeGender,
 } from '@/app/members/components/firebase-helpers'
 import { storage } from '../../../../../lib/firbase-client'
 
@@ -127,7 +128,9 @@ const SectionHeader = ({ icon, title, subtitle, action }) => (
 // same as the members page filter.
 const GENDER_LABEL = { male: '♂ पुरुष', female: '♀ महिला', other: 'अन्य' }
 
-const matchesGender = (m, g) => g === 'all' || (m?.gender || '').toLowerCase() === g
+// Gender is stored as 'male'/'female' or as the old system's 1/2 — the shared
+// normaliser maps all of them, same as the members page filter.
+const matchesGender = (m, g) => g === 'all' || normalizeGender(m?.gender) === g
 
 // ─── member select card ───────────────────────────────────────────────────────
 const MemberSelectCard = ({ member, checked, onChange, programId, existingGroupId }) => {

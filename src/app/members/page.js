@@ -26,7 +26,8 @@ import {
   fetchMembersPaginated, 
   getTotalMembersCount,
   fetchAllMembersForSearch,
-  fetchAllFilteredMembers
+  fetchAllFilteredMembers,
+  needsClientFiltering
 } from './components/firebase-helpers'
 import { auth, db } from '../../../lib/firbase-client'
 import { doc, updateDoc, query, orderBy, collection, getDoc, getCountFromServer } from 'firebase/firestore'
@@ -225,11 +226,36 @@ const isSuperAdmin = (user) => user?.role === 'superadmin';
   // waiting for the state update to land. Without it, a caller that changes
   // filters and fetches in the same tick (Reset does exactly that) would query
   // using the stale `filters` captured in this callback's closure.
-  const fetchMembers = useCallback(async (page = 1, resetPagination = false, filtersOverride = null) => {
+  // Full filtered set for the client-filtered mode (see firebase-helpers:
+  // gender / partial / closing status / active-not-closed). Reused only when
+  // just changing page, so an edit or refresh always re-reads.
+  const clientSetRef = useRef({ key: null, data: [] })
+
+  const fetchMembers = useCallback(async (page = 1, resetPagination = false, filtersOverride = null, pageOnly = false) => {
     setLoading(true)
     setSearchMode('paginated')
     const effectiveFilters = filtersOverride || filters
     try {
+      // Filters that can only run on loaded rows: load the whole filtered set
+      // once and page through it here, so every page is full and the total
+      // counts what is actually shown.
+      if (needsClientFiltering(effectiveFilters)) {
+        const f = { ...effectiveFilters, search: '' }
+        const key = JSON.stringify(f)
+        let all = pageOnly && clientSetRef.current.key === key ? clientSetRef.current.data : null
+        if (!all) {
+          all = await fetchAllFilteredMembers(f)
+          clientSetRef.current = { key, data: all }
+        }
+        const size = pagination.pageSize
+        setMembers(all.slice((page - 1) * size, page * size))
+        setPagination(prev => ({
+          ...prev, current: page, total: all.length,
+          hasNextPage: page * size < all.length, lastDocs: {},
+        }))
+        return
+      }
+
       const lastDoc = resetPagination ? null : pagination.lastDocs[page - 1] || null
       const result  = await fetchMembersPaginated({ ...effectiveFilters, search: '', pageSize: pagination.pageSize, lastDoc })
       setMembers(result.members)
@@ -516,7 +542,7 @@ const isSuperAdmin = (user) => user?.role === 'superadmin';
       setPagination(prev => ({ ...prev, current: 1, lastDocs: {} }))
       setTimeout(() => fetchMembers(1, true), 0); return
     }
-    if (paginationInfo.current !== pagination.current) fetchMembers(paginationInfo.current, false)
+    if (paginationInfo.current !== pagination.current) fetchMembers(paginationInfo.current, false, null, true)
   }
 
   const handleViewMember    = (member) => { setSelectedMember(member); setDetailDrawerVisible(true) }
