@@ -21,7 +21,8 @@ import {
   PlusOutlined, MoneyCollectOutlined, CalculatorOutlined,
   UploadOutlined, FilterOutlined,
   SwapOutlined,
-  UserSwitchOutlined
+  UserSwitchOutlined,
+  WarningOutlined
 } from '@ant-design/icons'
 import { PDFDownloadLink } from '@react-pdf/renderer'
 import PaymentHistoryPdf from './MemberPdf/PaymentHistoryPdf'
@@ -29,6 +30,7 @@ import MemberDetailsPdf from './MemberPdf/MemberDetailsPdf'
 import ClosingRasidPdf from './ClosingRasidPdf'
 import ClosingEntriesList from './ClosingEntriesList'
 import MemberCredentialsCard from './MemberCredentialsCard'
+import MemberPenaltyCard from './MemberPenaltyCard'
 import { collection, query, where, getDocs, orderBy, doc, getDoc, updateDoc, serverTimestamp } from 'firebase/firestore'
 import { getAuth } from 'firebase/auth'
 import dayjs from 'dayjs'
@@ -64,6 +66,10 @@ const MemberDetailDrawer = ({ member: memberProp, visible, onClose, programList,
   const [previewVisible,      setPreviewVisible]       = useState(false)
   const [previewImage,        setPreviewImage]          = useState('')
   const [activeTab,           setActiveTab]             = useState('overview')
+  const [penaltyCount,        setPenaltyCount]          = useState(0)
+  useEffect(() => {
+    setPenaltyCount(Array.isArray(member?.penalties) ? member.penalties.length : 0)
+  }, [member?.id])
 
   // ── Quick Payment modal state ────────────────────────────────────────────────
   const [paymentModalVisible, setPaymentModalVisible] = useState(false)
@@ -842,6 +848,7 @@ const MemberDetailDrawer = ({ member: memberProp, visible, onClose, programList,
           { key: 'program',      label: <span><TrophyOutlined /> Program</span> },
           { key: 'transactions', label: <span><CreditCardOutlined /> Transactions ({transactions.length + closingTransactions.length})</span> },
           { key: 'closing', label: <span><MoneyCollectOutlined /> Closing</span> },
+          { key: 'penalty',      label: <span><WarningOutlined /> Penalty{penaltyCount ? ` (${penaltyCount})` : ''}</span> },
           { key: 'documents',    label: <span><FileTextOutlined /> Documents ({documents.filter(d=>d.url).length}/{documents.length})</span> },
           { key: 'relatives',    label: <span><TeamOutlined /> Relatives ({relativeMembers.length})</span> },
         ]} />
@@ -1197,6 +1204,15 @@ const MemberDetailDrawer = ({ member: memberProp, visible, onClose, programList,
             closingTransactions={closingTransactions}
             loading={loading}
             buildPdfData={buildPdfData}
+          />
+        )}
+
+        {/* ── Penalty Tab ──────────────────────────────────────────────────── */}
+        {activeTab === 'penalty' && member?.id && (
+          <MemberPenaltyCard
+            key={member.id}
+            member={member}
+            onChange={(list) => setPenaltyCount(list.length)}
           />
         )}
 

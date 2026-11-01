@@ -15,6 +15,7 @@ import NotoSansDevanagariBold from '@/app/api/helper/static/font/NotoSansDevanag
 import { Document, Font, Image, Page, StyleSheet, Text, View } from '@react-pdf/renderer';
 import React from 'react';
 import dayjs from 'dayjs';
+import { formatPaymentDate } from '@/utils/formatDate';
 
 Font.register({
   family: 'NotoSansDevanagari',
@@ -150,18 +151,38 @@ const Footer = ({ page, total, generatedAt }) => (
 const MemberListSchemePdf = ({ members = [], filters = {}, programList = [], agentList = [] }) => {
   const generatedAt = dayjs().format('DD MMMM YYYY [at] hh:mm a');
 
-  const progName = (m) =>
-    txt(m.programName) ||
-    txt(programList.find(p => p.id === m.programId)?.name) ||
-    'अन्य';
+  // ── Resolve each member to ONE yojna ──────────────────────────────────────
+  // Members are grouped by the program itself (its id), and the heading always
+  // shows the program's current name from the programs collection — the same
+  // name the members table shows. Grouping by the text stored on the member
+  // split one yojna into several sections whenever that copy was old, spelt
+  // differently, or carried extra spaces.
+  //
+  // A member whose programId doesn't match any program (older / migrated
+  // records) is matched by its stored programName against each program's
+  // name and hindiName, so it still lands under the correct yojna.
+  const norm = (v) => txt(v).normalize('NFC').replace(/\s+/g, ' ').toLowerCase();
+  const byId = new Map(programList.map(p => [p.id, p]));
+  const byLabel = new Map();
+  for (const p of programList) {
+    for (const label of [p.name, p.hindiName]) {
+      const k = norm(label);
+      if (k && !byLabel.has(k)) byLabel.set(k, p);
+    }
+  }
+  const resolveProgram = (m) => byId.get(m.programId) || byLabel.get(norm(m.programName)) || null;
 
   // ── Group by yojna, each group's members sorted by name ───────────────────
   const groups = [];
-  const byName = new Map();
+  const byKey = new Map();
   for (const m of members) {
-    const key = progName(m);
-    if (!byName.has(key)) { byName.set(key, { name: key, rows: [] }); groups.push(byName.get(key)); }
-    byName.get(key).rows.push(m);
+    const prog = resolveProgram(m);
+    // Unmatched members are still grouped by their normalised stored name, so
+    // "X" and "X " don't become two sections.
+    const key  = prog ? `id:${prog.id}` : `name:${norm(m.programName) || 'अन्य'}`;
+    const name = prog ? (txt(prog.name) || txt(prog.hindiName)) : (txt(m.programName).replace(/\s+/g, ' ') || 'अन्य');
+    if (!byKey.has(key)) { byKey.set(key, { key, name, rows: [] }); groups.push(byKey.get(key)); }
+    byKey.get(key).rows.push(m);
   }
   groups.sort((a, b) => a.name.localeCompare(b.name));
   groups.forEach(g => g.rows.sort((a, b) =>
@@ -186,7 +207,7 @@ const MemberListSchemePdf = ({ members = [], filters = {}, programList = [], age
   for (const g of groups) {
     for (let i = 0; i < Math.max(1, Math.ceil(g.rows.length / ROWS_PER_PAGE)); i++) {
       sheets.push({
-        kind: 'members', scheme: g.name,
+        kind: 'members', scheme: g.name, groupKey: g.key, groupSize: g.rows.length,
         rows: g.rows.slice(i * ROWS_PER_PAGE, (i + 1) * ROWS_PER_PAGE),
         offset: i * ROWS_PER_PAGE,
         part: i + 1,
@@ -223,7 +244,7 @@ const MemberListSchemePdf = ({ members = [], filters = {}, programList = [], age
                     <Text style={[styles.thCell, { width: 70, textAlign: 'center' }]}>सदस्य</Text>
                   </View>
                   {sheet.rows.map((g, i) => (
-                    <View key={g.name} style={[styles.tr, i % 2 === 1 && styles.trAlt]} wrap={false}>
+                    <View key={g.key} style={[styles.tr, i % 2 === 1 && styles.trAlt]} wrap={false}>
                       <Text style={[styles.td, { width: 36, textAlign: 'center' }]}>{sheet.offset + i + 1}</Text>
                       <Text style={[styles.td, { flex: 1 }]}>{g.name}</Text>
                       <Text style={[styles.td, { width: 70, textAlign: 'center' }]}>{g.rows.length}</Text>
@@ -241,7 +262,7 @@ const MemberListSchemePdf = ({ members = [], filters = {}, programList = [], age
                 <View style={styles.metaRow}>
                   <Text style={styles.metaLabel}>एजेंट : <Text style={styles.metaValue}>{whoLabel}</Text></Text>
                   <Text style={styles.metaLabel}>सदस्य : <Text style={styles.metaValue}>
-                    {groups.find(g => g.name === sheet.scheme)?.rows.length || 0}
+                    {sheet.groupSize}
                   </Text></Text>
                 </View>
 
@@ -252,6 +273,7 @@ const MemberListSchemePdf = ({ members = [], filters = {}, programList = [], age
                     <Text style={[styles.thCell, { flex: 1 }]}>पिता / पति का नाम</Text>
                     <Text style={[styles.thCell, { width: 66 }]}>मोबाइल नं.</Text>
                     <Text style={[styles.thCell, { flex: 0.95 }]}>गाँव / शहर</Text>
+                    <Text style={[styles.thCell, { width: 58, textAlign: 'center' }]}>जुड़ने की तिथि</Text>
                   </View>
                   {sheet.rows.map((m, i) => (
                     <View key={m.id || i} style={[styles.tr, i % 2 === 1 && styles.trAlt]} wrap={false}>
@@ -261,10 +283,14 @@ const MemberListSchemePdf = ({ members = [], filters = {}, programList = [], age
                         {/* Registration number under the name, as on the printed list */}
                         <Text style={styles.tdSub}>{txt(m.registrationNumber)}</Text>
                       </View>
-                      <Text style={[styles.td, { flex: 1 }]}>{clip(m.fatherName, 28) || '—'}</Text>
+                      <Text style={[styles.td, { flex: 1 }]}>{clip(m.fatherName, 24) || '—'}</Text>
                       <Text style={[styles.td, { width: 66 }]}>{txt(m.phone) || '—'}</Text>
                       <Text style={[styles.td, { flex: 0.95 }]}>
-                        {clip([txt(m.village), txt(m.city)].filter(Boolean).join(', '), 26) || '—'}
+                        {clip([txt(m.village), txt(m.city)].filter(Boolean).join(', '), 22) || '—'}
+                      </Text>
+                      {/* Join date: dateJoin (DD-MM-YYYY) first, then the program copy, then the timestamp */}
+                      <Text style={[styles.td, { width: 58, textAlign: 'center' }]}>
+                        {formatPaymentDate(m.dateJoin, m.programJoinDate, m.joinDateTs)}
                       </Text>
                     </View>
                   ))}

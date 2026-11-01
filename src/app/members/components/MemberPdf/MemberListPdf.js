@@ -57,6 +57,10 @@ const styles = StyleSheet.create({
   tdL: { fontSize: 7, paddingHorizontal: 3, textAlign: 'left' },
   tdR: { fontSize: 7, paddingHorizontal: 3, textAlign: 'right' },
 
+  contHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+              borderBottomWidth: 1, borderBottomColor: BLUE, paddingBottom: 3, marginBottom: 6 },
+  contTitle: { fontSize: 10, fontWeight: 'bold', color: BLUE },
+
   footer: { borderTopWidth: 1, borderTopColor: RED, paddingTop: 4, marginTop: 6, alignItems: 'center' },
   footerText: { fontSize: 8, fontWeight: 'bold', color: RED, textAlign: 'center' },
 });
@@ -123,8 +127,8 @@ const MemberListPdf = ({ members, filters, programList, agentList }) => {
   const today = dayjs().format('DD-MM-YYYY')
 
   const rows = members.map((m, i) => {
-    const progName = m.programName || (programList?.find(p => p.id === m.programId)?.name || '-')
-    const ageGroup = m.ageGroupName || m.memberGroupName || m.ageGroup || '-'
+    const progName = programList?.find(p => p.id === m.programId)?.name || m.programName || '-'
+    const ageGroup = ((programList?.find(p => p.id === m.programId)?.ageGroups || []).find(g => g.id === m.ageGroupId)?.ageGroupName || m.ageGroupName || m.memberGroupName || m.ageGroup || '-')
     const statusText = m.member_closed ? 'Closed' : m.active_flag ? 'Active' : 'Inactive'
     const oldReg = getOldRegNo(m)
     return (
@@ -152,67 +156,104 @@ const MemberListPdf = ({ members, filters, programList, agentList }) => {
     )
   })
 
+  // ── Pagination ──────────────────────────────────────────────────────────
+  // Rows are split into pages HERE instead of putting every row inside one
+  // <Page> and letting react-pdf break it. With hundreds of rows react-pdf
+  // gave up on the split: the overflow was crushed onto the last sheet with
+  // every row drawn on top of the next. Each page now gets a fixed number of
+  // rows, repeats the column heading, and the footer can say "Page X of Y".
+  //
+  // A4 landscape is 595pt tall. Rows are a fixed 14pt. Page 1 carries the full
+  // letterhead, later pages a one-line heading. Counts are kept a couple of
+  // rows under what fits, verified by rendering.
+  const FIRST_PAGE_ROWS = filterStr ? 23 : 24
+  const OTHER_PAGE_ROWS = 33
+  const pages = [rows.slice(0, FIRST_PAGE_ROWS)]
+  for (let i = FIRST_PAGE_ROWS; i < rows.length; i += OTHER_PAGE_ROWS) {
+    pages.push(rows.slice(i, i + OTHER_PAGE_ROWS))
+  }
+  const totalPages = pages.length
+  const generatedAt = dayjs().format('DD-MM-YYYY HH:mm')
+
+  const TableHead = () => (
+    <View style={styles.thRow}>
+      <Text style={[styles.thCell, { width: 22 }]}>#</Text>
+      <Text style={[styles.thCell, { width: 76 }]}>Reg No</Text>
+      <Text style={[styles.thCell, { width: 68 }]}>Old Reg No</Text>
+      <Text style={[styles.thCell, { flex: 1 }]}>नाम / पिता</Text>
+      <Text style={[styles.thCell, { width: 62 }]}>फोन</Text>
+      <Text style={[styles.thCell, { width: 88 }]}>योजना</Text>
+      <Text style={[styles.thCell, { width: 48 }]}>आयु वर्ग</Text>
+      <Text style={[styles.thCell, { width: 52 }]}>राशि</Text>
+      <Text style={[styles.thCell, { width: 62 }]}>गाँव</Text>
+      <Text style={[styles.thCell, { width: 52 }]}>Status</Text>
+      {showClosedCol && <Text style={[styles.thCell, { width: 58 }]}>Closed Date</Text>}
+    </View>
+  )
+
   return (
     <Document>
-      <Page size="A4" orientation="landscape" style={styles.page}>
-        <View style={styles.outerView}>
-          <Image src="/Images/logoT.png" style={styles.watermark} />
+      {pages.map((pageRows, pageIdx) => (
+        <Page key={pageIdx} size="A4" orientation="landscape" style={styles.page}>
+          <View style={styles.outerView}>
+            <Image src="/Images/logoT.png" style={styles.watermark} />
 
-          <View style={styles.topText}>
-            <Text style={styles.smallText}>॥ श्री गणेशाय नमः ॥</Text>
-            <Text style={styles.smallText}>॥ श्री शनिदेवाय नमः ॥</Text>
-            <Text style={styles.smallText}>॥ श्री सांवलाजी महाराज नमः ॥</Text>
-          </View>
+            {pageIdx === 0 ? (
+              <>
+                <View style={styles.topText}>
+                  <Text style={styles.smallText}>॥ श्री गणेशाय नमः ॥</Text>
+                  <Text style={styles.smallText}>॥ श्री शनिदेवाय नमः ॥</Text>
+                  <Text style={styles.smallText}>॥ श्री सांवलाजी महाराज नमः ॥</Text>
+                </View>
 
-          <View style={styles.headerSection}>
-            <View style={styles.imageBox}><Image src="/Images/logoT.png" style={styles.logoImage} /></View>
-            <View style={styles.centerContent}>
-              <Text style={styles.mainTitle}>श्री क्षत्रिय घांची मोदी समाज सेवा संस्थान ट्रस्ट</Text>
-              <Text style={styles.subTitle}>अहमदाबाद, गुजरात</Text>
-              <Text style={styles.addrLine}>हेड ऑफिस : 68, वृंदावन शॉपिंग सेंटर, गुजरात हाउसिंग बोर्ड, चांदखेडा, साबरमती, अहमदाबाद 382424</Text>
-              <Text style={styles.contactLine}>संपर्क : 9374934004, 9825289998, 9426517804, 9824017977</Text>
+                <View style={styles.headerSection}>
+                  <View style={styles.imageBox}><Image src="/Images/logoT.png" style={styles.logoImage} /></View>
+                  <View style={styles.centerContent}>
+                    <Text style={styles.mainTitle}>श्री क्षत्रिय घांची मोदी समाज सेवा संस्थान ट्रस्ट</Text>
+                    <Text style={styles.subTitle}>अहमदाबाद, गुजरात</Text>
+                    <Text style={styles.addrLine}>हेड ऑफिस : 68, वृंदावन शॉपिंग सेंटर, गुजरात हाउसिंग बोर्ड, चांदखेडा, साबरमती, अहमदाबाद 382424</Text>
+                    <Text style={styles.contactLine}>संपर्क : 9374934004, 9825289998, 9426517804, 9824017977</Text>
+                  </View>
+                  <View style={styles.imageBox}><Image src="/Images/sanidevImg.jpeg" style={styles.logoImage} /></View>
+                </View>
+
+                <View style={styles.sinceRegRow}>
+                  <Text style={styles.sinceRegText}>SINCE : 2024</Text>
+                  <Text style={styles.sinceRegText}>Reg. No: A/5231</Text>
+                </View>
+
+                <View style={styles.badgeWrap}>
+                  <View style={styles.badge}><Text style={styles.badgeText}>सदस्य सूची</Text></View>
+                </View>
+
+                {filterStr && <Text style={styles.filterRow}>Filters: {filterStr}</Text>}
+
+                <View style={styles.summaryRow}>
+                  <Text style={styles.summaryCount}>कुल सदस्य: {members.length}</Text>
+                  <Text style={styles.summaryDate}>{today}</Text>
+                </View>
+              </>
+            ) : (
+              // Continuation sheets: one line saying whose list this is
+              <View style={styles.contHead}>
+                <Text style={styles.contTitle}>श्री क्षत्रिय घांची मोदी समाज सेवा संस्थान ट्रस्ट — सदस्य सूची</Text>
+                <Text style={styles.summaryDate}>कुल सदस्य: {members.length}  •  {today}</Text>
+              </View>
+            )}
+
+            <View style={styles.table}>
+              <TableHead />
+              {pageRows}
             </View>
-            <View style={styles.imageBox}><Image src="/Images/sanidevImg.jpeg" style={styles.logoImage} /></View>
-          </View>
 
-          <View style={styles.sinceRegRow}>
-            <Text style={styles.sinceRegText}>SINCE : 2024</Text>
-            <Text style={styles.sinceRegText}>Reg. No: A/5231</Text>
-          </View>
-
-          <View style={styles.badgeWrap}>
-            <View style={styles.badge}><Text style={styles.badgeText}>सदस्य सूची</Text></View>
-          </View>
-
-          {filterStr && <Text style={styles.filterRow}>Filters: {filterStr}</Text>}
-
-          <View style={styles.summaryRow}>
-            <Text style={styles.summaryCount}>कुल सदस्य: {members.length}</Text>
-            <Text style={styles.summaryDate}>{today}</Text>
-          </View>
-
-          <View style={styles.table}>
-            <View style={styles.thRow}>
-              <Text style={[styles.thCell, { width: 22 }]}>#</Text>
-              <Text style={[styles.thCell, { width: 76 }]}>Reg No</Text>
-              <Text style={[styles.thCell, { width: 68 }]}>Old Reg No</Text>
-              <Text style={[styles.thCell, { flex: 1 }]}>नाम / पिता</Text>
-              <Text style={[styles.thCell, { width: 62 }]}>फोन</Text>
-              <Text style={[styles.thCell, { width: 88 }]}>योजना</Text>
-              <Text style={[styles.thCell, { width: 48 }]}>आयु वर्ग</Text>
-              <Text style={[styles.thCell, { width: 52 }]}>राशि</Text>
-              <Text style={[styles.thCell, { width: 62 }]}>गाँव</Text>
-              <Text style={[styles.thCell, { width: 52 }]}>Status</Text>
-              {showClosedCol && <Text style={[styles.thCell, { width: 58 }]}>Closed Date</Text>}
+            <View style={styles.footer}>
+              <Text style={styles.footerText}>
+                Generated by SSGMS Web Panel • {generatedAt}   •   Page {pageIdx + 1} of {totalPages}
+              </Text>
             </View>
-            {rows}
           </View>
-
-          <View style={styles.footer}>
-            <Text style={styles.footerText}>Generated by SSGMS Web Panel • {dayjs().format('DD-MM-YYYY HH:mm')}</Text>
-          </View>
-        </View>
-      </Page>
+        </Page>
+      ))}
     </Document>
   )
 }

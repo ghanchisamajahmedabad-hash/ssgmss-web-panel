@@ -1090,8 +1090,8 @@ const handleDeleteMember = (member) => {
       num(m.aadhaarNo),
       q(m.village),
       q(m.city),
-      q(m.programName || (programList?.find(p => p.id === m.programId)?.name || '')),
-      q(m.ageGroupName || m.memberGroupName || m.ageGroup || ''),
+      q(programList?.find(p => p.id === m.programId)?.name || m.programName || ''),
+      q((programList?.find(p => p.id === m.programId)?.ageGroups || []).find(g => g.id === m.ageGroupId)?.ageGroupName || m.ageGroupName || m.memberGroupName || m.ageGroup || ''),
       // Per-closing instalment amount, set by the member's age group. Plain
       // number (no ₹, no quotes) so Excel can total and sort the column.
       m.payAmount || 0,
@@ -1170,8 +1170,8 @@ const handleDeleteMember = (member) => {
       : ''
 
     const rowsHtml = data.map((m, i) => {
-      const progName = m.programName || (programList?.find(p => p.id === m.programId)?.name || '-')
-      const ageGroup = m.ageGroupName || m.memberGroupName || m.ageGroup || '-'
+      const progName = programList?.find(p => p.id === m.programId)?.name || m.programName || '-'
+      const ageGroup = ((programList?.find(p => p.id === m.programId)?.ageGroups || []).find(g => g.id === m.ageGroupId)?.ageGroupName || m.ageGroupName || m.memberGroupName || m.ageGroup || '-')
       return `
       <tr>
         <td class="c">${m.srNo ?? i + 1}</td>

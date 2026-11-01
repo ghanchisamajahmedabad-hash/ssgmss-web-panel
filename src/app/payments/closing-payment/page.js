@@ -36,7 +36,8 @@ import {
   EnvironmentOutlined,
   SyncOutlined,
   SearchOutlined,
-  FilterOutlined
+  FilterOutlined,
+  FilePdfOutlined
 } from '@ant-design/icons';
 import { message as antMessage } from 'antd';
 import { auth } from '../../../../lib/firbase-client';
@@ -46,6 +47,8 @@ import { useRouter } from 'next/navigation';
 
 // Import constants and helpers
 import { processAgentStats } from '@/utils/agentUtils';
+import { downloadAgentPaymentsPdf } from '../components/AgentPaymentsPdf';
+import dayjs from 'dayjs';
 import SummaryCards from '../join-fees/components/SummaryCards';
 import ClosingPaymentHistoryDrawerAgent from './components/PaymentHistoryDrawerAgent';
 import { useClosingPaymentHistory } from '@/utils/hooks/useClosingPaymentHistory';
@@ -81,6 +84,7 @@ const ClosingPayment = () => {
   const [searchText, setSearchText]     = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [programFilter, setProgramFilter] = useState('all');
+  const [exportingPdf, setExportingPdf] = useState(false);
 
   // Payment History State
   const [historyDrawerVisible, setHistoryDrawerVisible] = useState(false);
@@ -220,6 +224,62 @@ const ClosingPayment = () => {
       antMessage.error(`Sync failed: ${err.message}`);
     } finally {
       setSyncing(false);
+    }
+  };
+
+  // ── Export PDF ─────────────────────────────────────────────────────────
+  // Exports exactly what the table holds after search + yojna + status filter
+  // (every page of it, not just the 10 rows on screen). With a yojna selected,
+  // each agent's figures are that yojna's only — same as the table's filter.
+  const handleExportPdf = async () => {
+    if (!filteredAgents.length) { antMessage.warning('No agents to export'); return; }
+    setExportingPdf(true);
+    try {
+      const programLabel = programFilterOptions.find(o => o.value === programFilter)?.label;
+      const filterParts = [];
+      if (searchText.trim()) filterParts.push(`Search: "${searchText.trim()}"`);
+      if (programFilter !== 'all') filterParts.push(`Yojna: ${programLabel || programFilter}`);
+      if (statusFilter === 'pending') filterParts.push('Status: Has Pending');
+      if (statusFilter === 'paid')    filterParts.push('Status: Fully Paid');
+
+      const toRow = (p) => ({
+        name:    p.programName,
+        members: p.memberCount || 0,
+        total:   p.totalClosingAmount || 0,
+        paid:    p.totalClosingPaidAmount || 0,
+        pending: p.totalClosingPendingAmount || 0,
+      });
+
+      await downloadAgentPaymentsPdf({
+        fileName: `closing_payment_report_${dayjs().format('YYYY-MM-DD')}.pdf`,
+        title: 'क्लोजिंग पेमेंट रिपोर्ट  •  Closing Payment Report',
+        filterText: filterParts.join(' | '),
+        agents: filteredAgents.map((a) => {
+          const base = {
+            name:  a.name,
+            place: [a.village, a.district].filter(Boolean).join(', '),
+            phone: a.phone1 || a.phone,
+          };
+          if (programFilter !== 'all') {
+            const p = (a.programs || []).find(p => p.programId === programFilter);
+            const r = p ? toRow(p) : { members: 0, total: 0, paid: 0, pending: 0 };
+            return { ...base, members: r.members, total: r.total, paid: r.paid, pending: r.pending, programs: p ? [r] : [] };
+          }
+          return {
+            ...base,
+            members: a.memberCount || 0,
+            total:   a.closing_totalAmount || 0,
+            paid:    a.closing_paidAmount || 0,
+            pending: a.closing_pendingAmount || 0,
+            programs: (a.programs || []).map(toRow),
+          };
+        }),
+      });
+    } catch (err) {
+      console.error('Closing payment PDF failed:', err);
+      antMessage.error(`PDF failed: ${err.message || err}`);
+    } finally {
+      setExportingPdf(false);
     }
   };
 
@@ -533,6 +593,22 @@ const ClosingPayment = () => {
               </Button>
             </Tooltip>
           )}
+          <Button
+            icon={<FilePdfOutlined />}
+            loading={exportingPdf}
+            onClick={handleExportPdf}
+            disabled={filteredAgents.length === 0}
+            style={{
+              borderColor: colors.historyBtnBg,
+              color: colors.historyBtnBg,
+              borderRadius: 8,
+              fontWeight: 600,
+              fontSize: 12,
+              height: 36,
+            }}
+          >
+            Export PDF
+          </Button>
           <Button
             icon={<HistoryOutlined />}
             onClick={() => router.push('/payments/history')}

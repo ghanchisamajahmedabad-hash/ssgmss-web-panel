@@ -240,6 +240,14 @@ const ClosingFormPdf = ({ member = {}, settlement = {}, programName = '' }) => {
                   <Text style={styles.moneyLabel}>सदस्य की पुरानी बकाया:</Text>
                   <Text style={styles.moneyVal}>{money(settlement.oldPending)}</Text>
                 </View>
+                {/* Only printed when a penalty was actually deducted, so letters
+                    without one keep their existing layout. */}
+                {Number(settlement.penalty || 0) > 0 && (
+                  <View style={styles.moneyRow}>
+                    <Text style={styles.moneyLabel}>पेनल्टी (कटौती):</Text>
+                    <Text style={styles.moneyVal}>{money(settlement.penalty)}</Text>
+                  </View>
+                )}
                 <View style={[styles.moneyRow, { marginBottom: 0 }]}>
                   <Text style={[styles.moneyLabel, { color: RED, fontWeight: 'bold' }]}>
                     सदस्य को दी जा रही नेट राशि:

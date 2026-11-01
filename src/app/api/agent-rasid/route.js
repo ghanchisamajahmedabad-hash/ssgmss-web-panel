@@ -132,9 +132,21 @@ export async function POST(req) {
       return cp && cp.isReversed !== true ? cp : null;
     };
 
-    const prog = group.programId ? (await db.collection('programs').doc(group.programId).get()).data() || {} : {};
+    // Yojna + age group come from EACH paying member's own program (by
+    // programId), the same way the member's profile shows them. The closing
+    // group's program and the closed member's age group are NOT the payer's.
+    const progMap = await getAllDocs('programs', [group.programId, ...members.map(m => m.programId)]);
     const anyCp = members.map(cpOf).find(Boolean) || {};
-    const yojana = prog.hindiName || prog.name || group.yojanaName || anyCp.programName || '';
+    const groupProg = progMap[group.programId] || {};
+    const groupYojana = groupProg.name || groupProg.hindiName || group.yojanaName || anyCp.programName || '';
+    const yojanaOf = (m) => {
+      const p = progMap[m.programId];
+      return p?.name || p?.hindiName || m.programName || groupYojana;
+    };
+    const ageGroupOf = (m) => {
+      const g = (progMap[m.programId]?.ageGroups || []).find(a => a.id === m.ageGroupId);
+      return g?.ageGroupName || m.ageGroupName || m.memberGroupName || m.ageGroup || '';
+    };
 
     // ── The closings listed on the receipt ─────────────────────────────────
     const detail = {};
@@ -167,7 +179,6 @@ export async function POST(req) {
       };
     }).sort((a, b) => sortKey(a.date) - sortKey(b.date));
 
-    const closingAgeGroup = entries.find(e => e.ageGroup)?.ageGroup || '';
     const worker = [agent.agentCode ? `(${agent.agentCode})` : '', agent.name || '', agent.phone1 || agent.phone || '']
       .filter(Boolean).join(' ');
     const note = (body.note && String(body.note).trim()) ||
@@ -184,8 +195,8 @@ export async function POST(req) {
         name: [m.displayName, m.fatherName ? '/ ' + m.fatherName : ''].filter(Boolean).join(' '),
         phone: m.phone || '',
         address: [m.village, m.city, m.state].filter(Boolean).join(', '),
-        yojana,
-        ageGroup: closingAgeGroup || m.ageGroupName || m.memberGroupName || m.ageGroup || '',
+        yojana: yojanaOf(m),
+        ageGroup: ageGroupOf(m),
         sahyogRashi: Number(m.payAmount || 0),
         entries: cp ? entries.filter(e => charged.has(e.id)) : [],
         totalAmount: cp ? Number(cp.totalAmount || 0) : 0,

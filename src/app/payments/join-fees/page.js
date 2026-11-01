@@ -37,6 +37,7 @@ import {
   SyncOutlined,
   SearchOutlined,
   FilterOutlined,
+  FilePdfOutlined,
 } from '@ant-design/icons';
 import { message as antMessage } from 'antd';
 import { auth } from '../../../../lib/firbase-client';
@@ -51,6 +52,8 @@ import SummaryCards from './components/SummaryCards';
 import PaymentHistoryDrawerAgent from './components/PaymentHistoryDrawerAgent';
 import { usePaymentHistory } from '@/utils/hooks/usePaymentHistory';
 import { processAgentStats } from '@/utils/agentUtils';
+import { downloadAgentPaymentsPdf } from '../components/AgentPaymentsPdf';
+import dayjs from 'dayjs';
 
 const { Title, Text } = Typography;
 const colors = {
@@ -80,6 +83,7 @@ const JoinFeesPage = () => {
   const [syncing, setSyncing] = useState(false);
   const [searchText, setSearchText]     = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
+  const [exportingPdf, setExportingPdf] = useState(false);
   
   // Payment History State
   const [historyDrawerVisible, setHistoryDrawerVisible] = useState(false);
@@ -188,6 +192,47 @@ const JoinFeesPage = () => {
       antMessage.error(`Sync failed: ${err.message}`);
     } finally {
       setSyncing(false);
+    }
+  };
+
+  // ── Export PDF ─────────────────────────────────────────────────────────
+  // Exports exactly what the table holds after search + status filter (every
+  // page of it, not just the 10 rows on screen), with each agent's yojna rows.
+  const handleExportPdf = async () => {
+    if (!filteredAgents.length) { antMessage.warning('No agents to export'); return; }
+    setExportingPdf(true);
+    try {
+      const filterParts = [];
+      if (searchText.trim()) filterParts.push(`Search: "${searchText.trim()}"`);
+      if (statusFilter === 'pending') filterParts.push('Status: Has Pending');
+      if (statusFilter === 'paid')    filterParts.push('Status: Fully Paid');
+
+      await downloadAgentPaymentsPdf({
+        fileName: `join_fees_report_${dayjs().format('YYYY-MM-DD')}.pdf`,
+        title: 'जॉइन फीस रिपोर्ट  •  Join Fees Report',
+        filterText: filterParts.join(' | '),
+        agents: filteredAgents.map((a) => ({
+          name:    a.name,
+          place:   [a.village, a.district].filter(Boolean).join(', '),
+          phone:   a.phone1 || a.phone,
+          members: a.memberCount || 0,
+          total:   a.totalJoinFees || 0,
+          paid:    a.totalJoinFeesPaid || 0,
+          pending: a.totalJoinFeesPending || 0,
+          programs: (a.programs || []).map((p) => ({
+            name:    p.programName,
+            members: p.memberCount || 0,
+            total:   p.totalJoinFees || 0,
+            paid:    p.totalJoinFeesPaid || 0,
+            pending: p.totalJoinFeesPending || 0,
+          })),
+        })),
+      });
+    } catch (err) {
+      console.error('Join fees PDF failed:', err);
+      antMessage.error(`PDF failed: ${err.message || err}`);
+    } finally {
+      setExportingPdf(false);
     }
   };
 
@@ -491,6 +536,22 @@ const JoinFeesPage = () => {
               </Button>
             </Tooltip>
           )}
+          <Button
+            icon={<FilePdfOutlined />}
+            loading={exportingPdf}
+            onClick={handleExportPdf}
+            disabled={filteredAgents.length === 0}
+            style={{
+              borderColor: colors.historyBtnBg,
+              color: colors.historyBtnBg,
+              borderRadius: 8,
+              fontWeight: 600,
+              fontSize: 12,
+              height: 36,
+            }}
+          >
+            Export PDF
+          </Button>
           <Button
             icon={<HistoryOutlined />}
             onClick={() => router.push('/payments/history')}
