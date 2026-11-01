@@ -21,7 +21,8 @@ import relativeTime from 'dayjs/plugin/relativeTime'
 import { BlobProvider } from '@react-pdf/renderer'
 import ClosedMembersPdf from './components/ClosedMembersPdf'
 import {
-  collection, query, orderBy, limit, getDocs
+  collection, query, orderBy, limit, getDocs,
+  doc, updateDoc, serverTimestamp, arrayUnion,
 } from 'firebase/firestore'
 import { db, auth } from '../../../../lib/firbase-client'
 import { useAuth } from '@/components/Base/AuthProvider'
@@ -352,6 +353,44 @@ const ClosingMembersPage = () => {
   }
 
   // ── Fetch closing group batches (history / group filter) ───────────────────
+  // ── Rename a closing group ─────────────────────────────────────────────
+  // The name lives only on groupClosings/{id}.groupName; every screen that
+  // shows it (closed-members tag, this history tab, member details, the
+  // add-to-existing-group list, filters) reads it from there, so one write is
+  // enough. Previous names are kept in groupNameHistory.
+  const [renameGroup,  setRenameGroup]  = useState(null)
+  const [renameValue,  setRenameValue]  = useState('')
+  const [renaming,     setRenaming]     = useState(false)
+
+  const openRename = (g) => { setRenameGroup(g); setRenameValue(g?.groupName || '') }
+
+  const saveRename = async () => {
+    const g = renameGroup
+    const name = renameValue.trim().replace(/\s+/g, ' ')
+    if (!g) return
+    if (!name) { message.error('Group name cannot be empty'); return }
+    if (name === (g.groupName || '')) { setRenameGroup(null); return }
+    setRenaming(true)
+    try {
+      const by = authUser?.displayName || authUser?.name || authUser?.email || 'Admin'
+      await updateDoc(doc(db, 'groupClosings', g.id), {
+        groupName:          name,
+        groupNameUpdatedAt: serverTimestamp(),
+        groupNameUpdatedBy: by,
+        groupNameHistory:   arrayUnion({ from: g.groupName || '', to: name, at: new Date().toISOString(), by }),
+      })
+      setClosingGroups(prev => prev.map(x => x.id === g.id ? { ...x, groupName: name } : x))
+      setSelectedGroup(prev => (prev && prev.id === g.id ? { ...prev, groupName: name } : prev))
+      message.success(`Group renamed to "${name}"`)
+      setRenameGroup(null)
+    } catch (e) {
+      console.error(e)
+      message.error('Rename failed: ' + e.message)
+    } finally {
+      setRenaming(false)
+    }
+  }
+
   const fetchClosingGroups = async () => {
     setGroupsLoading(true)
     try {
@@ -773,7 +812,13 @@ const ClosingMembersPage = () => {
       title: 'Group', key: 'id', width: 200,
       render: (_, r) => (
         <div>
-          <div style={{ fontWeight: 600, fontSize: 13, color: colors.fg }}>{r.groupName || <span style={{ color: colors.muted, fontStyle: 'italic' }}>Unnamed</span>}</div>
+          <div style={{ fontWeight: 600, fontSize: 13, color: colors.fg, display: 'flex', alignItems: 'center', gap: 4 }}>
+            {r.groupName || <span style={{ color: colors.muted, fontStyle: 'italic' }}>Unnamed</span>}
+            <Tooltip title="Rename group">
+              <Button type="text" size="small" icon={<EditOutlined style={{ fontSize: 12 }} />}
+                onClick={() => openRename(r)} style={{ color: colors.primary, height: 22, width: 22, minWidth: 22 }} />
+            </Tooltip>
+          </div>
           <Tooltip title={r.id}>
             <Tag style={{ fontFamily: 'monospace', fontSize: 10, cursor: 'pointer', marginTop: 2 }}
               onClick={() => { setSelectedGroup(r); setGroupModalVisible(true) }}>
@@ -805,6 +850,7 @@ const ClosingMembersPage = () => {
         <Space>
           <Tooltip title={r.status === 'reversed' ? 'Reversed group' : 'Rasid'}><Button type="text" size="small" icon={<FileTextOutlined />} disabled={r.status === 'reversed'} onClick={() => { setRasidGroup(r); setRasidModalVisible(true) }} /></Tooltip>
           <Tooltip title="View detail"><Button type="text" size="small" icon={<InfoCircleOutlined />} onClick={() => { setSelectedGroup(r); setGroupModalVisible(true) }} /></Tooltip>
+          <Tooltip title="Rename group"><Button type="text" size="small" icon={<EditOutlined />} onClick={() => openRename(r)} /></Tooltip>
           {r.status !== 'reversed' && <Tooltip title="Reverse"><Button type="text" size="small" danger icon={<RollbackOutlined />} loading={reversingId === r.id} onClick={() => handleReverseGroup(r)} /></Tooltip>}
         </Space>
       )
@@ -976,6 +1022,40 @@ const ClosingMembersPage = () => {
       />
 
       {/* सदस्यता समापन पत्र for one closed member */}
+      {/* Rename closing group */}
+      <Modal
+        open={!!renameGroup}
+        title="Rename Closing Group"
+        onCancel={() => setRenameGroup(null)}
+        onOk={saveRename}
+        okText="Save"
+        confirmLoading={renaming}
+        okButtonProps={{ disabled: !renameValue.trim() }}
+        destroyOnHidden
+      >
+        {renameGroup && (
+          <div style={{ fontSize: 12, color: colors.muted, marginBottom: 10 }}>
+            {programList.find(p => p.id === renameGroup.programId)?.name || ''}
+            {' • '}{renameGroup.memberCount || 0} members
+            {' • '}<span style={{ fontFamily: 'monospace' }}>{renameGroup.id.slice(-8)}</span>
+          </div>
+        )}
+        <Input
+          autoFocus
+          value={renameValue}
+          onChange={e => setRenameValue(e.target.value)}
+          onPressEnter={saveRename}
+          maxLength={60}
+          showCount
+          placeholder="e.g. Summer 2026 Batch"
+        />
+        {renameGroup?.groupName && (
+          <div style={{ fontSize: 11, color: colors.muted, marginTop: 8 }}>
+            Current name: <b>{renameGroup.groupName}</b>
+          </div>
+        )}
+      </Modal>
+
       <ClosingFormDrawer
         open={!!formMember}
         member={formMember}

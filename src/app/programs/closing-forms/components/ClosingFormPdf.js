@@ -242,7 +242,7 @@ const ClosingFormPdf = ({ member = {}, settlement = {}, programName = '' }) => {
                 </View>
                 {/* Only printed when a penalty was actually deducted, so letters
                     without one keep their existing layout. */}
-                {Number(settlement.penalty || 0) > 0 && (
+                {Number(settlement.penalty || 0) > 0 && settlement.showPenaltyInPdf !== false && (
                   <View style={styles.moneyRow}>
                     <Text style={styles.moneyLabel}>पेनल्टी (कटौती):</Text>
                     <Text style={styles.moneyVal}>{money(settlement.penalty)}</Text>

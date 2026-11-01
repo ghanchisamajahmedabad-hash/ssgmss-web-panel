@@ -218,12 +218,13 @@ const ClosingFormDrawer = ({ open, onClose, member, programList = [], onSaved })
           <Button size="small" icon={<ReloadOutlined />} loading={loading} onClick={load}>
             Refresh
           </Button>
-          {settlement && (
-            <Button size="small" icon={<PictureOutlined />} onClick={() => setStatusOpen(true)}
-              style={{ borderColor: '#15803d', color: '#15803d' }}>
-              स्टेटस / प्रमाणपत्र
-            </Button>
-          )}
+          {/* Always available — uses the saved letter if there is one,
+              otherwise what is currently filled in the form. */}
+          <Button size="small" icon={<PictureOutlined />} onClick={() => setStatusOpen(true)}
+            disabled={loading}
+            style={{ borderColor: '#15803d', color: '#15803d', fontWeight: 600 }}>
+            स्टेटस / प्रमाणपत्र
+          </Button>
           {settlement && (
             <Button size="small" icon={<SaveOutlined />} loading={saving} onClick={save}>
               बदलाव सहेजें
@@ -482,7 +483,13 @@ const ClosingFormDrawer = ({ open, onClose, member, programList = [], onSaved })
         open={statusOpen}
         onClose={() => setStatusOpen(false)}
         member={member}
-        settlement={settlement}
+        settlement={settlement || {
+          membersCount:      Number(values.membersCount ?? totals.events),
+          memberContributed: Number(values.memberContributed ?? totals.paid),
+          amountGiven:       Number(values.amountGiven || 0),
+          paymentMode:       values.paymentMode || 'नकद',
+          paymentDate:       values.paymentDone && values.paymentDate ? dayjs(values.paymentDate).toISOString() : null,
+        }}
         programName={programName}
       />
     </Drawer>

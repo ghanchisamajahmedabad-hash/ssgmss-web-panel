@@ -727,11 +727,50 @@ const MarriageClosingDrawer = ({ visible, onClose, members: allMembers = [], pro
           </div>
         )}
 
-        {/* ── step 0: mode + program + group ── */}
+        {/* ── step 0: program first, then that program's closing group ── */}
         {step === 0 && (
           <div>
+            {/* Program selector */}
+            <SectionHeader icon={<FlagOutlined />} title="① योजना चुनें / Select Program" subtitle="पहले योजना चुनें — फिर उसी योजना के क्लोजिंग ग्रुप दिखेंगे" />
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {programList.map(prog => {
+                const active = selectedProg === prog.id
+                return (
+                  <div key={prog.id} onClick={() => {
+                    if (prog.id !== selectedProg) {
+                      setSelectedProg(prog.id)
+                      // Groups belong to a yojna — a new yojna starts from a clean choice
+                      setExistingGroupId(null)
+                      setMode('new')
+                    }
+                  }} style={{
+                    background: C.surface, border: `2px solid ${active ? C.primary : C.border}`,
+                    borderRadius: 12, padding: '14px 18px', cursor: 'pointer',
+                    boxShadow: active ? `0 3px 12px ${C.primary}20` : '0 1px 3px rgba(0,0,0,.04)',
+                    display: 'flex', alignItems: 'center', gap: 12, transition: 'all .2s',
+                  }}>
+                    <div style={{ width: 18, height: 18, borderRadius: '50%', flexShrink: 0, border: `2px solid ${active ? C.primary : C.border}`, background: active ? C.primary : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                      {active && <div style={{ width: 7, height: 7, borderRadius: '50%', background: '#fff' }} />}
+                    </div>
+                    <div>
+                      <div style={{ fontWeight: 700, fontSize: 14, color: C.fg }}>{prog.name}</div>
+                      {(() => {
+                        const n = closingGroups.filter(g => g.programId === prog.id && g.status === 'active').length
+                        return <div style={{ fontSize: 11, color: C.muted }}>{n ? `${n} active closing group${n > 1 ? 's' : ''}` : 'No closing group yet'}</div>
+                      })()}
+                    </div>
+                    {active && <CheckCircleOutlined style={{ color: C.primary, fontSize: 18, marginLeft: 'auto' }} />}
+                  </div>
+                )
+              })}
+            </div>
+
+
+            {/* Closing group — only once a yojna is chosen, and only that yojna's groups */}
+            {selectedProg ? (
+              <div style={{ marginTop: 24 }}>
             {/* Mode Toggle */}
-            <SectionHeader icon={<FlagOutlined />} title="Closing Mode" subtitle="Create a new group or add members to an existing one" />
+            <SectionHeader icon={<ApartmentOutlined />} title="② क्लोजिंग ग्रुप / Closing Group" subtitle={`${program?.name || ''} — नया ग्रुप बनाएं या इसी योजना के मौजूदा ग्रुप में जोड़ें`} />
             <div style={{ display: 'flex', gap: 12, marginBottom: 20 }}>
               <div onClick={() => { setMode('new'); setExistingGroupId(null) }} style={{
                 flex: 1, background: C.surface, border: `2px solid ${mode === 'new' ? C.primary : C.border}`,
@@ -750,6 +789,9 @@ const MarriageClosingDrawer = ({ visible, onClose, members: allMembers = [], pro
               }}>
                 <div style={{ fontSize: 24, marginBottom: 4 }}>📂</div>
                 Add to Existing
+                <div style={{ fontSize: 11, fontWeight: 500, color: C.muted }}>
+                  {programActiveGroups.length} group{programActiveGroups.length !== 1 ? 's' : ''} in this yojna
+                </div>
               </div>
             </div>
 
@@ -766,9 +808,7 @@ const MarriageClosingDrawer = ({ visible, onClose, members: allMembers = [], pro
             {mode === 'add' && (
               <div style={{ marginBottom: 20 }}>
                 <div style={{ fontWeight: 600, fontSize: 13, color: C.muted, marginBottom: 6 }}>Select Existing Group</div>
-                {!selectedProg ? (
-                  <Alert type="info" message="Please select a program below first, then choose the group." showIcon />
-                ) : programActiveGroups.length === 0 ? (
+                {programActiveGroups.length === 0 ? (
                   <Alert type="warning" message="No active groups found for this program. Switch to New Group mode." showIcon />
                 ) : (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -798,33 +838,11 @@ const MarriageClosingDrawer = ({ visible, onClose, members: allMembers = [], pro
               </div>
             )}
 
-            {/* Program selector */}
-            <SectionHeader icon={<FlagOutlined />} title="Select Program" subtitle="Choose the closing program" />
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {programList.map(prog => {
-                const active = selectedProg === prog.id
-                return (
-                  <div key={prog.id} onClick={() => {
-                    setSelectedProg(prog.id)
-                    // Reset existing group selection when program changes
-                    setExistingGroupId(null)
-                  }} style={{
-                    background: C.surface, border: `2px solid ${active ? C.primary : C.border}`,
-                    borderRadius: 12, padding: '14px 18px', cursor: 'pointer',
-                    boxShadow: active ? `0 3px 12px ${C.primary}20` : '0 1px 3px rgba(0,0,0,.04)',
-                    display: 'flex', alignItems: 'center', gap: 12, transition: 'all .2s',
-                  }}>
-                    <div style={{ width: 18, height: 18, borderRadius: '50%', flexShrink: 0, border: `2px solid ${active ? C.primary : C.border}`, background: active ? C.primary : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                      {active && <div style={{ width: 7, height: 7, borderRadius: '50%', background: '#fff' }} />}
-                    </div>
-                    <div>
-                      <div style={{ fontWeight: 700, fontSize: 14, color: C.fg }}>{prog.name}</div>
-                    </div>
-                    {active && <CheckCircleOutlined style={{ color: C.primary, fontSize: 18, marginLeft: 'auto' }} />}
-                  </div>
-                )
-              })}
-            </div>
+              </div>
+            ) : (
+              <Alert type="info" showIcon style={{ marginTop: 16 }}
+                message="ऊपर से योजना चुनें — उसके बाद नया ग्रुप बनाने या मौजूदा ग्रुप में जोड़ने का विकल्प आएगा।" />
+            )}
 
             {/* Pending-distribution scope toggle */}
             <div style={{ marginTop: 16, display: 'flex', alignItems: 'center', gap: 10 }}>
