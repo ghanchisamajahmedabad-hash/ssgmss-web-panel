@@ -125,6 +125,8 @@ const SectionHeader = ({ icon, title, subtitle, action }) => (
 
 // Gender as stored varies in case ('Male' / 'male'); compare lower-case,
 // same as the members page filter.
+const GENDER_LABEL = { male: '♂ पुरुष', female: '♀ महिला', other: 'अन्य' }
+
 const matchesGender = (m, g) => g === 'all' || (m?.gender || '').toLowerCase() === g
 
 // ─── member select card ───────────────────────────────────────────────────────
@@ -271,6 +273,9 @@ const MarriageClosingDrawer = ({ visible, onClose, members: allMembers = [], pro
   const [includeInactive, setIncludeInactive] = useState(false)
   // Male / female filter for the member list ('all' | 'male' | 'female')
   const [gender,          setGender]          = useState('all')
+  // Genders this closing's instalment is generated for — like ageGroups /
+  // memberGroups: [] = everyone, ['male'] = male members only, etc.
+  const [chargeGenders,   setChargeGenders]   = useState([])
 
   // Ref to always read the latest details in handleSubmit (avoids stale closure)
   const detailsRef = useRef(details)
@@ -283,6 +288,15 @@ const MarriageClosingDrawer = ({ visible, onClose, members: allMembers = [], pro
     closingGroups.filter(g => g.programId === selectedProg && g.status === 'active')
       .sort((a, b) => (b.closedAt?.toMillis?.() || 0) - (a.closedAt?.toMillis?.() || 0))
   , [closingGroups, selectedProg])
+
+  // In add mode the server applies the EXISTING group's gender scope
+  const existingGroup = programActiveGroups.find(g => g.id === existingGroupId)
+  const effectiveChargeGenders = mode === 'add'
+    ? (Array.isArray(existingGroup?.genders) ? existingGroup.genders : [])
+    : chargeGenders
+  const chargeGenderText = effectiveChargeGenders.length
+    ? effectiveChargeGenders.map(g => GENDER_LABEL[g] || g).join(', ')
+    : 'सभी सदस्य (All)'
 
   // ── load first page ────────────────────────────────────────────────────────
   // Gender is filtered inside fetchMembersPaginated AFTER each page is read,
@@ -385,7 +399,7 @@ const MarriageClosingDrawer = ({ visible, onClose, members: allMembers = [], pro
     await Promise.all(selectedIds.map(id => delFile(details[id]?.invitationUrl).catch(console.error)))
     setStep(0); setSelectedProg(null); setAgeGroups([]); setMemberGroups([])
     setSelectedIds([]); setSelectedMap({}); setDetails({}); setUploadProgress({})
-    setDisplayed([]); setSearch(''); setSearchMode(false); setHasMore(false); setLastDoc(null); setGender('all')
+    setDisplayed([]); setSearch(''); setSearchMode(false); setHasMore(false); setLastDoc(null); setGender('all'); setChargeGenders([])
     setMode('new'); setGroupName(''); setExistingGroupId(null)
   }
 
@@ -552,6 +566,10 @@ const MarriageClosingDrawer = ({ visible, onClose, members: allMembers = [], pro
         <p>
           Close <strong>{selectedIds.length}</strong> member(s)
           {mode === 'add' ? ` and add to existing group` : ''}?
+          <br />
+          <span style={{ fontSize: 12, color: C.muted }}>
+            किस्त बनेगी (Gender): <b>{chargeGenderText}</b>
+          </span>
         </p>
       ),
       okText: 'Confirm', okType: 'primary', cancelText: 'Cancel',
@@ -580,6 +598,9 @@ const MarriageClosingDrawer = ({ visible, onClose, members: allMembers = [], pro
             memberClosingList,
             groupName:        groupName || undefined,
             includeInactive,
+            // Closing pending only for this gender ([] = everyone). In add
+            // mode the server keeps the existing group's own setting.
+            genders:          chargeGenders,
             // For new mode, send groupId; for add-mode, send closingGroupId
             ...(mode === 'add'
               ? { closingGroupId: existingGroupId }
@@ -595,6 +616,27 @@ const MarriageClosingDrawer = ({ visible, onClose, members: allMembers = [], pro
 
           const processed = result.summary?.closedCount       ?? selectedIds.length
           const skipped   = result.summary?.skipped           ?? []
+
+          const gUnknown = result.summary?.genderUnknownCount ?? 0
+          if (gUnknown > 0) {
+            Modal.warning({
+              title: `${gUnknown} member(s) have no gender on record`,
+              width: 520,
+              content: (
+                <div style={{ fontSize: 13 }}>
+                  <p>This closing was limited to <b>{(result.summary?.genders || []).map(g => GENDER_LABEL[g] || g).join(', ')}</b>,
+                    so members without a gender were <b>not charged</b>:</p>
+                  <ul style={{ paddingLeft: 18 }}>
+                    {(result.summary?.genderUnknown || []).slice(0, 10).map(x => (
+                      <li key={x.memberId} style={{ fontSize: 12 }}>{x.name} ({x.registrationNumber || '—'})</li>
+                    ))}
+                    {gUnknown > 10 && <li style={{ fontSize: 12 }}>…and {gUnknown - 10} more</li>}
+                  </ul>
+                  <p style={{ fontSize: 12, color: '#6b7280' }}>Set their gender on the member, then add them to this group again.</p>
+                </div>
+              ),
+            })
+          }
 
           if (skipped.length) {
             message.warning(`Closed ${processed} member(s). ${skipped.length} skipped (already closed).`)
@@ -666,6 +708,7 @@ const MarriageClosingDrawer = ({ visible, onClose, members: allMembers = [], pro
   }
 
   const completedCount = selectedIds.filter(id => details[id]?.marriageDate && details[id]?.invitationUrl).length
+
 
   return (
     <Drawer
@@ -827,7 +870,13 @@ const MarriageClosingDrawer = ({ visible, onClose, members: allMembers = [], pro
                           </div>
                           <div style={{ flex: 1 }}>
                             <div style={{ fontWeight: 700, fontSize: 14, color: C.fg }}>{g.groupName || `Group ${g.id?.slice?.(0, 8) || ''}`}</div>
-                            <div style={{ fontSize: 12, color: C.muted }}>{groupCount} member{groupCount !== 1 ? 's' : ''} · {g.totalClosingCount || 0} closing{((g.totalClosingCount || 0) !== 1) ? 's' : ''} · ₹{g.totalAmount?.toLocaleString?.() || 0}</div>
+                            <div style={{ fontSize: 12, color: C.muted }}>{groupCount} member{groupCount !== 1 ? 's' : ''} · {g.totalClosingCount || 0} closing{((g.totalClosingCount || 0) !== 1) ? 's' : ''} · ₹{g.totalAmount?.toLocaleString?.() || 0}
+                              {Array.isArray(g.genders) && g.genders.length > 0 && (
+                                <Tag color={g.genders[0] === 'male' ? 'blue' : 'magenta'} style={{ fontSize: 10, marginLeft: 6 }}>
+                                  {g.genders.map(x => GENDER_LABEL[x] || x).join(', ')} only
+                                </Tag>
+                              )}
+                            </div>
                           </div>
                           {active && <CheckCircleOutlined style={{ color: C.primary, fontSize: 18 }} />}
                         </div>
@@ -873,7 +922,7 @@ const MarriageClosingDrawer = ({ visible, onClose, members: allMembers = [], pro
           <div>
             <SectionHeader icon={<ApartmentOutlined />} title="Filter by Groups" subtitle="Optional — skip to select all members"
               action={<Button size="small" onClick={() => setStep(0)} icon={<ArrowLeftOutlined />}>Back</Button>} />
-            <Collapse defaultActiveKey={['1', '2']} style={{ marginBottom: 16 }}>
+            <Collapse defaultActiveKey={['1', '2', '3']} style={{ marginBottom: 16 }}>
               <Panel header={<Space><CalendarOutlined style={{ color: C.primary }} /><strong>Age Groups</strong>{ageGroups.length > 0 && <Tag color="blue">{ageGroups.length} selected</Tag>}</Space>} key="1">
                 <Checkbox.Group value={ageGroups} onChange={setAgeGroups} style={{ width: '100%' }}>
                   <Row gutter={[12, 8]}>
@@ -894,12 +943,41 @@ const MarriageClosingDrawer = ({ visible, onClose, members: allMembers = [], pro
                   </Row>
                 </Checkbox.Group>
               </Panel>
+              {/* Gender — same idea as the groups above: the closing instalment is
+                  generated only for members of the ticked gender(s). None = all. */}
+              <Panel key="3" header={<Space>
+                <span style={{ color: '#db2777' }}>⚥</span><strong>Gender</strong>
+                <span style={{ fontSize: 11, color: C.muted }}>— किस जेंडर पर किस्त बने</span>
+                {effectiveChargeGenders.length > 0 && <Tag color="magenta">{chargeGenderText}</Tag>}
+              </Space>}>
+                <Checkbox.Group
+                  value={effectiveChargeGenders}
+                  onChange={setChargeGenders}
+                  disabled={mode === 'add'}
+                  style={{ width: '100%' }}>
+                  <Row gutter={[12, 8]}>
+                    <Col span={8}><Checkbox value="male"><span style={{ fontWeight: 600, color: '#2563eb' }}>♂ पुरुष (Male)</span></Checkbox></Col>
+                    <Col span={8}><Checkbox value="female"><span style={{ fontWeight: 600, color: '#db2777' }}>♀ महिला (Female)</span></Checkbox></Col>
+                  </Row>
+                </Checkbox.Group>
+                <div style={{ fontSize: 11, color: C.muted, marginTop: 8 }}>
+                  {mode === 'add'
+                    ? 'मौजूदा ग्रुप का नियम लागू रहेगा — यहाँ बदला नहीं जा सकता।'
+                    : 'कुछ न चुनें = सभी सदस्यों पर किस्त बनेगी। जिन सदस्यों का जेंडर भरा नहीं है, उन पर पुरुष/महिला चुनने पर किस्त नहीं बनेगी।'}
+                </div>
+              </Panel>
             </Collapse>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <Tag color="green">All eligible members shown</Tag>
+              <Tag color={effectiveChargeGenders.length ? 'magenta' : 'green'}>
+                किस्त बनेगी : {chargeGenderText}
+              </Tag>
               <Space>
-                <Button onClick={() => { setAgeGroups([]); setMemberGroups([]) }}>Clear</Button>
-                <Button type="primary" icon={<ArrowRightOutlined />} onClick={() => setStep(2)} style={{ background: grad, border: 'none' }}>Next: Select Members</Button>
+                <Button onClick={() => { setAgeGroups([]); setMemberGroups([]); if (mode !== 'add') setChargeGenders([]) }}>Clear</Button>
+                <Button type="primary" icon={<ArrowRightOutlined />} onClick={() => {
+                  // Start the member list on the same gender; it can be changed there
+                  if (effectiveChargeGenders.length === 1) setGender(effectiveChargeGenders[0])
+                  setStep(2)
+                }} style={{ background: grad, border: 'none' }}>Next: Select Members</Button>
               </Space>
             </div>
           </div>
@@ -907,12 +985,13 @@ const MarriageClosingDrawer = ({ visible, onClose, members: allMembers = [], pro
 
         {/* ── step 2: member selection ── */}
         {step === 2 && (
-          <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 280px)' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 230px)', minHeight: 560 }}>
             <SectionHeader icon={<TeamOutlined />} title="Select Members"
               subtitle={
-                mode === 'add'
+                (mode === 'add'
                   ? `Adding to existing group · ${searchMode ? 'Search results' : 'Scroll to load more'}`
-                  : searchMode ? 'Search results' : 'Scroll to load more'
+                  : searchMode ? 'Search results' : 'Scroll to load more')
+                + (effectiveChargeGenders.length ? ` · किस्त: ${chargeGenderText}` : '')
               }
               action={<Button size="small" onClick={() => setStep(1)} icon={<ArrowLeftOutlined />}>Back</Button>} />
 
@@ -935,6 +1014,7 @@ const MarriageClosingDrawer = ({ visible, onClose, members: allMembers = [], pro
                 value={search} onChange={e => handleSearch(e.target.value)} allowClear
                 style={{ flex: 1, borderRadius: 8 }}
                 suffix={listLoading && <Spin size="small" />} />
+              <span style={{ fontSize: 11, color: C.muted, whiteSpace: 'nowrap' }}>सूची में दिखाएं:</span>
               <Segmented
                 value={gender}
                 onChange={changeGender}
@@ -959,7 +1039,9 @@ const MarriageClosingDrawer = ({ visible, onClose, members: allMembers = [], pro
                 }}>Clear All</Button>
               </div>
             )}
-            <div ref={listRef} onScroll={handleScroll} style={{ flex: 1, overflowY: 'auto', paddingRight: 4 }}>
+            {/* minHeight: 0 lets this flex child actually shrink and scroll;
+                the floor keeps a usable list even on short screens */}
+            <div ref={listRef} onScroll={handleScroll} style={{ flex: 1, minHeight: 320, overflowY: 'auto', paddingRight: 4 }}>
               {listLoading ? (
                 <div style={{ textAlign: 'center', padding: '60px 0' }}><Spin tip="Loading members…" /></div>
               ) : displayed.length === 0 ? (

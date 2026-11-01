@@ -182,6 +182,9 @@ export async function POST(req) {
     memberGroups = [],
     closingGroupId,        // present only in add-to-existing mode
     includeInactive = false,
+    // Which genders this closing's pending is raised for: [] = everyone,
+    // ['male'] = male members only, ['female'] = female members only.
+    genders = [],
   } = body;
 
   if (!programId || !memberIds.length || !memberClosingList.length) {
@@ -250,6 +253,22 @@ export async function POST(req) {
     const effectiveMemberGroups = isAddMode
       ? (existingGroupData?.memberGroupIds || memberGroups)
       : memberGroups;
+
+    // Gender scope — like the age/member groups, a group keeps the scope it
+    // was created with, so members added later are charged on the same rule.
+    // Stored gender varies in case ('Male' / 'male'), so compare lower-case.
+    // Filtered in the loop rather than in the query: the members being CLOSED
+    // are marked in the same loop and must not be dropped just because the
+    // charge is limited to the other gender.
+    const VALID_GENDERS = ['male', 'female', 'other'];
+    // Older groups have no `genders` field — they charged everyone, so members
+    // added to them keep being charged that way.
+    const effectiveGenders = (isAddMode
+      ? (Array.isArray(existingGroupData?.genders) ? existingGroupData.genders : [])
+      : (Array.isArray(genders) ? genders : [])
+    ).map(g => String(g || '').toLowerCase()).filter(g => VALID_GENDERS.includes(g));
+    const genderSkipped   = [];   // other gender — not charged by design
+    const genderUnknown   = [];   // no gender on record — not charged, reported
 
     // Firestore caps `in` at 30 values. This used to slice to 10 and say
     // nothing, so selecting more than ten age groups SILENTLY EXCLUDED every
@@ -465,6 +484,23 @@ export async function POST(req) {
               agentClosedCounts[m.agentId] = (agentClosedCounts[m.agentId] || 0) + 1;
             }
           }
+        }
+      }
+
+      // ── Gender scope: closing pending only for the chosen gender(s) ──────
+      if (effectiveGenders.length) {
+        const g = String(m.gender || '').toLowerCase();
+        if (!g) {
+          genderUnknown.push({
+            memberId,
+            name: m.displayName || m.name || '',
+            registrationNumber: m.registrationNumber || '',
+          });
+          continue;
+        }
+        if (!effectiveGenders.includes(g)) {
+          genderSkipped.push(memberId);
+          continue;
         }
       }
 
@@ -740,6 +776,7 @@ export async function POST(req) {
           totalClosingCount: (freshData.totalClosingCount || 0) + totalPaymentCount,
           ...(groupName ? { groupName } : {}),
           ageGroupIds:       existingGroupData?.ageGroupIds ?? (ageGroups.length ? ageGroups : []),
+          genders:           existingGroupData?.genders ?? effectiveGenders,
           memberGroupIds:    existingGroupData?.memberGroupIds ?? (memberGroups.length ? memberGroups : []),
           status:    "active",
           updatedAt: ts,
@@ -754,6 +791,7 @@ export async function POST(req) {
         programId,
         ...(groupName ? { groupName } : {}),
         ageGroupIds:       ageGroups.length ? ageGroups : [],
+        genders:           effectiveGenders,
         memberGroupIds:    memberGroups.length ? memberGroups : [],
         closedMemberIds:   closedIds,
         paymentMemberIds:  paymentUpdatedIds,
@@ -839,6 +877,11 @@ export async function POST(req) {
         noJoinDateCount:         noJoinDate.length,
         noJoinDate,
         noJoinDateClosedNow:     noJoinDate.filter(x => x.beingClosedNow),
+        // Gender scope
+        genders:                 effectiveGenders,
+        genderSkippedCount:      genderSkipped.length,
+        genderUnknownCount:      genderUnknown.length,
+        genderUnknown:           genderUnknown.slice(0, 50),
       },
     });
   } catch (err) {
