@@ -20,7 +20,12 @@
 //   agent.programStats.{programId}.{same three}
 //   programs/{programId} and organizationStats/current
 //
-// Body: { memberId, joinFees, paidAmount, note? }
+// fixedJoinFees (optional) is the yojna period's fixed fee copied onto the
+// member. Nothing is rolled up from it — no agent / programme / organisation
+// total reads it — so it is written to the member only, with no cascade, but
+// it is still audited alongside the other figures.
+//
+// Body: { memberId, joinFees, paidAmount, fixedJoinFees?, note? }
 
 import { NextResponse } from 'next/server';
 import admin from '../../db/firebaseAdmin';
@@ -50,7 +55,7 @@ export async function POST(req) {
     if (!checkRole(['superadmin'], authResult.user.role))
       return NextResponse.json({ success: false, message: 'Only superadmin can edit join fee amounts' }, { status: 403 });
 
-    const { memberId, joinFees, paidAmount, note = '' } = await req.json().catch(() => ({}));
+    const { memberId, joinFees, paidAmount, fixedJoinFees, note = '' } = await req.json().catch(() => ({}));
 
     if (!memberId)
       return NextResponse.json({ success: false, message: 'memberId is required' }, { status: 400 });
@@ -60,6 +65,12 @@ export async function POST(req) {
 
     if (newTotal === null || newPaid === null)
       return NextResponse.json({ success: false, message: 'joinFees and paidAmount must be numbers' }, { status: 400 });
+    // undefined = not being edited; anything else must be a valid amount
+    const fixedGiven = fixedJoinFees !== undefined && fixedJoinFees !== null;
+    const newFixed   = fixedGiven ? money(fixedJoinFees) : null;
+    if (fixedGiven && (newFixed === null || newFixed < 0))
+      return NextResponse.json({ success: false, message: 'fixedJoinFees must be a non-negative number' }, { status: 400 });
+
     if (newTotal < 0 || newPaid < 0)
       return NextResponse.json({ success: false, message: 'Amounts cannot be negative' }, { status: 400 });
     if (newPaid > newTotal)
@@ -100,8 +111,44 @@ export async function POST(req) {
       const dPaid    = newPaid    - oldPaid;
       const dPending = newPending - oldPending;
 
-      if (dTotal === 0 && dPaid === 0) {
+      const oldFixed     = Number(m.fixedJoinFees || 0);
+      const fixedChanged = fixedGiven && newFixed !== oldFixed;
+      const moneyChanged = dTotal !== 0 || dPaid !== 0;
+
+      if (!moneyChanged && !fixedChanged) {
         return { unchanged: true, oldTotal, oldPaid, oldPending };
+      }
+
+      // Only fixedJoinFees changed: member field + audit, no rollups to touch
+      if (!moneyChanged) {
+        txn.update(memberRef, {
+          fixedJoinFees:    newFixed,
+          joinFeesEditedAt: STS(),
+          joinFeesEditedBy: authResult.user.uid,
+          updated_at:       STS(),
+        });
+        txn.set(db.collection('joinFeesEdits').doc(), {
+          memberId,
+          memberName:         m.displayName        || '',
+          fatherName:         m.fatherName         || '',
+          registrationNumber: m.registrationNumber || '',
+          phone:              m.phone              || '',
+          village:            m.village            || '',
+          agentId, programId,
+          programName:        m.programName || '',
+          before: { joinFees: oldTotal, paidAmount: oldPaid, pendingAmount: oldPending, fixedJoinFees: oldFixed },
+          after:  { joinFees: oldTotal, paidAmount: oldPaid, pendingAmount: oldPending, fixedJoinFees: newFixed },
+          delta:  { joinFees: 0, paidAmount: 0, pendingAmount: 0, fixedJoinFees: newFixed - oldFixed },
+          note:         String(note || '').slice(0, 500),
+          editedBy:     authResult.user.uid,
+          editedByName: authResult.user.name || authResult.user.email || '',
+          createdAt:    STS(),
+        });
+        return {
+          unchanged: false, fixedOnly: true,
+          oldTotal, oldPaid, oldPending, newTotal: oldTotal, newPaid: oldPaid, newPending: oldPending,
+          oldFixed, newFixed, agentId, programId,
+        };
       }
 
       const pct = newTotal > 0 ? Math.round((newPaid / newTotal) * 100) : 0;
@@ -111,6 +158,7 @@ export async function POST(req) {
         paidAmount:        newPaid,
         pendingAmount:     newPending,
         paymentPercentage: pct,
+        ...(fixedChanged ? { fixedJoinFees: newFixed } : {}),
         joinFeesEditedAt:  STS(),
         joinFeesEditedBy:  authResult.user.uid,
         updated_at:        STS(),
@@ -162,9 +210,12 @@ export async function POST(req) {
         agentId,
         programId,
         programName:        m.programName || '',
-        before: { joinFees: oldTotal, paidAmount: oldPaid, pendingAmount: oldPending },
-        after:  { joinFees: newTotal, paidAmount: newPaid, pendingAmount: newPending },
-        delta:  { joinFees: dTotal,   paidAmount: dPaid,   pendingAmount: dPending },
+        before: { joinFees: oldTotal, paidAmount: oldPaid, pendingAmount: oldPending,
+                  fixedJoinFees: oldFixed },
+        after:  { joinFees: newTotal, paidAmount: newPaid, pendingAmount: newPending,
+                  fixedJoinFees: fixedChanged ? newFixed : oldFixed },
+        delta:  { joinFees: dTotal,   paidAmount: dPaid,   pendingAmount: dPending,
+                  fixedJoinFees: fixedChanged ? newFixed - oldFixed : 0 },
         note:        String(note || '').slice(0, 500),
         editedBy:    authResult.user.uid,
         editedByName: authResult.user.name || authResult.user.email || '',
@@ -176,6 +227,7 @@ export async function POST(req) {
         oldTotal, oldPaid, oldPending,
         newTotal, newPaid, newPending,
         dTotal, dPaid, dPending,
+        oldFixed, newFixed: fixedChanged ? newFixed : oldFixed,
         paymentPercentage: pct,
         agentId, programId,
       };
@@ -187,7 +239,8 @@ export async function POST(req) {
 
     console.log(
       `[EditJoinFees] ${memberId} by ${authResult.user.uid}: ` +
-      `total ${result.oldTotal}→${result.newTotal}, paid ${result.oldPaid}→${result.newPaid}`
+      `total ${result.oldTotal}→${result.newTotal}, paid ${result.oldPaid}→${result.newPaid}, ` +
+      `fixed ${result.oldFixed}→${result.newFixed}`
     );
 
     return NextResponse.json({

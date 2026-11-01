@@ -4,8 +4,9 @@
 // A deliberately narrow screen: it finds members with the same filters as the
 // members page, and lets a superadmin correct ONLY the join-fee figures.
 //
-// Total and Paid are typed; Pending is always rendered as total − paid and is
-// never editable. Allowing all three to be typed is what lets a member end up
+// Total, Paid and Fixed Join Fees are typed; Pending is always rendered as
+// total − paid and is never editable. Fixed Join Fees is informational (the
+// yojna period's fixed fee) and feeds no totals, so it only changes the member. Allowing all three to be typed is what lets a member end up
 // with pending ≠ total − paid, which is the state that made the agent list and
 // the agent detail page disagree.
 //
@@ -148,20 +149,27 @@ const JoinFeesEditPage = () => {
   // ── Edit helpers ───────────────────────────────────────────────────────────
   const rowValues = (m) => {
     const e = edits[m.id]
-    const jf   = e?.joinFees   ?? Number(m.joinFees   || 0)
-    const paid = e?.paidAmount ?? Number(m.paidAmount || 0)
-    return { jf, paid, pending: jf - paid }
+    const jf    = e?.joinFees      ?? Number(m.joinFees      || 0)
+    const paid  = e?.paidAmount    ?? Number(m.paidAmount    || 0)
+    const fixed = e?.fixedJoinFees ?? Number(m.fixedJoinFees || 0)
+    return { jf, paid, fixed, pending: jf - paid }
   }
 
   const isDirty = (m) => {
     const e = edits[m.id]
     if (!e) return false
-    return e.joinFees !== Number(m.joinFees || 0) || e.paidAmount !== Number(m.paidAmount || 0)
+    return e.joinFees !== Number(m.joinFees || 0)
+        || e.paidAmount !== Number(m.paidAmount || 0)
+        || e.fixedJoinFees !== Number(m.fixedJoinFees || 0)
   }
 
   const setEdit = (m, key, value) => {
     setEdits(prev => {
-      const cur = prev[m.id] || { joinFees: Number(m.joinFees || 0), paidAmount: Number(m.paidAmount || 0) }
+      const cur = prev[m.id] || {
+        joinFees:      Number(m.joinFees      || 0),
+        paidAmount:    Number(m.paidAmount    || 0),
+        fixedJoinFees: Number(m.fixedJoinFees || 0),
+      }
       return { ...prev, [m.id]: { ...cur, [key]: Number(value ?? 0) } }
     })
   }
@@ -180,7 +188,7 @@ const JoinFeesEditPage = () => {
 
   // ── Save ───────────────────────────────────────────────────────────────────
   const saveRow = async (m, { silent = false } = {}) => {
-    const { jf, paid } = rowValues(m)
+    const { jf, paid, fixed } = rowValues(m)
     if (paid > jf) {
       if (!silent) message.error(`${m.displayName}: paid cannot exceed total`)
       return false
@@ -191,14 +199,14 @@ const JoinFeesEditPage = () => {
       const res = await fetch('/api/members/edit-join-fees', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ memberId: m.id, joinFees: jf, paidAmount: paid }),
+        body: JSON.stringify({ memberId: m.id, joinFees: jf, paidAmount: paid, fixedJoinFees: fixed }),
       })
       const data = await res.json()
       if (!data.success) throw new Error(data.message)
 
       // Reflect the saved values locally so the row settles without a refetch
       setMembers(prev => prev.map(x => x.id === m.id
-        ? { ...x, joinFees: jf, paidAmount: paid, pendingAmount: jf - paid,
+        ? { ...x, joinFees: jf, paidAmount: paid, pendingAmount: jf - paid, fixedJoinFees: fixed,
             paymentPercentage: jf > 0 ? Math.round((paid / jf) * 100) : 0 }
         : x))
       revertRow(m)
@@ -301,6 +309,26 @@ const JoinFeesEditPage = () => {
       ),
     },
     {
+      title: <Tooltip title="योजना का फिक्स्ड जॉइन फीस — केवल सदस्य पर बदलता है, किसी कुल योग में नहीं जुड़ता">Fixed Join Fees</Tooltip>,
+      key: 'fixed', width: 140, align: 'right',
+      render: (_, m) => {
+        const { fixed } = rowValues(m)
+        const changed = isDirty(m) && fixed !== Number(m.fixedJoinFees || 0)
+        return (
+          <div>
+            <InputNumber
+              size="small" min={0} precision={0} value={fixed}
+              onChange={v => setEdit(m, 'fixedJoinFees', v)}
+              style={{ width: '100%', borderColor: changed ? C.warning : undefined }}
+              formatter={v => v ? `₹${v}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',') : ''}
+              parser={v => v.replace(/[^\d]/g, '')}
+            />
+            {changed && <div style={{ fontSize: 9, color: C.light }}>was {inr(m.fixedJoinFees || 0)}</div>}
+          </div>
+        )
+      },
+    },
+    {
       title: 'Total Join Fees', key: 'total', width: 140, align: 'right',
       render: (_, m) => {
         const { jf } = rowValues(m)
@@ -373,12 +401,14 @@ const JoinFeesEditPage = () => {
       title: 'Action', key: 'action', width: 120, fixed: 'right', align: 'center',
       render: (_, m) => {
         const dirty = isDirty(m)
-        const { jf, paid } = rowValues(m)
+        const { jf, paid, fixed } = rowValues(m)
         return (
           <Space size={4}>
             <Popconfirm
               title="Save this change?"
-              description={<span style={{ fontSize: 12 }}>{m.displayName}<br />Total {inr(m.joinFees)} → <b>{inr(jf)}</b><br />Paid {inr(m.paidAmount)} → <b>{inr(paid)}</b></span>}
+              description={<span style={{ fontSize: 12 }}>{m.displayName}
+                {fixed !== Number(m.fixedJoinFees || 0) && <><br />Fixed {inr(m.fixedJoinFees || 0)} → <b>{inr(fixed)}</b></>}
+                <br />Total {inr(m.joinFees)} → <b>{inr(jf)}</b><br />Paid {inr(m.paidAmount)} → <b>{inr(paid)}</b></span>}
               onConfirm={() => saveRow(m)}
               okText="Save" cancelText="Cancel"
               disabled={!dirty || paid > jf}
@@ -507,7 +537,7 @@ const JoinFeesEditPage = () => {
           rowKey="id"
           loading={loading}
           size="small"
-          scroll={{ x: 1100 }}
+          scroll={{ x: 1240 }}
           rowClassName={m => isDirty(m) ? 'jf-dirty' : ''}
           pagination={{
             current: page, pageSize, total,
@@ -620,8 +650,11 @@ const JoinFeesEditPage = () => {
                     ['Total',   h.before?.joinFees,      h.after?.joinFees],
                     ['Paid',    h.before?.paidAmount,    h.after?.paidAmount],
                     ['Pending', h.before?.pendingAmount, h.after?.pendingAmount],
+                    // Only edits made after this column existed carry it
+                    ...(h.after?.fixedJoinFees !== undefined
+                      ? [['Fixed', h.before?.fixedJoinFees, h.after?.fixedJoinFees]] : []),
                   ].map(([label, before, after]) => (
-                    <Col span={8} key={label}>
+                    <Col span={h.after?.fixedJoinFees !== undefined ? 6 : 8} key={label}>
                       <Text style={{ fontSize: 10, color: C.light, display: 'block' }}>{label}</Text>
                       <Text style={{ fontSize: 11 }}>
                         <Text delete style={{ fontSize: 11, color: C.light }}>{inr(before)}</Text>{' → '}
