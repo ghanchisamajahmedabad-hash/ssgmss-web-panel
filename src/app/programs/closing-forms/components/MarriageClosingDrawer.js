@@ -3,13 +3,13 @@ import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react'
 import {
   Drawer, Button, Checkbox, Avatar, Empty, DatePicker,
   Upload, message, Modal, Space, Row, Col, Input,
-  Collapse, Alert, Progress, Spin, Badge, Tag
+  Collapse, Alert, Progress, Spin, Badge, Tag, Segmented
 } from 'antd'
 import {
   CloseOutlined, UserOutlined, DeleteOutlined, UploadOutlined,
   CheckCircleOutlined, CalendarOutlined, FileTextOutlined,
   TeamOutlined, FlagOutlined, ArrowRightOutlined, ArrowLeftOutlined,
-  SaveOutlined, EyeOutlined, WarningOutlined, HeartFilled,
+  SaveOutlined, EyeOutlined, WarningOutlined,
   ApartmentOutlined, SearchOutlined, ReloadOutlined,
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
@@ -123,6 +123,10 @@ const SectionHeader = ({ icon, title, subtitle, action }) => (
   </div>
 )
 
+// Gender as stored varies in case ('Male' / 'male'); compare lower-case,
+// same as the members page filter.
+const matchesGender = (m, g) => g === 'all' || (m?.gender || '').toLowerCase() === g
+
 // ─── member select card ───────────────────────────────────────────────────────
 const MemberSelectCard = ({ member, checked, onChange, programId, existingGroupId }) => {
   // FIX: in add-mode, "already closed" means closed in a DIFFERENT group.
@@ -199,7 +203,7 @@ const MemberDetailRow = ({ member, details, progress, onUpdate, onRemove, onUplo
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: '180px 1fr 1fr', gap: 14, padding: '12px 14px', alignItems: 'start' }}>
         <div>
-          <Label required>Marriage Date</Label>
+          <Label required>Closing Date</Label>
           <DatePicker style={{ width: '100%' }} value={details?.marriageDate}
             onChange={d => onUpdate('marriageDate', d)}
             format="DD/MM/YYYY" placeholder="Pick date" size="small" allowClear={false} />
@@ -265,6 +269,8 @@ const MarriageClosingDrawer = ({ visible, onClose, members: allMembers = [], pro
   const [groupName,      setGroupName]      = useState('')
   const [existingGroupId, setExistingGroupId] = useState(null)
   const [includeInactive, setIncludeInactive] = useState(false)
+  // Male / female filter for the member list ('all' | 'male' | 'female')
+  const [gender,          setGender]          = useState('all')
 
   // Ref to always read the latest details in handleSubmit (avoids stale closure)
   const detailsRef = useRef(details)
@@ -279,18 +285,31 @@ const MarriageClosingDrawer = ({ visible, onClose, members: allMembers = [], pro
   , [closingGroups, selectedProg])
 
   // ── load first page ────────────────────────────────────────────────────────
-  const loadPage = useCallback(async (programId) => {
+  // Gender is filtered inside fetchMembersPaginated AFTER each page is read,
+  // so one page can come back short (or empty) when a filter is on. Keep
+  // reading pages until a full page of matches is collected or the yojna runs
+  // out — otherwise the list can stop short with nothing left to scroll.
+  const fetchFilled = async (programId, startDoc, g) => {
+    let collected = [], cursor = startDoc, more = true, rounds = 0
+    while (more && collected.length < PAGE && rounds < 15) {
+      const r = await fetchMembersPaginated({
+        programIds: [programId], status: 'active', pageSize: PAGE, lastDoc: cursor, search: '',
+        gender: g,
+      })
+      collected = collected.concat(r.members || [])
+      cursor = r.lastDoc || null
+      more = !!r.hasNextPage && !!cursor
+      rounds++
+      if (g === 'all') break
+    }
+    return { members: collected, lastDoc: cursor, hasNextPage: more }
+  }
+
+  const loadPage = useCallback(async (programId, g = 'all') => {
     if (!programId) return
     setListLoading(true); setSearchMode(false); setSearch('')
     try {
-      // NOTE: the helper reads `programIds` (an ARRAY). Passing `programId`
-      // singular was silently dropped during destructuring, so no programme
-      // condition was ever added to the query and the list showed members from
-      // EVERY yojna. The search path below filtered by programme in JS, which
-      // is why search looked correct while the scrolling list did not.
-      const r = await fetchMembersPaginated({
-        programIds: [programId], status: 'active', pageSize: PAGE, lastDoc: null, search: '',
-      })
+      const r = await fetchFilled(programId, null, g)
       setDisplayed(r.members || [])
       setLastDoc(r.lastDoc || null)
       setHasMore(r.hasNextPage || false)
@@ -298,20 +317,19 @@ const MarriageClosingDrawer = ({ visible, onClose, members: allMembers = [], pro
     finally { setListLoading(false) }
   }, [])
 
+
   // ── load more ──────────────────────────────────────────────────────────────
   const loadMore = useCallback(async () => {
     if (!selectedProg || !hasMore || loadingMore || searchMode) return
     setLoadingMore(true)
     try {
-      const r = await fetchMembersPaginated({
-        programIds: [selectedProg], status: 'active', pageSize: PAGE, lastDoc, search: '',
-      })
+      const r = await fetchFilled(selectedProg, lastDoc, gender)
       setDisplayed(p => [...p, ...(r.members || [])])
       setLastDoc(r.lastDoc || null)
       setHasMore(r.hasNextPage || false)
     } catch (e) { console.error(e) }
     finally { setLoadingMore(false) }
-  }, [selectedProg, hasMore, loadingMore, searchMode, lastDoc])
+  }, [selectedProg, hasMore, loadingMore, searchMode, lastDoc, gender])
 
   const handleScroll = useCallback(e => {
     const el = e.target
@@ -320,18 +338,33 @@ const MarriageClosingDrawer = ({ visible, onClose, members: allMembers = [], pro
 
   const handleSearch = useCallback(async (val) => {
     setSearch(val)
-    if (!val) { loadPage(selectedProg); return }
+    if (!val) { loadPage(selectedProg, gender); return }
     setListLoading(true)
     try {
       const r = await fetchAllMembersForSearch(val, 'all')
-      setDisplayed(r.filter(m => m.programId === selectedProg))
+      setDisplayed(r.filter(m => m.programId === selectedProg && matchesGender(m, gender)))
       setSearchMode(true); setHasMore(false)
     } catch (e) { console.error(e) }
     finally { setListLoading(false) }
-  }, [selectedProg, loadPage])
+  }, [selectedProg, loadPage, gender])
+
+  // Switching gender reloads the list (or re-runs the current search)
+  const changeGender = (g) => {
+    setGender(g)
+    if (search) {
+      // re-run search with the new filter
+      setListLoading(true)
+      fetchAllMembersForSearch(search, 'all')
+        .then(r => setDisplayed(r.filter(m => m.programId === selectedProg && matchesGender(m, g))))
+        .catch(console.error)
+        .finally(() => setListLoading(false))
+    } else {
+      loadPage(selectedProg, g)
+    }
+  }
 
   useEffect(() => {
-    if (step === 2 && selectedProg) loadPage(selectedProg)
+    if (step === 2 && selectedProg) loadPage(selectedProg, gender)
   }, [step, selectedProg])
 
   // ── storage helpers ────────────────────────────────────────────────────────
@@ -352,7 +385,7 @@ const MarriageClosingDrawer = ({ visible, onClose, members: allMembers = [], pro
     await Promise.all(selectedIds.map(id => delFile(details[id]?.invitationUrl).catch(console.error)))
     setStep(0); setSelectedProg(null); setAgeGroups([]); setMemberGroups([])
     setSelectedIds([]); setSelectedMap({}); setDetails({}); setUploadProgress({})
-    setDisplayed([]); setSearch(''); setSearchMode(false); setHasMore(false); setLastDoc(null)
+    setDisplayed([]); setSearch(''); setSearchMode(false); setHasMore(false); setLastDoc(null); setGender('all')
     setMode('new'); setGroupName(''); setExistingGroupId(null)
   }
 
@@ -499,7 +532,7 @@ const MarriageClosingDrawer = ({ visible, onClose, members: allMembers = [], pro
 
     const noDate = selectedIds.filter(id => !latestDetails[id]?.marriageDate)
     if (noDate.length) {
-      message.warning('Please set marriage date for all members')
+      message.warning('Please set closing date for all members')
       return
     }
 
@@ -513,11 +546,11 @@ const MarriageClosingDrawer = ({ visible, onClose, members: allMembers = [], pro
     }
 
     confirm({
-      title: 'Confirm Marriage Closing',
-      icon: <HeartFilled style={{ color: C.primary }} />,
+      title: 'Confirm Closing',
+      icon: <FlagOutlined style={{ color: C.primary }} />,
       content: (
         <p>
-          Close marriage for <strong>{selectedIds.length}</strong> member(s)
+          Close <strong>{selectedIds.length}</strong> member(s)
           {mode === 'add' ? ` and add to existing group` : ''}?
         </p>
       ),
@@ -566,7 +599,7 @@ const MarriageClosingDrawer = ({ visible, onClose, members: allMembers = [], pro
           if (skipped.length) {
             message.warning(`Closed ${processed} member(s). ${skipped.length} skipped (already closed).`)
           } else {
-            message.success(`Marriage closed for ${processed} member(s)`)
+            message.success(`Closing done for ${processed} member(s)`)
           }
 
           // Members who were closed but could NOT be charged — almost always a
@@ -645,7 +678,7 @@ const MarriageClosingDrawer = ({ visible, onClose, members: allMembers = [], pro
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <div style={{ width: 40, height: 40, borderRadius: 10, background: grad, display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: `0 3px 10px ${C.primary}40` }}>
-              <HeartFilled style={{ color: '#fff', fontSize: 20 }} />
+              <FlagOutlined style={{ color: '#fff', fontSize: 20 }} />
             </div>
             <div>
               <div style={{ fontWeight: 800, fontSize: 16, color: C.fg }}> Closing Member</div>
@@ -681,7 +714,7 @@ const MarriageClosingDrawer = ({ visible, onClose, members: allMembers = [], pro
               { label: 'Loaded',   value: displayed.length + (hasMore ? '+' : ''), color: C.info,    icon: <TeamOutlined /> },
               { label: 'Closed',   value: alreadyClosedCount,                      color: C.warning,  icon: <CheckCircleOutlined /> },
               { label: 'Selected', value: selectedIds.length,                      color: C.primary,  icon: <CheckCircleOutlined /> },
-              { label: 'Complete', value: `${completedCount}/${selectedIds.length}`, color: C.success, icon: <HeartFilled /> },
+              { label: 'Complete', value: `${completedCount}/${selectedIds.length}`, color: C.success, icon: <CheckCircleOutlined /> },
             ].map(s => (
               <div key={s.label} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 10 }}>
                 <div style={{ width: 32, height: 32, borderRadius: 7, background: s.color + '15', display: 'flex', alignItems: 'center', justifyContent: 'center', color: s.color, fontSize: 15 }}>{s.icon}</div>
@@ -766,7 +799,7 @@ const MarriageClosingDrawer = ({ visible, onClose, members: allMembers = [], pro
             )}
 
             {/* Program selector */}
-            <SectionHeader icon={<FlagOutlined />} title="Select Program" subtitle="Choose the marriage program" />
+            <SectionHeader icon={<FlagOutlined />} title="Select Program" subtitle="Choose the closing program" />
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               {programList.map(prog => {
                 const active = selectedProg === prog.id
@@ -884,7 +917,16 @@ const MarriageClosingDrawer = ({ visible, onClose, members: allMembers = [], pro
                 value={search} onChange={e => handleSearch(e.target.value)} allowClear
                 style={{ flex: 1, borderRadius: 8 }}
                 suffix={listLoading && <Spin size="small" />} />
-              <Button icon={<ReloadOutlined />} onClick={() => loadPage(selectedProg)} title="Reload" />
+              <Segmented
+                value={gender}
+                onChange={changeGender}
+                options={[
+                  { label: 'सभी', value: 'all' },
+                  { label: <span style={{ color: gender === 'male' ? undefined : '#2563eb' }}>♂ पुरुष</span>, value: 'male' },
+                  { label: <span style={{ color: gender === 'female' ? undefined : '#db2777' }}>♀ महिला</span>, value: 'female' },
+                ]}
+              />
+              <Button icon={<ReloadOutlined />} onClick={() => loadPage(selectedProg, gender)} title="Reload" />
               <Button size="small" type={allPageSelected ? 'primary' : 'default'}
                 onClick={() => handleSelectPage(!allPageSelected)} style={{ whiteSpace: 'nowrap', minWidth: 120 }}>
                 {allPageSelected ? 'Deselect Page' : 'Select Eligible'}
@@ -903,7 +945,11 @@ const MarriageClosingDrawer = ({ visible, onClose, members: allMembers = [], pro
               {listLoading ? (
                 <div style={{ textAlign: 'center', padding: '60px 0' }}><Spin tip="Loading members…" /></div>
               ) : displayed.length === 0 ? (
-                <Empty description={searchMode ? 'No matches' : 'No members in this program'} style={{ padding: '40px 0' }} />
+                <Empty description={
+                  searchMode ? 'No matches'
+                  : gender === 'male'   ? 'इस योजना में कोई पुरुष सदस्य नहीं'
+                  : gender === 'female' ? 'इस योजना में कोई महिला सदस्य नहीं'
+                  : 'No members in this program'} style={{ padding: '40px 0' }} />
               ) : (
                 <>
                   {displayed.map(member => (
@@ -938,7 +984,7 @@ const MarriageClosingDrawer = ({ visible, onClose, members: allMembers = [], pro
         {/* ── step 3: details ── */}
         {step === 3 && (
           <div>
-            <SectionHeader icon={<FileTextOutlined />} title="Marriage Details"
+            <SectionHeader icon={<FileTextOutlined />} title="Closing Details"
               subtitle={`Fill details for ${selectedIds.length} member(s)`}
               action={<Button size="small" onClick={() => setStep(2)} icon={<ArrowLeftOutlined />}>Back</Button>} />
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: C.surfaceSec, border: `1px solid ${C.border}`, borderRadius: 10, padding: '10px 14px', marginBottom: 14 }}>

@@ -2055,7 +2055,7 @@ ${filterHtml}
                   <Option value="all">All Status</Option>
                   <Option value="active">Active</Option>
                   <Option value="inactive">Inactive</Option>
-                  <Option value="closed">Closed (Marriage)</Option>
+                  <Option value="closed">Closed</Option>
                 </Select>
               </Form.Item>
 
