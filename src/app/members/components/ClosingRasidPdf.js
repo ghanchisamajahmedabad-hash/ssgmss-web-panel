@@ -218,6 +218,14 @@ const styles = StyleSheet.create({
   totalAmount:     { fontSize: 12, fontWeight: 'bold', color: BLACK, marginRight: 16 },
   totalWordsLabel: { fontSize: 11, fontWeight: 'bold', color: BLACK, marginRight: 6 },
   totalWordsValue: { fontSize: 11, color: BLACK, fontWeight: 'normal' },
+  // Multi-page receipts: the page's own total, then (last page) the grand total
+  pageTotalCalc:   { fontSize: 9, color: '#555', marginRight: 10 },
+  grandTotalRow: {
+    flexDirection: 'row', alignItems: 'center',
+    marginTop: 2, marginBottom: 2, paddingHorizontal: 2, paddingVertical: 2,
+    borderTopWidth: 1, borderTopColor: BLUE,
+  },
+  pageLabel: { fontSize: 10, fontWeight: 'bold', color: BLUE },
 
   // ════════ WORKER + SIGNATURE + NOTE ════════
   workerRow: {
@@ -364,6 +372,13 @@ const ClosingPage = ({ data, images = DEFAULT_IMAGES }) => {
   ];
 
   const total = Number(data.totalAmount || 0);
+  // Page-wise figures (see ClosingRasidPdf below). On a one-page receipt the
+  // page total IS the receipt total and the layout is unchanged.
+  const pageNo    = data.pageNo || 1;
+  const pageCount = data.pageCount || 1;
+  const multiPage = pageCount > 1;
+  const isLast    = pageNo === pageCount;
+  const pageAmount = data.pageAmount ?? total;
   // `status` comes straight off the closing_payment doc ('paid' | 'partial' |
   // 'pending'), so the receipt reflects what was actually recorded rather than
   // which button produced it.
@@ -443,6 +458,9 @@ const ClosingPage = ({ data, images = DEFAULT_IMAGES }) => {
             <Text>
               <Text style={styles.infoLabel}>क्र. सं. : </Text>
               <Text style={styles.infoValue}>{data.serialNo || ''}</Text>
+              <Text style={styles.infoValue}>{'      '}</Text>
+              <Text style={styles.infoLabel}>पेज : </Text>
+              <Text style={styles.pageLabel}>{pageNo} / {pageCount}</Text>
             </Text>
           </View>
           <View style={styles.infoRight}>
@@ -537,15 +555,43 @@ const ClosingPage = ({ data, images = DEFAULT_IMAGES }) => {
           ))}
         </View>
 
-        {/* ══ Total ══ */}
-        <View style={styles.totalRow}>
-          <Text style={styles.totalLabel}>कुल राशि रु.: </Text>
-          <Text style={styles.totalAmount}>{total.toLocaleString('en-IN')}</Text>
-          <Text style={styles.totalWordsLabel}>शब्दों में रूपये : </Text>
-          <Text style={styles.totalWordsValue}>
-            {data.totalInWords || numberToHindiWords(total)}
-          </Text>
-        </View>
+        {/* ══ Total ══
+            One page   → कुल राशि (unchanged).
+            Many pages → every page: this page's total (its closings × instalment);
+                         last page: also the receipt's full total. */}
+        {multiPage ? (
+          <>
+            <View style={styles.totalRow}>
+              <Text style={styles.totalLabel}>इस पेज का योग रु.: </Text>
+              <Text style={styles.totalAmount}>{pageAmount.toLocaleString('en-IN')}</Text>
+              {data.pageCalc ? <Text style={styles.pageTotalCalc}>({data.pageCalc})</Text> : null}
+              <Text style={styles.totalWordsValue}>{numberToHindiWords(pageAmount)}</Text>
+            </View>
+            {isLast ? (
+              <View style={styles.grandTotalRow}>
+                <Text style={styles.totalLabel}>कुल राशि रु. (सभी {pageCount} पेज): </Text>
+                <Text style={styles.totalAmount}>{total.toLocaleString('en-IN')}</Text>
+                <Text style={styles.totalWordsLabel}>शब्दों में रूपये : </Text>
+                <Text style={styles.totalWordsValue}>
+                  {data.totalInWords || numberToHindiWords(total)}
+                </Text>
+              </View>
+            ) : (
+              <Text style={[styles.pageTotalCalc, { paddingHorizontal: 2 }]}>
+                पेज {pageNo} / {pageCount} — कुल राशि अंतिम पेज पर
+              </Text>
+            )}
+          </>
+        ) : (
+          <View style={styles.totalRow}>
+            <Text style={styles.totalLabel}>कुल राशि रु.: </Text>
+            <Text style={styles.totalAmount}>{total.toLocaleString('en-IN')}</Text>
+            <Text style={styles.totalWordsLabel}>शब्दों में रूपये : </Text>
+            <Text style={styles.totalWordsValue}>
+              {data.totalInWords || numberToHindiWords(total)}
+            </Text>
+          </View>
+        )}
 
         {/* ══ Worker + Signature ══ */}
         <View style={styles.workerRow}>
@@ -563,7 +609,7 @@ const ClosingPage = ({ data, images = DEFAULT_IMAGES }) => {
 
       {/* ══ Footer — anchored to the page, never breaks to a second page ══ */}
       <View style={styles.footer} fixed>
-        <View style={{ width: 50 }} />
+        <Text style={{ width: 50, fontSize: 9, fontWeight: 'bold', color: BLUE }}>पेज {pageNo}/{pageCount}</Text>
         <View style={styles.footerCenter}>
           <Text style={styles.footerContact}>
             संपर्क सूत्र : 9374934004, 9825289998, 9426517804, 9824017977
@@ -591,11 +637,27 @@ const ClosingRasidPdf = ({ entries = [], images = DEFAULT_IMAGES }) => {
           (_, i) => list.slice(i * TOTAL_ROWS, (i + 1) * TOTAL_ROWS))
       : [list];
 
+    // Page total = closings on the page × the member's instalment
+    // (sahyogRashi). If no instalment was passed, share the receipt total out
+    // by row count instead — exact whenever every closing costs the same.
+    const perRow = Number(receipt.sahyogRashi) || 0;
+    const total  = Number(receipt.totalAmount || 0);
     chunks.forEach((chunk, cIdx) => {
+      const pageAmount = perRow > 0
+        ? chunk.length * perRow
+        : (list.length ? Math.round(total * chunk.length / list.length) : 0);
       pages.push(
         <ClosingPage
           key={`${receipt.id || rIdx}_${cIdx}`}
-          data={{ ...receipt, entries: chunk, startIndex: cIdx * TOTAL_ROWS }}
+          data={{
+            ...receipt,
+            entries: chunk,
+            startIndex: cIdx * TOTAL_ROWS,
+            pageNo: cIdx + 1,
+            pageCount: chunks.length,
+            pageAmount,
+            pageCalc: perRow > 0 ? `${chunk.length} × ${perRow.toLocaleString('en-IN')}` : '',
+          }}
           images={images}
         />
       );

@@ -125,6 +125,37 @@ function openPrintWindow(rasidList) {
 
   const pages = pageData.map(({ d, chunk, startIndex, pageNo, pageTotal }) => {
     const filled = [...chunk, ...Array(Math.max(0, ROWS - chunk.length)).fill(null)];
+    // Page-wise total: this page's closings × the member's instalment. With no
+    // instalment on record, share the receipt total out by row count instead.
+    // A one-page receipt keeps the single "कुल राशि" line exactly as before.
+    const perRow     = Number(d.sahyogRashi) || 0;
+    const allRows    = (d.entries || []).length;
+    const pageAmount = perRow > 0
+      ? chunk.length * perRow
+      : (allRows ? Math.round(Number(d.totalAmount || 0) * chunk.length / allRows) : 0);
+    const multiPage  = pageTotal > 1;
+    const isLastPage = pageNo === pageTotal;
+    const totalHtml = !multiPage ? `
+      <div class="total-row">
+        <span class="total-lbl">कुल राशि रु.:</span>
+        <span class="total-amt">${d.totalAmount.toLocaleString()}</span>
+        <span class="total-words-lbl">शब्दों में रूपये :</span>
+        <span class="total-words">${d.totalInWords}</span>
+      </div>` : `
+      <div class="total-row">
+        <span class="total-lbl">इस पेज का योग रु.:</span>
+        <span class="total-amt" style="margin-right:10px">${pageAmount.toLocaleString('en-IN')}</span>
+        ${perRow > 0 ? `<span class="page-calc">(${chunk.length} × ${perRow.toLocaleString('en-IN')})</span>` : ''}
+        <span class="total-words">${toWords(pageAmount)}</span>
+      </div>
+      ${isLastPage ? `
+      <div class="total-row grand-row">
+        <span class="total-lbl">कुल राशि रु. (सभी ${pageTotal} पेज):</span>
+        <span class="total-amt">${d.totalAmount.toLocaleString()}</span>
+        <span class="total-words-lbl">शब्दों में रूपये :</span>
+        <span class="total-words">${d.totalInWords}</span>
+      </div>` : `
+      <div class="page-cont">पेज ${pageNo} / ${pageTotal} — कुल राशि अंतिम पेज पर</div>`}`;
     // No गाँव column — the village is appended to the name, matching the
     // printed receipt where a row reads "नाम / पिता  गाँव - तहसील".
     const rows = filled.map((e, i) => `
@@ -193,6 +224,10 @@ function openPrintWindow(rasidList) {
           <span class="lbl">क्र. सं.</span>
           <span class="sep"> : </span>
           <span class="val">${d.serialNo}</span>
+          &nbsp;&nbsp;&nbsp;
+          <span class="lbl">पेज</span>
+          <span class="sep"> : </span>
+          <span class="val page-no">${pageNo} / ${pageTotal}</span>
         </div>
         <div class="info-item right">
           <span class="lbl">दिनांक</span>
@@ -264,13 +299,8 @@ function openPrintWindow(rasidList) {
         </table>
       </div>
 
-      <!-- total -->
-      <div class="total-row">
-        <span class="total-lbl">कुल राशि रु.:</span>
-        <span class="total-amt">${d.totalAmount.toLocaleString()}</span>
-        <span class="total-words-lbl">शब्दों में रूपये :</span>
-        <span class="total-words">${d.totalInWords}</span>
-      </div>
+      <!-- total (page-wise when the receipt runs to several pages) -->
+      ${totalHtml}
 
       <!-- worker + signature -->
       <div class="worker-row">
@@ -287,7 +317,7 @@ function openPrintWindow(rasidList) {
 
       <!-- footer -->
       <div class="footer">
-        <div class="footer-spacer"></div>
+        <div class="footer-spacer page-foot">पेज ${pageNo}/${pageTotal}</div>
         <div class="footer-center">
           <div class="footer-contacts">
             संपर्क सूत्र : 9374934004, 9825289998, 9426517804, 9824017977
@@ -442,6 +472,11 @@ win.document.write(`<!DOCTYPE html><html lang="hi"><head>
     .total-amt{font-size:15px;font-weight:700;color:#111;margin-right:30px}
     .total-words-lbl{font-size:14px;font-weight:700;color:#111}
     .total-words{font-size:14px;color:#111;font-weight:400;margin-left:8px}
+    .page-calc{font-size:12px;color:#555;margin-right:10px}
+    .grand-row{border-top:1.5px solid #1B385A;padding-top:3px;margin-top:3px}
+    .page-cont{font-size:12px;color:#555;padding:0 2px;margin:1px 0}
+    .page-no{color:#1B385A;font-weight:700}
+    .page-foot{font-size:12px;font-weight:700;color:#1B385A;white-space:nowrap}
 
     /* ── worker + signature ── */
     .worker-row{
