@@ -102,10 +102,9 @@ function openHtmlWindow(html) {
 function openPrintWindow(rasidList) {
   const win = window.open('', '_blank');
   if (!win) { message.error('Popup blocked! Please allow popups.'); return; }
-  // Padded row count. Rows are a fixed 30px (see .main-table td), so
-  // 20 rows + header ≈ 640px, which fills the space left on an A4 page below
-  // the header block without overflowing it — the same 20 rows as the printed
-  // receipt. Raising the row height or font means lowering this.
+  // Padded row count — always 20 rows per page, as on the printed receipt.
+  // On screen rows are 29px; in print they share the space left on the sheet
+  // (see the @media print rules), so all 20 always fit whatever the fonts.
   const ROWS = 20;
 
   // Split each receipt's members across as many pages as needed. Without this a
@@ -536,14 +535,22 @@ win.document.write(`<!DOCTYPE html><html lang="hi"><head>
 
       /* The only item allowed to give. min-height:0 is required or a flex item
          refuses to shrink below its content. */
-      .table-wrap{flex:1;min-height:0;overflow:hidden;margin-top:6px}
+      .table-wrap{flex:1;min-height:0;overflow:hidden;margin-top:6px;display:flex;flex-direction:column}
 
-      /* Slightly tighter rows in print so all 20 fit the fixed sheet with room
-         to spare — the table must never have to shrink below its rows, because
-         a table row clips rather than compresses. 20 x 26px = 520px, against
-         roughly 650px of space left once everything else is placed. */
-      .main-table td{height:26px;font-size:12.5px}
-      .main-table th{padding:4px 3px;font-size:13px}
+      /* Rows SHARE the space that is left instead of having a fixed height.
+         A fixed 26px row assumed ~650px was free; on Windows the Hindi fallback
+         fonts make the header, note and footer taller, the free space shrank
+         below 21 x 26px, and overflow:hidden above cut off row 20. With the
+         table at 100% of .table-wrap the 20 rows (always padded to 20) divide
+         whatever height there is evenly — taller when there is room, compact
+         when there isn't — so the last row is never clipped. Line heights are
+         tight so a row's minimum (code + old reg. no. on two lines) stays
+         about 22px, well inside the space on any printer. */
+      .main-table{height:100%}
+      .main-table td{height:auto;font-size:12.5px;line-height:1.1;padding:1px 4px}
+      .main-table th{padding:3px 3px;font-size:13px;line-height:1.15}
+      .main-table thead tr{height:1px}
+      .oldreg{font-size:8.5px;line-height:1;margin-top:0}
 
       tr{page-break-inside:avoid;break-inside:avoid}
 
