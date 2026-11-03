@@ -157,13 +157,20 @@ function openPrintWindow(rasidList) {
       <div class="page-cont">पेज ${pageNo} / ${pageTotal} — कुल राशि अंतिम पेज पर</div>`}`;
     // No गाँव column — the village is appended to the name, matching the
     // printed receipt where a row reads "नाम / पिता  गाँव - तहसील".
+    // Every row has the SAME content shape — blank padding rows and rows with
+    // no old reg. no. included: a code line plus an (invisible when empty)
+    // old-number line. In print the rows share the table's height, and the
+    // browser hands spare height to rows in proportion to their content; with
+    // empty rows having none, they collapsed to thin lines at the bottom while
+    // the filled rows ballooned. Identical rows split the height evenly.
+    const NB = '&nbsp;';
     const rows = filled.map((e, i) => `
       <tr>
-        <td class="c">${e ? startIndex + i + 1 : ''}</td>
-        <td class="c">${e ? e.code : ''}${e && e.oldCode ? `<div class="oldreg">${e.oldCode}</div>` : ''}</td>
-        <td class="l">${e ? [e.name, e.village].filter(Boolean).join('&nbsp;&nbsp;') : ''}</td>
-        <td class="c">${e ? e.date : ''}</td>
-        <td class="c">${e ? e.mobile : ''}</td>
+        <td class="c">${e ? startIndex + i + 1 : NB}</td>
+        <td class="c">${e ? e.code : NB}<div class="oldreg">${e && e.oldCode ? e.oldCode : NB}</div></td>
+        <td class="l">${e ? [e.name, e.village].filter(Boolean).join('&nbsp;&nbsp;') : NB}</td>
+        <td class="c">${e ? e.date : NB}</td>
+        <td class="c">${e ? e.mobile : NB}</td>
       </tr>`).join('');
 
     return `
