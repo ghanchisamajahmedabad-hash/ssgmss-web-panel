@@ -39,6 +39,39 @@ const fmtDate = (v) => {
 
 const money = (v) => `₹${Number(v || 0).toLocaleString('en-IN')}/-`;
 
+// ── Amount in Hindi words (Indian system: हज़ार / लाख / करोड़) ──────────────
+// 0–99 are irregular in Hindi, so they are listed in full.
+const HINDI_0_99 = [
+  'शून्य', 'एक', 'दो', 'तीन', 'चार', 'पाँच', 'छह', 'सात', 'आठ', 'नौ',
+  'दस', 'ग्यारह', 'बारह', 'तेरह', 'चौदह', 'पंद्रह', 'सोलह', 'सत्रह', 'अठारह', 'उन्नीस',
+  'बीस', 'इक्कीस', 'बाईस', 'तेईस', 'चौबीस', 'पच्चीस', 'छब्बीस', 'सत्ताईस', 'अट्ठाईस', 'उनतीस',
+  'तीस', 'इकतीस', 'बत्तीस', 'तैंतीस', 'चौंतीस', 'पैंतीस', 'छत्तीस', 'सैंतीस', 'अड़तीस', 'उनतालीस',
+  'चालीस', 'इकतालीस', 'बयालीस', 'तैंतालीस', 'चवालीस', 'पैंतालीस', 'छियालीस', 'सैंतालीस', 'अड़तालीस', 'उनचास',
+  'पचास', 'इक्यावन', 'बावन', 'तिरेपन', 'चौवन', 'पचपन', 'छप्पन', 'सत्तावन', 'अट्ठावन', 'उनसठ',
+  'साठ', 'इकसठ', 'बासठ', 'तिरेसठ', 'चौंसठ', 'पैंसठ', 'छियासठ', 'सड़सठ', 'अड़सठ', 'उनहत्तर',
+  'सत्तर', 'इकहत्तर', 'बहत्तर', 'तिहत्तर', 'चौहत्तर', 'पचहत्तर', 'छिहत्तर', 'सतहत्तर', 'अठहत्तर', 'उन्यासी',
+  'अस्सी', 'इक्यासी', 'बयासी', 'तिरासी', 'चौरासी', 'पचासी', 'छियासी', 'सत्तासी', 'अट्ठासी', 'नवासी',
+  'नब्बे', 'इक्यानवे', 'बानवे', 'तिरानवे', 'चौरानवे', 'पचानवे', 'छियानवे', 'सत्तानवे', 'अट्ठानवे', 'निन्यानवे',
+];
+
+const hindiWords = (num) => {
+  let n = Math.floor(Math.abs(Number(num) || 0));
+  if (n === 0) return HINDI_0_99[0];
+  const parts = [];
+  const take = (div, word) => {
+    const q = Math.floor(n / div);
+    if (q) { parts.push(`${hindiWords(q)} ${word}`); n %= div; }
+  };
+  take(10000000, 'करोड़');
+  take(100000, 'लाख');
+  take(1000, 'हज़ार');
+  take(100, 'सौ');
+  if (n) parts.push(HINDI_0_99[n]);
+  return parts.join(' ');
+};
+
+const amountInWords = (v) => `${hindiWords(v)} रुपये मात्र`;
+
 // Single-line fields on a fixed-height form: clip rather than let a long value
 // wrap and push the layout down.
 const clip = (v, max) => {
@@ -111,6 +144,19 @@ const styles = StyleSheet.create({
                backgroundColor: '#fff3cd', borderWidth: 0.5, borderColor: '#e0c27a',
                borderRadius: 2, paddingVertical: 2, paddingHorizontal: 6 },
   payDate:   { fontSize: 7, color: '#000', marginLeft: 8 },
+
+  // Big net-amount box — the figure the member actually receives
+  bigBox:     { borderWidth: 1.5, borderColor: RED, borderRadius: 4, backgroundColor: '#fff7f0',
+                paddingVertical: 4, paddingHorizontal: 6, marginTop: 5, alignItems: 'center' },
+  bigLabel:   { fontSize: 7.5, fontWeight: 'bold', color: BLUE },
+  bigAmount:  { fontSize: 20, fontWeight: 'bold', color: RED, lineHeight: 1.25 },
+  bigWords:   { fontSize: 8.5, fontWeight: 'bold', color: '#000', textAlign: 'center' },
+
+  // Note (टिप्पणी) written in the closing form drawer
+  noteBox:    { flexDirection: 'row', marginTop: 5, borderWidth: 0.6, borderColor: BORDER,
+                borderStyle: 'dashed', borderRadius: 3, paddingVertical: 3, paddingHorizontal: 5 },
+  noteLabel:  { fontSize: 7, fontWeight: 'bold', color: BLUE, marginRight: 4 },
+  noteText:   { fontSize: 7, color: '#000', flex: 1, lineHeight: 1.35 },
 
   signRow:   { flexDirection: 'row', justifyContent: 'space-between', marginTop: 'auto', paddingTop: 6 },
   signBox:   { width: '31%', alignItems: 'center' },
@@ -271,6 +317,21 @@ const ClosingFormPdf = ({ member = {}, settlement = {}, programName = '' }) => {
                   )}
                 </View>
               </View>
+
+              {/* ── Net amount, large, with words ── */}
+              <View style={styles.bigBox} wrap={false}>
+                <Text style={styles.bigLabel}>सदस्य को दी जा रही राशि</Text>
+                <Text style={styles.bigAmount}>{money(settlement.netAmount)}</Text>
+                <Text style={styles.bigWords}>(शब्दों में : {amountInWords(settlement.netAmount)})</Text>
+              </View>
+
+              {/* ── Note (टिप्पणी) from the closing form ── */}
+              {String(settlement.note || '').trim() !== '' && (
+                <View style={styles.noteBox} wrap={false}>
+                  <Text style={styles.noteLabel}>टिप्पणी :</Text>
+                  <Text style={styles.noteText}>{clip(settlement.note, 220)}</Text>
+                </View>
+              )}
             </View>
 
             {/* ── Signatures ── */}
