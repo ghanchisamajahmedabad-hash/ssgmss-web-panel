@@ -3,11 +3,10 @@
 //
 // Sends members their app login ID and password.
 //
-// The honest constraint, stated up front in the UI too: this sends a FREE-FORM
-// WhatsApp message, which Meta only delivers within 24 hours of that member's
-// last inbound message. Members who have never messaged the trust cannot be
-// reached this way. The preview shows exactly who is reachable BEFORE anything
-// is sent, so the limit is visible rather than discovered afterwards.
+// Default: the approved Gupshup template (c9f5fbc2-…) — reaches every member,
+// no 24-hour limit. Login ID + password go in the रजिस्ट्रेशन नंबर line.
+// Optional: a free-form message, which Meta only delivers within 24 hours of
+// that member's last inbound message; the preview shows who is reachable.
 
 import React, { useState, useMemo, useCallback } from 'react'
 import { useSelector } from 'react-redux'
@@ -80,6 +79,10 @@ const SendCredentialsPage = () => {
   const [skipAlreadySent, setSkipAlreadySent] = useState(true)
 
   const [messageText, setMessageText] = useState(DEFAULT_MESSAGE)
+  // 'template' = approved Gupshup template (reaches everyone)
+  // 'session'  = free-form text (only members who messaged in last 24h)
+  const [mode, setMode] = useState('template')
+  const [previewRow, setPreviewRow] = useState(null)
   const [loading, setLoading]   = useState(false)
   const [sending, setSending]   = useState(false)
   const [progress, setProgress] = useState(0)
@@ -141,7 +144,7 @@ const SendCredentialsPage = () => {
         const res = await fetch('/api/whatsapp/send-credentials', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-          body: JSON.stringify({ memberIds: slice.map(m => m.id), message: messageText, dryRun }),
+          body: JSON.stringify({ memberIds: slice.map(m => m.id), mode, message: messageText, dryRun }),
         })
         const data = await res.json()
         if (!data.success) throw new Error(data.message)
@@ -159,7 +162,7 @@ const SendCredentialsPage = () => {
     } finally {
       setLoading(false); setSending(false)
     }
-  }, [filters, messageText, skipAlreadySent])
+  }, [filters, messageText, skipAlreadySent, mode])
 
   const confirmSend = () => {
     Modal.confirm({
@@ -168,7 +171,8 @@ const SendCredentialsPage = () => {
       icon: <WarningOutlined style={{ color: C.warning }} />,
       content: (
         <div>
-          <p><b>{counts?.willSend || 0}</b> member(s) will receive their login ID and password on WhatsApp.</p>
+          <p><b>{counts?.willSend || 0}</b> member(s) will receive their login ID and password on WhatsApp
+            {mode === 'template' ? ' (approved template).' : ' (normal message).'}</p>
           <Alert
             type="warning" showIcon style={{ marginTop: 8 }}
             message="Passwords are being sent in plain text"
@@ -244,6 +248,10 @@ const SendCredentialsPage = () => {
         : <Tag color="blue" style={{ fontSize: 9 }}>stored</Tag> },
     { title: 'Note', dataIndex: 'reason', ellipsis: true,
       render: v => <Text style={{ fontSize: 10, color: C.muted }}>{v || ''}</Text> },
+    { title: '', key: 'pv', width: 70,
+      render: (_, r) => r.preview
+        ? <Button size="small" type="link" icon={<EyeOutlined />} onClick={() => setPreviewRow(r)}>View</Button>
+        : null },
   ]
 
   const unreachable = (counts?.sessionClosed || 0)
@@ -256,19 +264,33 @@ const SendCredentialsPage = () => {
       </Title>
       <Text type="secondary">Send members their app login ID and password.</Text>
 
-      <Alert
-        type="warning" showIcon icon={<WhatsAppOutlined />}
-        style={{ marginTop: 14, borderRadius: 10 }}
-        message={<span style={{ fontSize: 12 }}>
-          This sends a normal WhatsApp message, which only reaches members who have messaged
-          the trust in the last 24 hours.
-        </span>}
-        description={<span style={{ fontSize: 11 }}>
-          Members who have never messaged you <b>cannot</b> be reached this way — WhatsApp blocks it.
-          The preview below shows exactly who is reachable before anything is sent. To reach everyone,
-          an approved Gupshup template is needed; once you have one, the same screen can send through it.
-        </span>}
-      />
+      {mode === 'template' ? (
+        <Alert
+          type="success" showIcon icon={<WhatsAppOutlined />}
+          style={{ marginTop: 14, borderRadius: 10 }}
+          message={<span style={{ fontSize: 12 }}>
+            Sending with the approved Gupshup template — reaches every member, no 24-hour limit.
+          </span>}
+          description={<span style={{ fontSize: 11 }}>
+            Template ID <Text code style={{ fontSize: 10 }}>c9f5fbc2-56dd-4425-acaa-3c03ab7672be</Text>.
+            The template has no separate password line, so the login goes in the
+            रजिस्ट्रेशन नंबर line as <Text code style={{ fontSize: 10 }}>MEM0001-Password:ram1990</Text>
+            {' '}(same as the join message).
+          </span>}
+        />
+      ) : (
+        <Alert
+          type="warning" showIcon icon={<WhatsAppOutlined />}
+          style={{ marginTop: 14, borderRadius: 10 }}
+          message={<span style={{ fontSize: 12 }}>
+            Normal message — only reaches members who have messaged the trust in the last 24 hours.
+          </span>}
+          description={<span style={{ fontSize: 11 }}>
+            Members who have not messaged you recently <b>cannot</b> be reached this way — WhatsApp blocks it.
+            Switch to <b>Approved template</b> to reach everyone.
+          </span>}
+        />
+      )}
 
       {/* Filters */}
       <Card size="small" style={{ marginTop: 12, borderRadius: 12, borderColor: C.border }} bodyStyle={{ padding: 12 }}>
@@ -313,8 +335,44 @@ const SendCredentialsPage = () => {
       </Card>
 
       {/* Message */}
-      <Card size="small" title={<span style={{ fontSize: 13 }}>Message</span>}
+      <Card size="small"
+        title={<span style={{ fontSize: 13 }}>Message</span>}
+        extra={
+          <Select size="small" value={mode} style={{ width: 250 }}
+            onChange={v => { setMode(v); setCounts(null); setResults([]); setApplied(false) }}
+            options={[
+              { value: 'template', label: '✅ Approved template (all members)' },
+              { value: 'session',  label: 'Normal message (24-hour only)' },
+            ]} />
+        }
         style={{ marginTop: 12, borderRadius: 12, borderColor: C.border }}>
+        {mode === 'template' ? (
+          <div style={{ whiteSpace: 'pre-wrap', fontSize: 12, background: '#f0fdf4', border: '1px solid #bbf7d0',
+            borderRadius: 8, padding: 12, lineHeight: 1.6 }}>
+{`🌸 श्री क्षत्रिय घाँची मोदी समाज सेवा संस्थान ट्रस्ट 🌸
+
+🙏 नमस्कार {सदस्य नाम},
+
+आपका {योजना} के अंतर्गत सदस्य पंजीकरण सफलतापूर्वक पूरा हो गया है।
+
+👩‍💼 सदस्य नाम: {सदस्य नाम}
+👨‍👧 पिता का नाम: {पिता का नाम}
+📊 आयु वर्ग: {आयु वर्ग}
+🆔 रजिस्ट्रेशन नंबर: {रजि. नं.}-Password:{पासवर्ड}
+
+💰 {योजना} के लिए भुगतान राशि: ₹{भुगतान राशि}
+📝 जुड़ने का शुल्क: ₹{जुड़ने का शुल्क}
+
+आपका सदस्य पंजीकरण एवं भुगतान सफलतापूर्वक दर्ज हो गया है। …
+
+🙏 धन्यवाद!
+– श्री क्षत्रिय घाँची मोदी समाज सेवा संस्थान ट्रस्ट अहमदाबाद
+[ऐप डाउनलोड करें]`}
+            <div style={{ marginTop: 6, fontSize: 10, color: C.muted }}>
+              Approved template text can&apos;t be edited here. Click <b>Preview recipients</b>, then <b>View</b> on any row to see that member&apos;s exact message.
+            </div>
+          </div>
+        ) : (<>
         <Input.TextArea
           rows={9} value={messageText} onChange={e => setMessageText(e.target.value)}
           style={{ fontSize: 12, fontFamily: 'inherit' }}
@@ -331,6 +389,7 @@ const SendCredentialsPage = () => {
             </Text>
           </div>
         </div>
+        </>)}
       </Card>
 
       {/* Actions */}
@@ -404,6 +463,14 @@ const SendCredentialsPage = () => {
           />
         </Card>
       )}
+
+      {/* Exact message for one member */}
+      <Modal open={!!previewRow} onCancel={() => setPreviewRow(null)} footer={null}
+        title={<span><WhatsAppOutlined style={{ color: C.wa, marginRight: 6 }} />{previewRow?.name} — {previewRow?.phone}</span>}>
+        <div style={{ whiteSpace: 'pre-wrap', fontSize: 12, background: '#e7fbe9', borderRadius: 8, padding: 12, lineHeight: 1.6 }}>
+          {previewRow?.preview}
+        </div>
+      </Modal>
 
       {/* More filters */}
       <Drawer title="More Filters" open={filterOpen} onClose={() => setFilterOpen(false)} width={340}>

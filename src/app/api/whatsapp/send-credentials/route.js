@@ -2,17 +2,19 @@
 //
 // Sends members their app login ID and password over WhatsApp.
 //
-// ─── READ THIS BEFORE USING ──────────────────────────────────────────────────
-// This sends a FREE-FORM ("session") message, which WhatsApp only delivers
-// inside 24 hours of that member's last inbound message. Any member who has not
-// messaged the trust recently CANNOT be reached this way — Meta rejects the
-// send. For a genuine all-members broadcast an approved Gupshup template is
-// required.
+// ─── Two modes ───────────────────────────────────────────────────────────────
+// mode: 'template' (DEFAULT)
+//   Sends the approved Gupshup template LOGIN_TEMPLATE_ID ("सदस्य पंजीकरण
+//   सफलतापूर्वक पूरा…", 9 body params + a static "ऐप डाउनलोड करें" button).
+//   Templates reach EVERY member, with no 24-hour window. The template has no
+//   password slot, so — exactly like the join-certificate message — {{6}}
+//   carries "REGNO-Password:xxxx".
 //
-// So the route checks each recipient's session window BEFORE spending an API
-// call, and reports `SESSION_CLOSED` for the rest instead of reporting a
-// success that never arrived. Set `templateId` in the body to switch to a
-// template send once one is approved — the rest of the flow is unchanged.
+// mode: 'session'
+//   A FREE-FORM message from `message`, which WhatsApp only delivers inside
+//   24 hours of that member's last inbound message. The route checks each
+//   recipient's window BEFORE spending an API call and reports
+//   `SESSION_CLOSED` for the rest instead of a success that never arrived.
 //
 // Credentials: the login ID is the registration number and the password is the
 // stored one, falling back to the same derivation the login itself accepts
@@ -21,10 +23,10 @@
 //
 // Body: {
 //   memberIds: string[],       // max 200 per call
-//   message?: string,          // template text with {name} {regNo} {password} …
-//   dryRun?: boolean,          // resolve + check windows, send nothing
-//   templateId?: string,       // optional: send as an approved template instead
-//   templateParams?: string[], // parameter names, in order, for the template
+//   mode?: 'template'|'session', // default 'template'
+//   message?: string,          // session mode only: text with {name} {regNo} {password} …
+//   dryRun?: boolean,          // resolve + check, send nothing
+//   templateId?: string,       // template mode: override LOGIN_TEMPLATE_ID
 // }
 
 import { NextResponse } from 'next/server';
@@ -68,6 +70,50 @@ const DEFAULT_MESSAGE = `नमस्ते {name} जी,
 धन्यवाद,
 SSGMSSS TRUST`;
 
+// ── Approved login-details template (Gupshup) ────────────────────────────────
+// (not exported — Next.js only allows route-handler exports from route.js)
+const LOGIN_TEMPLATE_ID = 'c9f5fbc2-56dd-4425-acaa-3c03ab7672be';
+
+// The approved body, used only to show an accurate preview — Gupshup fills the
+// real message from the params.
+const LOGIN_TEMPLATE_TEXT = `🌸 श्री क्षत्रिय घाँची मोदी समाज सेवा संस्थान ट्रस्ट 🌸
+
+🙏 नमस्कार {{1}},
+
+आपका {{2}} के अंतर्गत सदस्य पंजीकरण सफलतापूर्वक पूरा हो गया है।
+
+👩‍💼 सदस्य नाम: {{3}}
+👨‍👧 पिता का नाम: {{4}}
+📊 आयु वर्ग: {{5}}
+🆔 रजिस्ट्रेशन नंबर: {{6}}
+
+💰 {{7}} के लिए भुगतान राशि: ₹{{8}}
+📝 जुड़ने का शुल्क: ₹{{9}}
+
+आपका सदस्य पंजीकरण एवं भुगतान सफलतापूर्वक दर्ज हो गया है। अपनी सदस्यता एवं योजना से संबंधित पूरी जानकारी देखने के लिए संस्था के ऐप में जाएं।
+
+🙏 धन्यवाद!
+– श्री क्षत्रिय घाँची मोदी समाज सेवा संस्थान ट्रस्ट अहमदाबाद
+[ऐप डाउनलोड करें]`;
+
+// {{1}}…{{9}} — same order and content as the join-certificate template, so
+// a member sees the same details in both. The template has no password field,
+// so {{6}} carries "REGNO-Password:xxxx" (as the join message already does).
+const loginTemplateParams = (m) => [
+  m.displayName || '',                                   // {{1}} नमस्कार <name>
+  m.programName || '',                                   // {{2}} योजना
+  m.displayName || '',                                   // {{3}} सदस्य नाम
+  m.fatherName || '',                                    // {{4}} पिता का नाम
+  m.ageGroupName || '',                                  // {{5}} आयु वर्ग
+  m.password ? `${m.loginId}-Password:${m.password}` : m.loginId, // {{6}} रजि. नं. + पासवर्ड
+  m.programName || '',                                   // {{7}} योजना (भुगतान राशि)
+  String(m.payAmount || 0),                              // {{8}} भुगतान राशि
+  String(m.joinFees || 0),                               // {{9}} जुड़ने का शुल्क
+].map(p => String(p ?? '').trim() || '-');                // Gupshup rejects empty params
+
+const fillTemplatePreview = (params) =>
+  params.reduce((t, p, i) => t.split(`{{${i + 1}}}`).join(p), LOGIN_TEMPLATE_TEXT);
+
 const fill = (tpl, m, appLink = DEFAULT_APP_LINK, supportPhone = DEFAULT_SUPPORT_PHONE) => tpl
   .replace(/{appLink}/g,      appLink)
   .replace(/{supportPhone}/g, supportPhone)
@@ -92,11 +138,13 @@ export async function POST(req) {
 
     const {
       memberIds = [],
+      mode = 'template',
       message = DEFAULT_MESSAGE,
       dryRun = true,
-      templateId = null,
-      templateParams = [],
+      templateId: templateIdIn = null,
     } = await req.json().catch(() => ({}));
+
+    const templateId = mode === 'session' ? null : (templateIdIn || LOGIN_TEMPLATE_ID);
 
     if (!Array.isArray(memberIds) || memberIds.length === 0)
       return NextResponse.json({ success: false, message: 'No members selected' }, { status: 400 });
@@ -125,6 +173,11 @@ export async function POST(req) {
           phone:       m.phone || '',
           village:     m.village || '',
           programName: m.programName || '',
+          programId:   m.programId || '',
+          ageGroupId:  m.ageGroupId || '',
+          ageGroupName: m.ageGroupName || m.memberGroupName || m.ageGroup || '',
+          payAmount:   m.payAmount || 0,
+          joinFees:    m.joinFees || 0,
           loginId:     m.registrationNumber || '',
           // Same fallback the Firebase Auth account was created with, so the
           // password we send is the one that actually works.
@@ -136,6 +189,23 @@ export async function POST(req) {
 
     if (!members.length)
       return NextResponse.json({ success: false, message: 'No members found' }, { status: 404 });
+
+    // Template mode: fill a missing yojna / age group name from the program,
+    // so {{2}} {{5}} {{7}} are never blank.
+    if (templateId) {
+      const needProg = [...new Set(members.filter(m => m.programId && (!m.programName || !m.ageGroupName)).map(m => m.programId))];
+      const progs = {};
+      await Promise.all(needProg.map(async (pid) => {
+        const s = await db.collection('programs').doc(pid).get();
+        if (s.exists) progs[pid] = s.data();
+      }));
+      members.forEach(m => {
+        const p = progs[m.programId];
+        if (!p) return;
+        if (!m.programName) m.programName = p.name || p.hindiName || '';
+        if (!m.ageGroupName) m.ageGroupName = (p.ageGroups || []).find(a => a.id === m.ageGroupId)?.ageGroupName || '';
+      });
+    }
 
     // ── Session windows, in bulk ─────────────────────────────────────────────
     // One read per distinct phone rather than one per member, since families
@@ -196,7 +266,8 @@ export async function POST(req) {
         continue;
       }
 
-      const text = fill(message, m);
+      const tplParams = templateId ? loginTemplateParams(m) : null;
+      const text = templateId ? fillTemplatePreview(tplParams) : fill(message, m);
       counts.willSend++;
 
       if (dryRun) {
@@ -214,11 +285,7 @@ export async function POST(req) {
         });
 
         if (templateId) {
-          body.set('template', JSON.stringify({
-            id: templateId,
-            params: (templateParams.length ? templateParams : ['name', 'regNo', 'password'])
-                      .map(k => fill(`{${k}}`, m)),
-          }));
+          body.set('template', JSON.stringify({ id: templateId, params: tplParams }));
         } else {
           body.set('message', JSON.stringify({ type: 'text', text }));
         }
