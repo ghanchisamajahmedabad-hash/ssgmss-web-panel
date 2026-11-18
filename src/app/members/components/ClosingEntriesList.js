@@ -6,10 +6,9 @@ import {
   MoneyCollectOutlined, FilePdfOutlined, HistoryOutlined,
   CalendarOutlined, ClockCircleOutlined, CheckCircleOutlined
 } from '@ant-design/icons'
-import { PDFDownloadLink } from '@react-pdf/renderer'
 import dayjs from 'dayjs'
-import ClosingRasidPdf from './ClosingRasidPdf'
 import ClosingEntryCard from './ClosingEntryCard'
+import RasidDownloadButton from './RasidCom/RasidDownloadButton'
 import { memberLateness, LATE_LABEL, GRACE_DAYS } from './closingLateness'
 
 const fmtDate = (d) => {
@@ -240,30 +239,26 @@ const ClosingEntriesList = ({
             Paid <span className="ml-1 opacity-70">({paidCount})</span>
           </Button>
         </Space>
+        {/* Built on click (not pre-rendered on every tab open) with the same
+            rules as the agent receipt — see RasidCom/memberRasid.js */}
         {closingEntries.length > 0 && (
           <Space size={4}>
             {pendingCount > 0 && (
-              <PDFDownloadLink document={<ClosingRasidPdf entries={buildPdfData(closingEntries.filter(e => e.status !== 'paid'))} />}
-                fileName={`closing_pending_${member?.registrationNumber || member?.id}.pdf`}>
-                {({ loading: l }) => <Button size="small" icon={<FilePdfOutlined />} loading={l}
-                  style={{ background: '#ff4d4f', borderColor: '#ff4d4f', color: '#fff', borderRadius: 6, fontWeight: 500 }}>
-                  Pending PDF</Button>}
-              </PDFDownloadLink>
+              <RasidDownloadButton member={member} entries={closingEntries} which="pending" size="small" icon={<FilePdfOutlined />}
+                style={{ background: '#ff4d4f', borderColor: '#ff4d4f', color: '#fff', borderRadius: 6, fontWeight: 500 }}>
+                Pending Rasid
+              </RasidDownloadButton>
             )}
             {paidCount > 0 && (
-              <PDFDownloadLink document={<ClosingRasidPdf entries={buildPdfData(closingEntries.filter(e => e.status === 'paid'))} />}
-                fileName={`closing_paid_${member?.registrationNumber || member?.id}.pdf`}>
-                {({ loading: l }) => <Button size="small" icon={<FilePdfOutlined />} loading={l}
-                  style={{ background: '#52c41a', borderColor: '#52c41a', color: '#fff', borderRadius: 6, fontWeight: 500 }}>
-                  Paid PDF</Button>}
-              </PDFDownloadLink>
+              <RasidDownloadButton member={member} entries={closingEntries} which="paid" size="small" icon={<FilePdfOutlined />}
+                style={{ background: '#52c41a', borderColor: '#52c41a', color: '#fff', borderRadius: 6, fontWeight: 500 }}>
+                Paid Rasid
+              </RasidDownloadButton>
             )}
-            <PDFDownloadLink document={<ClosingRasidPdf entries={buildPdfData(closingEntries)} />}
-              fileName={`closing_all_${member?.registrationNumber || member?.id}.pdf`}>
-              {({ loading: l }) => <Button size="small" icon={<FilePdfOutlined />} loading={l}
-                style={{ background: '#722ed1', borderColor: '#722ed1', color: '#fff', borderRadius: 6, fontWeight: 500 }}>
-                All PDF</Button>}
-            </PDFDownloadLink>
+            <RasidDownloadButton member={member} entries={closingEntries} which="all" size="small" icon={<FilePdfOutlined />}
+              style={{ background: '#722ed1', borderColor: '#722ed1', color: '#fff', borderRadius: 6, fontWeight: 500 }}>
+              All Rasid
+            </RasidDownloadButton>
           </Space>
         )}
       </div>
@@ -273,7 +268,7 @@ const ClosingEntriesList = ({
         {filteredEntries.length > 0 ? (
           <div className="space-y-2">
             {filteredEntries.map(entry => (
-              <ClosingEntryCard key={entry.id} entry={entry} />
+              <ClosingEntryCard key={entry.id} entry={entry} member={member} allEntries={closingEntries} />
             ))}
           </div>
         ) : (

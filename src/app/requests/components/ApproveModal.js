@@ -11,6 +11,7 @@ import dayjs from 'dayjs'
 import isBetween from 'dayjs/plugin/isBetween'
 import { createClosingPayment, createSearchIndex, generateRegistrationNumber, getNextMemberSrNo, memberAccoiuntCreate, recordJoinFeeTransaction, sendJoinCertificate } from '@/app/members/components/components/firebaseUtils'
 import { notifyAgent } from '@/app/utils/notifyAgent'
+import { findDuplicateMembers } from './findDuplicateMembers'
 
 dayjs.extend(isBetween)
 
@@ -18,8 +19,23 @@ const { Text } = Typography
 
 const ApproveModal = ({ open, setOpen, selectedMember, setSelectedMember, fetchAllData, programList, user }) => {
   const [form] = Form.useForm()
-  const { message } = App.useApp()
+  const { message, modal } = App.useApp()
   const [loading, setLoading]         = useState(false)
+
+  // ── Duplicate check — is this person already filled? ───────────────────────
+  const [dupChecking, setDupChecking] = useState(false)
+  const [duplicates, setDuplicates]   = useState({ strong: [], weak: [] })
+
+  useEffect(() => {
+    if (!open || !selectedMember?.id) { setDuplicates({ strong: [], weak: [] }); return }
+    let alive = true
+    setDupChecking(true)
+    findDuplicateMembers(selectedMember)
+      .then(r => { if (alive) setDuplicates(r) })
+      .catch(err => { console.error('Duplicate check failed:', err) })
+      .finally(() => { if (alive) setDupChecking(false) })
+    return () => { alive = false }
+  }, [open, selectedMember?.id])
   const [joinFeesDone, setJoinFeesDone] = useState(false)
   const [paymentMode, setPaymentMode] = useState('cash')
   const [paidAmount, setPaidAmount]   = useState(0)
@@ -326,6 +342,36 @@ const ApproveModal = ({ open, setOpen, selectedMember, setSelectedMember, fetchA
     }
   }
 
+  // Approve button: if this person already exists, warn first and approve only
+  // when the admin explicitly confirms.
+  const handleApproveClick = () => {
+    const list = duplicates.strong
+    if (!list.length) { executeApproval(); return }
+    modal.confirm({
+      title: '⚠️ यह सदस्य पहले से भरा हुआ है',
+      width: 560,
+      okText: 'फिर भी Approve करें',
+      okButtonProps: { danger: true },
+      cancelText: 'रुकें',
+      content: (
+        <div style={{ fontSize: 13 }}>
+          <p style={{ marginBottom: 8 }}>
+            इसी व्यक्ति का फॉर्म पहले से सिस्टम में मिला है ({list.length}):
+          </p>
+          {list.map(d => (
+            <div key={d.id} style={{ borderLeft: '3px solid #ff4d4f', paddingLeft: 8, marginBottom: 6 }}>
+              <b>{d.displayName} / {d.fatherName}</b>{d.registrationNumber ? ` — ${d.registrationNumber}` : ''}
+              {' '}<span style={{ color: '#888' }}>({d.status})</span>
+              <div style={{ fontSize: 12, color: '#d4380d' }}>{d.reasons.join(' · ')}</div>
+            </div>
+          ))}
+          <p style={{ marginTop: 8, marginBottom: 0 }}>क्या आप सच में इस request को Approve करना चाहते हैं?</p>
+        </div>
+      ),
+      onOk: () => executeApproval(),
+    })
+  }
+
   const resetForm = () => {
     form.resetFields()
     setJoinFeesDone(false)
@@ -362,12 +408,13 @@ const ApproveModal = ({ open, setOpen, selectedMember, setSelectedMember, fetchA
           <Button onClick={handleClose} disabled={loading}>Cancel</Button>
           <Button
             type="primary"
-            onClick={executeApproval}
-            loading={loading}
+            onClick={handleApproveClick}
+            loading={loading || dupChecking}
             icon={<CheckCircleOutlined />}
             disabled={!programDetail}
+            danger={duplicates.strong.length > 0}
           >
-            Approve Member
+            {dupChecking ? 'Checking duplicate…' : duplicates.strong.length > 0 ? 'Approve (Duplicate!)' : 'Approve Member'}
           </Button>
         </div>
       }
@@ -384,6 +431,57 @@ const ApproveModal = ({ open, setOpen, selectedMember, setSelectedMember, fetchA
         >
           {selectedMember && (
             <div className="space-y-4">
+
+              {/* ── Duplicate check ────────────────────────────────────────── */}
+              {dupChecking && (
+                <Alert type="info" showIcon message="जाँच हो रही है — यह सदस्य पहले से भरा हुआ है या नहीं…" />
+              )}
+              {!dupChecking && duplicates.strong.length > 0 && (
+                <Alert
+                  type="error"
+                  showIcon
+                  message={<b>⚠️ यह सदस्य पहले से भरा हुआ है ({duplicates.strong.length})</b>}
+                  description={
+                    <div className="space-y-2 mt-1">
+                      {duplicates.strong.map(d => (
+                        <div key={d.id} className="bg-white rounded p-2 border border-red-200 text-xs">
+                          <div className="font-semibold text-sm">
+                            {d.displayName} / {d.fatherName}
+                            {d.registrationNumber && <span className="ml-2 font-mono text-red-600">{d.registrationNumber}</span>}
+                            <span className="ml-2 text-gray-500 font-normal">({d.status})</span>
+                          </div>
+                          <div className="text-gray-600">
+                            📞 {d.phone || '—'} · Aadhaar {d.aadhaarNo || '—'} · {d.village || '—'}
+                            {d.programName && <> · {d.programName}</>}
+                            {d.agentName && <> · Agent: {d.agentName}</>}
+                          </div>
+                          <div className="text-red-600 font-medium">{d.reasons.join(' · ')}</div>
+                        </div>
+                      ))}
+                      <div className="text-xs">Approve करने पर दोबारा पुष्टि माँगी जाएगी।</div>
+                    </div>
+                  }
+                />
+              )}
+              {!dupChecking && duplicates.strong.length === 0 && duplicates.weak.length > 0 && (
+                <Alert
+                  type="warning"
+                  showIcon
+                  message={`इसी फोन नंबर पर ${duplicates.weak.length} और सदस्य हैं (शायद परिवार)`}
+                  description={
+                    <div className="text-xs space-y-0.5">
+                      {duplicates.weak.map(d => (
+                        <div key={d.id}>
+                          {d.displayName} / {d.fatherName} {d.registrationNumber && <span className="font-mono">({d.registrationNumber})</span>} — {d.status}
+                        </div>
+                      ))}
+                    </div>
+                  }
+                />
+              )}
+              {!dupChecking && duplicates.strong.length === 0 && duplicates.weak.length === 0 && (
+                <Alert type="success" showIcon message="कोई डुप्लीकेट नहीं मिला — यह सदस्य पहले से भरा हुआ नहीं है" />
+              )}
 
               {/* ── Member summary ─────────────────────────────────────────── */}
               <div className="bg-blue-50 p-4 rounded-lg">

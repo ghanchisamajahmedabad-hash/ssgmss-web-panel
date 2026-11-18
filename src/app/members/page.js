@@ -37,6 +37,8 @@ import MemberListPdf, { getOldRegNo, getClosedDate } from './components/MemberPd
 import MemberListSchemePdf from './components/MemberPdf/MemberListSchemePdf'
 import RasidDrawer from './components/RasidCom/RasidDrawer'
 import PaymentDetailsDrawer from './components/PaymentDetailsDrawer'
+import MemberRasidModal from './components/RasidCom/MemberRasidModal'
+import { downloadMemberRasid } from './components/RasidCom/memberRasid'
 
 // ── Helper: auto-download PDF when blob is ready ──
 // Scheme-wise list — same download mechanics, different document. Kept as its
@@ -550,6 +552,24 @@ const isSuperAdmin = (user) => user?.role === 'superadmin';
   const [paymentDetailsVisible, setPaymentDetailsVisible] = useState(false)
   const handlePaymentDetails = (member) => { setPaymentDetailsMember(member); setPaymentDetailsVisible(true) }
 
+  // ── Member-wise सहयोग राशि रसीद ──
+  // Direct: builds and downloads straight from the row menu, no drawer.
+  // Group-wise: opens a picker listing each closing group with its own download.
+  const [rasidModalMember, setRasidModalMember] = useState(null)
+  const handleDirectRasid = async (member, which = 'all') => {
+    const hide = message.loading('रसीद बन रही है…', 0)
+    try {
+      const n = await downloadMemberRasid({ member, which })
+      hide()
+      if (!n) message.info(which === 'pending' ? 'कोई बकाया रसीद नहीं' : which === 'paid' ? 'कोई भुगतान रसीद नहीं' : 'इस सदस्य की कोई क्लोजिंग रसीद नहीं है')
+      else message.success(`${n} रसीद डाउनलोड हो गईं`)
+    } catch (e) {
+      hide()
+      console.error('Rasid download failed:', e)
+      message.error('रसीद नहीं बनी: ' + (e?.message || 'unknown error'))
+    }
+  }
+
   // Re-fetch member from Firestore after a payment is reverted — updates drawer + table row
   const handlePaymentDeleteSuccess = async () => {
     if (!paymentDetailsMember?.id) return
@@ -1030,6 +1050,17 @@ const handleDeleteMember = (member) => {
             label: 'Payment Details',
             icon: <WalletOutlined />,
             onClick: () => handlePaymentDetails(record)
+          },
+          {
+            key: 'rasid',
+            label: 'Rasid Download',
+            icon: <DownloadOutlined />,
+            children: [
+              { key: 'rasid_all',     label: 'All Rasid (direct)',     onClick: () => handleDirectRasid(record, 'all') },
+              { key: 'rasid_paid',    label: 'Paid Rasid (direct)',    onClick: () => handleDirectRasid(record, 'paid') },
+              { key: 'rasid_pending', label: 'Pending Rasid (direct)', onClick: () => handleDirectRasid(record, 'pending') },
+              { key: 'rasid_group',   label: 'Closing group wise…',    onClick: () => setRasidModalMember(record) },
+            ],
           },
           can('download') && {
             key: 'cert',
@@ -2231,6 +2262,14 @@ ${filterHtml}
       )}
 
       {rasidDrawerOpen && <RasidDrawer open={rasidDrawerOpen} setOpen={setRasidDrawerOpen} member={selectedMember} />}
+
+      {rasidModalMember && (
+        <MemberRasidModal
+          member={rasidModalMember}
+          open={!!rasidModalMember}
+          onClose={() => setRasidModalMember(null)}
+        />
+      )}
 
       {paymentDetailsMember && (
         <PaymentDetailsDrawer

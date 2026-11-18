@@ -29,6 +29,7 @@ import PaymentHistoryPdf from './MemberPdf/PaymentHistoryPdf'
 import MemberDetailsPdf from './MemberPdf/MemberDetailsPdf'
 import ClosingRasidPdf from './ClosingRasidPdf'
 import ClosingEntriesList from './ClosingEntriesList'
+import RasidDownloadButton from './RasidCom/RasidDownloadButton'
 import MemberCredentialsCard from './MemberCredentialsCard'
 import MemberPenaltyCard from './MemberPenaltyCard'
 import { collection, query, where, getDocs, orderBy, doc, getDoc, updateDoc, serverTimestamp } from 'firebase/firestore'
@@ -822,6 +823,18 @@ const MemberDetailDrawer = ({ member: memberProp, visible, onClose, programList,
                 </Button>
               )}
             </PDFDownloadLink>
+            <RasidDownloadButton
+              member={member}
+              entries={loading.entries ? undefined : closingEntries}
+              which="all"
+              size="small"
+              icon={<FilePdfOutlined />}
+              disabled={!loading.entries && closingEntries.length === 0}
+              tooltip="सभी क्लोजिंग ग्रुप की रसीद — ग्रुप अनुसार Closing टैब में"
+              style={{ background: '#722ed1', borderColor: '#722ed1', color: '#fff' }}
+            >
+              Rasid
+            </RasidDownloadButton>
           </Space>
         }
       >

@@ -7,11 +7,14 @@ import {
   BarcodeOutlined
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
+import RasidDownloadButton from './RasidCom/RasidDownloadButton'
 
 const thStyle = { padding: '4px 6px', borderBottom: '1px solid #e8e8e8', textAlign: 'left', fontWeight: 600, fontSize: 10, color: '#1B385A', whiteSpace: 'nowrap' }
 const tdStyle = { padding: '3px 6px', borderBottom: '1px solid #f0f0f0', fontSize: 11, verticalAlign: 'middle' }
 
-const ClosingEntryCard = ({ entry }) => {
+// member + allEntries are optional: when given, the card shows a one-click
+// download for THIS closing group's रसीद.
+const ClosingEntryCard = ({ entry, member, allEntries }) => {
   const isPaid = entry.status === 'paid'
 
   return (
@@ -30,6 +33,18 @@ const ClosingEntryCard = ({ entry }) => {
           {entry.closingGroupName
             ? <Tag color="purple" style={{ fontSize: 9, margin: 0 }}>{entry.closingGroupName}</Tag>
             : entry.closingGroupId && <Tag style={{ fontSize: 9, margin: 0 }}>{entry.closingGroupId.slice(-6)}</Tag>}
+          {member && (
+            <RasidDownloadButton
+              member={member}
+              entries={allEntries}
+              which={entry.id}
+              size="small"
+              tooltip={`${entry.closingGroupName || 'इस ग्रुप'} की रसीद डाउनलोड करें`}
+              style={{ background: '#1B385A', borderColor: '#1B385A', color: '#fff', fontSize: 11, height: 22, marginLeft: 4 }}
+            >
+              Rasid
+            </RasidDownloadButton>
+          )}
         </div>
       </div>
 

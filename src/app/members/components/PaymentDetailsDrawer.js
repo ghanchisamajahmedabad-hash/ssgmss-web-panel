@@ -12,6 +12,7 @@ import { getAuth } from 'firebase/auth'
 import dayjs from 'dayjs'
 import { db } from '../../../../lib/firbase-client'
 import PaymentDetailsPdf from './MemberPdf/PaymentDetailsPdf'
+import RasidDownloadButton from './RasidCom/RasidDownloadButton'
 import { useAuth } from '@/components/Base/AuthProvider'
 
 const PaymentDetailsDrawer = ({ member, visible, onClose, onDeleteSuccess }) => {
@@ -281,17 +282,31 @@ const PaymentDetailsDrawer = ({ member, visible, onClose, onDeleteSuccess }) => 
       width={700}
       destroyOnClose
       extra={
-        <PDFDownloadLink
-          document={<PaymentDetailsPdf member={member} transactions={transactions} closingTransactions={closingTransactions} closingEntries={closingEntries} />}
-          fileName={`${member?.registrationNumber || 'member'}_payment_details.pdf`}
-        >
-          {({ loading: l }) => (
-            <Button icon={<FilePdfOutlined />} size="small" loading={l}
-              style={{ background: '#D3292F', borderColor: '#D3292F', color: '#fff' }}>
-              PDF
-            </Button>
-          )}
-        </PDFDownloadLink>
+        <div className="flex items-center gap-1">
+          <PDFDownloadLink
+            document={<PaymentDetailsPdf member={member} transactions={transactions} closingTransactions={closingTransactions} closingEntries={closingEntries} />}
+            fileName={`${member?.registrationNumber || 'member'}_payment_details.pdf`}
+          >
+            {({ loading: l }) => (
+              <Button icon={<FilePdfOutlined />} size="small" loading={l}
+                style={{ background: '#D3292F', borderColor: '#D3292F', color: '#fff' }}>
+                PDF
+              </Button>
+            )}
+          </PDFDownloadLink>
+          <RasidDownloadButton
+            member={member}
+            entries={loading.entries ? undefined : closingEntries}
+            which="all"
+            size="small"
+            icon={<FilePdfOutlined />}
+            disabled={!loading.entries && closingEntries.length === 0}
+            tooltip="सभी क्लोजिंग ग्रुप की रसीद"
+            style={{ background: '#722ed1', borderColor: '#722ed1', color: '#fff' }}
+          >
+            Rasid
+          </RasidDownloadButton>
+        </div>
       }
     >
       <div className="space-y-4">
@@ -373,6 +388,16 @@ const PaymentDetailsDrawer = ({ member, visible, onClose, onDeleteSuccess }) => 
                           <span className="text-[10px] text-gray-400">
                             {isPaid ? 'Paid' : isPartial ? `₹${paidAmt.toLocaleString()}/${totalAmt.toLocaleString()}` : 'Pending'}
                           </span>
+                          <RasidDownloadButton
+                            member={member}
+                            entries={closingEntries}
+                            which={entry.id}
+                            size="small"
+                            tooltip={`${entry.closingGroupName || 'इस ग्रुप'} की रसीद डाउनलोड करें`}
+                            style={{ background: '#1B385A', borderColor: '#1B385A', color: '#fff', fontSize: 11, height: 22, marginLeft: 4 }}
+                          >
+                            Rasid
+                          </RasidDownloadButton>
                         </div>
                       </div>
                       <div className="space-y-1">
