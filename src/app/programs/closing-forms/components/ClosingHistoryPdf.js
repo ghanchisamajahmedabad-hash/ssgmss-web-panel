@@ -78,9 +78,10 @@ const Card = ({ label, value, color, note }) => (
 /**
  * member, programName, joinDay, endDay (dayjs), isClosed,
  * rows  — the drawer's rows ({ sr, name, regNo, closedOn, dueDate, charged, amount, paidAmount, paidOn, status, daysLate, outside })
+ * filterLabel — e.g. 'केवल महिला (Female) क्लोजिंग' when the drawer is filtered
  * sums  — the drawer's totals ({ inWindow, charged, notCharged, paidEvents, due, paid, pending, late })
  */
-export const ClosingHistoryPdf = ({ member = {}, programName = '', joinDay, endDay, isClosed, rows = [], sums = {} }) => {
+export const ClosingHistoryPdf = ({ member = {}, programName = '', joinDay, endDay, isClosed, rows = [], sums = {}, filterLabel = '' }) => {
   const pages = [];
   let i = 0, cap = FIRST_ROWS;
   do { pages.push({ start: i, rows: rows.slice(i, i + cap) }); i += cap; cap = OTHER_ROWS; } while (i < rows.length);
@@ -109,7 +110,10 @@ export const ClosingHistoryPdf = ({ member = {}, programName = '', joinDay, endD
                   <Text style={st.sinceText}>SINCE : 2024</Text>
                   <Text style={st.sinceText}>Reg. No: A/5231</Text>
                 </View>
-                <View style={st.badgeWrap}><View style={st.badge}><Text style={st.badgeText}>क्लोजिंग का पूरा हिसाब</Text></View></View>
+                <View style={st.badgeWrap}>
+                  <View style={st.badge}><Text style={st.badgeText}>क्लोजिंग का पूरा हिसाब</Text></View>
+                  {filterLabel ? <Text style={{ fontSize: 8, fontWeight: 'bold', color: RED, marginTop: 3 }}>{filterLabel}</Text> : null}
+                </View>
                 <View style={st.info}>
                   <View style={st.infoRow}>
                     <Text style={st.infoCell}><Text style={st.lbl}>नाम : </Text>{clip([member.displayName, member.fatherName ? '/ ' + member.fatherName : ''].filter(Boolean).join(' '), 50)}</Text>

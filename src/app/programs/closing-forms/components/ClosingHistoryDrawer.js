@@ -26,6 +26,8 @@ import dayjs from 'dayjs'
 import customParseFormat from 'dayjs/plugin/customParseFormat'
 import { docEventLateness, toDay, GRACE_DAYS, LATE_LABEL } from '@/app/members/components/closingLateness'
 import { fetchAllClosedForExport } from './closingFirestore'
+import { collection, query, where, getDocs, documentId } from 'firebase/firestore'
+import { db } from '../../../../../lib/firbase-client'
 
 dayjs.extend(customParseFormat)
 
@@ -37,11 +39,28 @@ const fmt = (d) => (d ? d.format('DD-MM-YYYY') : '—')
 export const ownClosedDay = (m) =>
   toDay(m?.closed_date) || toDay(m?.marriageDate) || toDay(m?.member_closed_at)
 
+// Gender as stored: 'male'/'female', the old system's 1 / 2, 'M', Hindi…
+const genderOf = (v) => {
+  const g = String(v ?? '').trim().toLowerCase()
+  if (!g) return ''
+  if (['male', 'm', '1', 'पुरुष', 'purush', 'man', 'boy'].includes(g)) return 'male'
+  if (['female', 'f', '2', 'महिला', 'स्त्री', 'mahila', 'woman', 'girl'].includes(g)) return 'female'
+  return 'other'
+}
+const GENDER_LABEL = { female: 'महिला (Female)', male: 'पुरुष (Male)', all: 'सभी' }
+
 const ClosingHistoryDrawer = ({ open, onClose, member, closingDocs = [], programName = '' }) => {
   const [yojnaClosed, setYojnaClosed] = useState([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [view, setView] = useState('all')
+  // Male / female: by default the member's own — a female member sees female closings.
+  const ownGender = genderOf(member?.gender)
+  const [genderView, setGenderView] = useState(ownGender === 'male' || ownGender === 'female' ? ownGender : 'all')
+  useEffect(() => {
+    if (open) setGenderView(ownGender === 'male' || ownGender === 'female' ? ownGender : 'all')
+  }, [open, member?.id, ownGender])
+  const [extraGender, setExtraGender] = useState({})   // closed members charged but outside the window list
 
   const joinDay   = toDay(member?.dateJoin) || toDay(member?.programJoinDate) || toDay(member?.joinDateTs)
   // Closed member: up to their own closing. Active member: up to today.
@@ -64,8 +83,26 @@ const ClosingHistoryDrawer = ({ open, onClose, member, closingDocs = [], program
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, member?.id])
 
+  // Gender of charged closings whose closed member is not in the window list
+  useEffect(() => {
+    if (!open) return
+    const known = new Set(yojnaClosed.map(m => m.id))
+    const ids = [...new Set(closingDocs.flatMap(cp => (cp?.closingDetails || []).map(d => d?.closed_memberId)).filter(id => id && !known.has(id)))]
+    if (!ids.length) { setExtraGender({}); return }
+    let cancelled = false
+    ;(async () => {
+      const out = {}
+      for (let i = 0; i < ids.length; i += 30) {
+        const snap = await getDocs(query(collection(db, 'members'), where(documentId(), 'in', ids.slice(i, i + 30))))
+        snap.forEach(d => { out[d.id] = genderOf(d.data().gender) })
+      }
+      if (!cancelled) setExtraGender(out)
+    })().catch(e => console.warn('[ClosingHistory] genders', e))
+    return () => { cancelled = true }
+  }, [open, closingDocs, yojnaClosed])
+
   // ── Rows ────────────────────────────────────────────────────────────────
-  const rows = useMemo(() => {
+  const allRows = useMemo(() => {
     const out = []
     const chargedIds = new Set()
 
@@ -117,18 +154,34 @@ const ClosingHistoryDrawer = ({ open, onClose, member, closingDocs = [], program
       if (r.charged && !r.regNo && regById.has(r.closedMemberId)) r.regNo = regById.get(r.closedMemberId)
     }
 
+    // gender of the closed member of each row
+    const gById = new Map(yojnaClosed.map(m => [m.id, genderOf(m.gender)]))
+    for (const r of out) r.gender = gById.get(r.closedMemberId || r.key?.slice(2)) || extraGender[r.closedMemberId] || ''
+
     out.sort((a, b) => (a.closedOn?.valueOf() || 0) - (b.closedOn?.valueOf() || 0))
-    out.forEach((r, i) => { r.sr = i + 1 })
     return out
-  }, [closingDocs, yojnaClosed, joinDay?.valueOf(), closedDay?.valueOf()])
+  }, [closingDocs, yojnaClosed, extraGender, joinDay?.valueOf(), closedDay?.valueOf()])
+
+  // male / female filter, numbered again
+  const genderCount = useMemo(() => ({
+    female: allRows.filter(r => r.gender === 'female').length,
+    male:   allRows.filter(r => r.gender === 'male').length,
+    all:    allRows.length,
+  }), [allRows])
+  const rows = useMemo(() => {
+    const list = genderView === 'all' ? allRows : allRows.filter(r => r.gender === genderView)
+    return list.map((r, i) => ({ ...r, sr: i + 1 }))
+  }, [allRows, genderView])
 
   const sums = useMemo(() => {
     const charged = rows.filter(r => r.charged)
     const due  = charged.reduce((s, r) => s + r.amount, 0)
-    // Paid is taken from the docs themselves, not the per-event split, so a
-    // part-payment that doesn't cover a whole instalment still counts.
-    const paid = closingDocs.filter(d => d?.isReversed !== true)
-                            .reduce((s, d) => s + Number(d.paidAmount || 0), 0)
+    // All closings: paid is taken from the docs themselves, not the per-event
+    // split, so a part-payment that doesn't cover a whole instalment still
+    // counts. Male / female only: the paid kists of those closings.
+    const paid = genderView === 'all'
+      ? closingDocs.filter(d => d?.isReversed !== true).reduce((s, d) => s + Number(d.paidAmount || 0), 0)
+      : charged.reduce((s, r) => s + Number(r.paidAmount || 0), 0)
     return {
       inWindow:   rows.length,
       charged:    charged.length,
@@ -138,7 +191,7 @@ const ClosingHistoryDrawer = ({ open, onClose, member, closingDocs = [], program
       pending:    Math.max(0, due - paid),
       late:       charged.filter(r => r.status === 'PAID_LATE' || r.status === 'OVERDUE').length,
     }
-  }, [rows, closingDocs])
+  }, [rows, closingDocs, genderView])
 
   const shown = rows.filter(r =>
     view === 'all'        ? true :
@@ -201,7 +254,7 @@ const ClosingHistoryDrawer = ({ open, onClose, member, closingDocs = [], program
     setPdfBusy(true)
     try {
       const { downloadClosingHistoryPdf } = await import('./ClosingHistoryPdf')
-      await downloadClosingHistoryPdf({ member, programName, joinDay, endDay: closedDay, isClosed, rows, sums })
+      await downloadClosingHistoryPdf({ member, programName, joinDay, endDay: closedDay, isClosed, rows, sums, filterLabel: genderView === 'all' ? '' : `केवल ${GENDER_LABEL[genderView]} क्लोजिंग` })
     } catch (e) {
       console.error('Closing hisaab PDF failed:', e)
       message.error('PDF nahi bana: ' + (e.message || e))
@@ -267,6 +320,23 @@ const ClosingHistoryDrawer = ({ open, onClose, member, closingDocs = [], program
             </Col>
           ))}
         </Row>
+
+        <Space wrap size={8} align="center">
+          <span style={{ fontSize: 12, fontWeight: 600 }}>क्लोजिंग किसकी :</span>
+          <Segmented
+            size="small"
+            value={genderView}
+            onChange={setGenderView}
+            options={[
+              { label: `महिला / Female (${genderCount.female})`, value: 'female' },
+              { label: `पुरुष / Male (${genderCount.male})`, value: 'male' },
+              { label: `सभी / All (${genderCount.all})`, value: 'all' },
+            ]}
+          />
+          {genderView !== 'all' && genderCount.all - genderCount.female - genderCount.male > 0 ? (
+            <span style={{ fontSize: 11, color: '#9ca3af' }}>{genderCount.all - genderCount.female - genderCount.male} का लिंग दर्ज नहीं — &quot;सभी&quot; में दिखेंगे</span>
+          ) : null}
+        </Space>
 
         <Segmented
           size="small"
