@@ -4,7 +4,8 @@ import { paidClosingsInDoc } from '@/utils/closingCounts'
 import { Card, Tag, Button, Space, Spin, Table, Text, Progress, Empty, Alert, message, Modal } from 'antd'
 import KistHistoryTable from '@/components/KistHistory/KistHistoryTable'
 import { useSelector } from 'react-redux'
-import { downloadMemberClosingStatement } from './MemberClosingStatementPdf'
+import { downloadMemberClosingStatement, downloadMemberClosingList } from './MemberClosingStatementPdf'
+import ClosingHistoryDrawer from '@/app/programs/closing-forms/components/ClosingHistoryDrawer'
 import {
   MoneyCollectOutlined, FilePdfOutlined, HistoryOutlined,
   CalendarOutlined, ClockCircleOutlined, CheckCircleOutlined
@@ -86,6 +87,23 @@ const ClosingEntriesList = ({
   // join date → today: every closing, eligible or not, charged / paid / pending (PDF)
   const programList = useSelector((s) => s.data?.programList || [])
   const [hisaabBusy, setHisaabBusy] = useState(false)
+  // simple list: closings this member comes under — naam, pita, reg. no, date, group
+  const [listBusy, setListBusy] = useState(false)
+  // "क्लोजिंग का पूरा हिसाब" — same drawer as Closing Forms; active member: join date → today
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const programName = (() => { const p = programList.find((x) => x.id === member?.programId); return p?.hindiName || p?.name || member?.programName || '' })()
+  const downloadList = async () => {
+    setListBusy(true)
+    try {
+      const r = await downloadMemberClosingList(member, programList)
+      message.success(`${r.all} closed members mein se ${r.applies} is member par laagu — list download ho gayi`)
+    } catch (e) {
+      console.error('Closing list PDF failed:', e)
+      message.error('PDF nahi bana: ' + (e.message || e))
+    } finally {
+      setListBusy(false)
+    }
+  }
   const downloadHisaab = async () => {
     setHisaabBusy(true)
     try {
@@ -281,10 +299,27 @@ const ClosingEntriesList = ({
             </RasidDownloadButton>
           </Space>
         )}
+        <Button size="small" icon={<HistoryOutlined />} onClick={() => setHistoryOpen(true)}
+          title="Join date se aaj tak (closed ho to closing tak) ki har closing — shulk laga ya nahi, bhara / bakaya"
+          style={{ borderRadius: 6, background: '#1B385A', borderColor: '#1B385A', color: '#fff', fontWeight: 500 }}>
+          पूरा हिसाब
+        </Button>
+        <ClosingHistoryDrawer
+          open={historyOpen}
+          onClose={() => setHistoryOpen(false)}
+          member={member}
+          closingDocs={closingEntries || []}
+          programName={programName}
+        />
         <Button size="small" icon={<FilePdfOutlined />} loading={hisaabBusy} onClick={downloadHisaab}
           title="Join date se aaj tak ki har closing — kist banti hai ya nahi, lagi ya nahi, jama / baki"
           style={{ borderRadius: 6, borderColor: '#1B385A', color: '#1B385A', fontWeight: 500 }}>
           Closing Hisaab PDF
+        </Button>
+        <Button size="small" icon={<FilePdfOutlined />} loading={listBusy} onClick={downloadList}
+          title="Join date se aaj tak jo closed hue aur is member par laagu — naam, pita, reg. no, date, group"
+          style={{ borderRadius: 6, borderColor: '#db2777', color: '#db2777', fontWeight: 500 }}>
+          Closing List PDF
         </Button>
         <Button size="small" onClick={() => setKistOpen(true)} style={{ borderRadius: 6 }}>Kist History</Button>
         <Modal open={kistOpen} onCancel={() => setKistOpen(false)} footer={null} width={900} destroyOnClose

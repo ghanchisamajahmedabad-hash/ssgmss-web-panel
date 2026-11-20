@@ -1,8 +1,9 @@
 'use client'
 // Full closing account for ONE closed member — "पूरा हिसाब".
 //
-// Window: the member's join date → the member's own closing date. Everything
-// they could have been asked to pay for falls inside it.
+// Window: the member's join date → the member's own closing date (closed
+// member) or TODAY (active member — opened from the member page's Closing tab).
+// Everything they could have been asked to pay for falls inside it.
 //
 // Two sources are joined:
 //   1. The member's closing_payment docs — the closings they were actually
@@ -18,9 +19,9 @@
 
 import React, { useEffect, useMemo, useState } from 'react'
 import {
-  Drawer, Table, Tag, Card, Row, Col, Statistic, Alert, Spin, Typography, Space, Segmented, Tooltip,
+  Drawer, Table, Tag, Card, Row, Col, Statistic, Alert, Spin, Typography, Space, Segmented, Tooltip, Button, message,
 } from 'antd'
-import { CalendarOutlined, InfoCircleOutlined } from '@ant-design/icons'
+import { CalendarOutlined, InfoCircleOutlined, FilePdfOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import customParseFormat from 'dayjs/plugin/customParseFormat'
 import { docEventLateness, toDay, GRACE_DAYS, LATE_LABEL } from '@/app/members/components/closingLateness'
@@ -43,7 +44,9 @@ const ClosingHistoryDrawer = ({ open, onClose, member, closingDocs = [], program
   const [view, setView] = useState('all')
 
   const joinDay   = toDay(member?.dateJoin) || toDay(member?.programJoinDate) || toDay(member?.joinDateTs)
-  const closedDay = ownClosedDay(member)
+  // Closed member: up to their own closing. Active member: up to today.
+  const isClosed  = member?.member_closed === true
+  const closedDay = isClosed ? ownClosedDay(member) : dayjs().startOf('day')
 
   // Every closing in the yojna inside the window
   useEffect(() => {
@@ -192,11 +195,32 @@ const ClosingHistoryDrawer = ({ open, onClose, member, closingDocs = [], program
 
   const months = joinDay && closedDay ? closedDay.diff(joinDay, 'month') : null
 
+  // Same rows / totals as on screen → PDF
+  const [pdfBusy, setPdfBusy] = useState(false)
+  const downloadPdf = async () => {
+    setPdfBusy(true)
+    try {
+      const { downloadClosingHistoryPdf } = await import('./ClosingHistoryPdf')
+      await downloadClosingHistoryPdf({ member, programName, joinDay, endDay: closedDay, isClosed, rows, sums })
+    } catch (e) {
+      console.error('Closing hisaab PDF failed:', e)
+      message.error('PDF nahi bana: ' + (e.message || e))
+    } finally {
+      setPdfBusy(false)
+    }
+  }
+
   return (
     <Drawer
       open={open}
       onClose={onClose}
       width={980}
+      extra={
+        <Button type="primary" icon={<FilePdfOutlined />} loading={pdfBusy} disabled={loading} onClick={downloadPdf}
+          style={{ background: '#1B385A', borderColor: '#1B385A' }}>
+          PDF Download
+        </Button>
+      }
       title={
         <div>
           <div style={{ fontWeight: 700 }}>क्लोजिंग का पूरा हिसाब</div>
@@ -210,7 +234,9 @@ const ClosingHistoryDrawer = ({ open, onClose, member, closingDocs = [], program
         <Card size="small">
           <Space size={24} wrap style={{ fontSize: 12 }}>
             <span><CalendarOutlined /> जॉइन तिथि : <b>{fmt(joinDay)}</b></span>
-            <span><CalendarOutlined /> क्लोजिंग तिथि : <b style={{ color: '#dc2626' }}>{fmt(closedDay)}</b></span>
+            {isClosed
+              ? <span><CalendarOutlined /> क्लोजिंग तिथि : <b style={{ color: '#dc2626' }}>{fmt(closedDay)}</b></span>
+              : <span><CalendarOutlined /> आज तक : <b style={{ color: '#16a34a' }}>{fmt(closedDay)}</b> <Tag color="green" style={{ marginLeft: 4 }}>सक्रिय सदस्य</Tag></span>}
             {months !== null && <span>अवधि : <b>{Math.floor(months / 12) ? `${Math.floor(months / 12)} वर्ष ` : ''}{months % 12} माह</b></span>}
             <span>किस्त राशि : <b>{rs(member?.payAmount)}</b></span>
           </Space>

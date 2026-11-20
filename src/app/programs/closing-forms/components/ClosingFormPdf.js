@@ -14,6 +14,7 @@ import { Document, Font, Image, Page, StyleSheet, Text, View } from '@react-pdf/
 import NotoSansDevanagari from '@/app/api/helper/static/font/NotoSansDevanagari';
 import NotoSansDevanagariBold from '@/app/api/helper/static/font/NotoSansDevanagariBold';
 import dayjs from 'dayjs';
+import { memberJoinDate } from '@/lib/rasid/ssgmsDesign';
 
 Font.register({
   family: 'NotoSansDevanagari',
@@ -36,6 +37,19 @@ const fmtDate = (v) => {
   const d = dayjs(v);
   return d.isValid() ? d.format('DD-MM-YYYY') : String(v);
 };
+
+// join date (programJoinDate / dateJoin / joinDateTs) and how long they were a member till closing
+const joinOf = (m) => memberJoinDate(m)
+const memberSpan = (m) => {
+  const j = joinOf(m)
+  const cRaw = m.closed_date || m.marriageDate || m.member_closed_at
+  const c = fmtDate(cRaw)
+  if (!j || !c || c === '—') return ''
+  const a = dayjs(j.split('-').reverse().join('-')), b = dayjs(c.split('-').reverse().join('-'))
+  if (!a.isValid() || !b.isValid() || b.isBefore(a)) return ''
+  const months = b.diff(a, 'month')
+  return `${Math.floor(months / 12) ? `${Math.floor(months / 12)} वर्ष ` : ''}${months % 12} माह`
+}
 
 const money = (v) => `₹${Number(v || 0).toLocaleString('en-IN')}/-`;
 
@@ -236,6 +250,11 @@ const ClosingFormPdf = ({ member = {}, settlement = {}, programName = '' }) => {
                 </View>
               </View>
 
+              {/* when they joined, and how long they were a member till this closing */}
+              <View style={styles.row}>
+                <View style={styles.half}><Field label="सदस्यता दिनांक:" value={joinOf(m) || '—'} clipAt={12} /></View>
+                <View style={styles.half}><Field label="सदस्यता अवधि:" value={memberSpan(m) || '—'} clipAt={16} /></View>
+              </View>
               <View style={styles.row}><Field label="नाम:" value={m.displayName} clipAt={44} /></View>
               <View style={styles.row}><Field label="पिता/पति का नाम:" value={m.fatherName} clipAt={38} /></View>
 

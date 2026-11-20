@@ -147,6 +147,8 @@ export async function buildMemberClosingStatement(member, programList = []) {
     rows.push({
       closedMemberId: cid,
       name: [c.displayName || ch?.name || '', c.fatherName ? '/ ' + c.fatherName : ''].filter(Boolean).join(' ') || '—',
+      ownName: c.displayName || ch?.name || '',
+      fatherName: c.fatherName || '',
       regNo: c.registrationNumber || '',
       village: c.village || '',
       closedOn: day,
@@ -159,7 +161,7 @@ export async function buildMemberClosingStatement(member, programList = []) {
   closedIds.forEach(consider);
   extraIds.forEach(consider);
   chargedNoId.forEach((ch) => rows.push({
-    closedMemberId: '', name: ch.name || '—', regNo: '', village: '', closedOn: ch.closedOn, groupName: ch.groupName,
+    closedMemberId: '', name: ch.name || '—', ownName: ch.name || '', fatherName: '', regNo: '', village: '', closedOn: ch.closedOn, groupName: ch.groupName,
     eligible: true, reason: '', status: ch.paid ? 'PAID' : 'PENDING', amount: ch.amount, paidOn: ch.paidOn,
   }));
   rows.sort((a, b) => (a.closedOn?.valueOf() || 0) - (b.closedOn?.valueOf() || 0));
@@ -389,4 +391,105 @@ export async function downloadMemberClosingStatement(member, programList = []) {
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
   return data.rows.length;
+}
+
+// ─── Simple list: closings that apply to this member ─────────────────────────
+// Member page → "Closing List PDF". Join date → today (or own closing): only the
+// closings this member comes under (eligible), with नाम, पिता का नाम, रजि. नं.,
+// क्लोजिंग तिथि and ग्रुप (blank when the closing has no group name). Nothing else.
+const LROW_H = 19, LFIRST = 30, LOTHER = 40;
+const lst = StyleSheet.create({
+  title: { fontSize: 12, fontWeight: 'bold', color: NAVY, textAlign: 'center', marginBottom: 3 },
+  sub: { fontSize: 8.5, color: '#111', textAlign: 'center', marginBottom: 2 },
+  count: { fontSize: 8.5, fontWeight: 'bold', color: RED, textAlign: 'center', marginBottom: 6 },
+  row: { flexDirection: 'row', height: LROW_H, alignItems: 'center', borderTopWidth: 0.4, borderTopColor: '#d1d5db' },
+  td: { fontSize: 8.5, color: '#111', paddingHorizontal: 4 },
+});
+const LCOL = { sr: { width: 26, textAlign: 'center' }, name: { flex: 1.2 }, father: { flex: 1 }, reg: { width: 78 }, date: { width: 66, textAlign: 'center' }, group: { width: 120 } };
+
+export const MemberClosingListPdf = ({ data }) => {
+  const { member: m, from, to, closedSelf } = data;
+  const rows = data.rows.filter((r) => r.eligible);
+  const pages = [];
+  let i = 0, cap = LFIRST;
+  do { pages.push({ start: i, rows: rows.slice(i, i + cap) }); i += cap; cap = LOTHER; } while (i < rows.length);
+  return (
+    <Document>
+      {pages.map((p, pi) => (
+        <Page key={pi} size="A4" style={st.page}>
+          <View style={st.frame}>
+            {pi === 0 ? (
+              <>
+                <View style={st.headerRow}>
+                  <View style={st.logoBox}><Image src="/Images/logoT.png" style={st.logo} /></View>
+                  <View style={st.headCenter}>
+                    <Text style={st.trustName}>श्री क्षत्रिय घांची मोदी समाज सेवा संस्थान ट्रस्ट</Text>
+                    <Text style={st.trustPlace}>अहमदाबाद, गुजरात</Text>
+                  </View>
+                  <View style={st.logoBox}><Image src="/Images/sanidevImg.jpeg" style={st.logo} /></View>
+                </View>
+                <View style={st.sinceRow}>
+                  <Text style={st.sinceText}>SINCE : 2024</Text>
+                  <Text style={st.sinceText}>Reg. No: A/5231</Text>
+                </View>
+                <Text style={lst.title}>क्लोज हुए सदस्यों की सूची</Text>
+                <Text style={lst.sub}>{m.name}  •  रजि. नं. {m.regNo || '—'}  •  {m.yojana}{m.ageGroup ? `  (${m.ageGroup})` : ''}</Text>
+                <Text style={lst.sub}>{fmt(from)} (सदस्यता तिथि) से {fmt(to)} ({closedSelf ? 'खुद की क्लोजिंग' : 'आज'}) तक</Text>
+                <Text style={lst.count}>इस अवधि में {data.rows.filter((r) => r.reason !== 'खुद की क्लोजिंग').length} सदस्य क्लोज हुए — इनमें से {rows.length} की किस्त इस सदस्य पर बनती है</Text>
+              </>
+            ) : (
+              <View style={st.contHead}>
+                <Text style={st.contTitle}>{clip(m.name, 40)} ({m.regNo}) — क्लोज हुए सदस्यों की सूची (जारी)</Text>
+                <Text style={st.footerText}>{fmt(from)} से {fmt(to)}</Text>
+              </View>
+            )}
+            <View style={st.table}>
+              <View style={st.thRow}>
+                <Text style={[st.th, LCOL.sr, { fontSize: 8 }]}>#</Text>
+                <Text style={[st.th, LCOL.name, { fontSize: 8 }]}>नाम</Text>
+                <Text style={[st.th, LCOL.father, { fontSize: 8 }]}>पिता का नाम</Text>
+                <Text style={[st.th, LCOL.reg, { fontSize: 8 }]}>रजि. नं.</Text>
+                <Text style={[st.th, LCOL.date, { fontSize: 8 }]}>क्लोजिंग तिथि</Text>
+                <Text style={[st.th, LCOL.group, { fontSize: 8 }]}>ग्रुप</Text>
+              </View>
+              {p.rows.map((r, ri) => (
+                <View key={ri} style={[lst.row, (p.start + ri) % 2 ? { backgroundColor: '#f8fafc' } : null]} wrap={false}>
+                  <Text style={[lst.td, LCOL.sr]}>{p.start + ri + 1}</Text>
+                  <Text style={[lst.td, LCOL.name]}>{clip(r.ownName, 30)}</Text>
+                  <Text style={[lst.td, LCOL.father]}>{clip(r.fatherName, 26)}</Text>
+                  <Text style={[lst.td, LCOL.reg]}>{r.regNo}</Text>
+                  <Text style={[lst.td, LCOL.date]}>{r.closedOn ? r.closedOn.format('DD-MM-YYYY') : ''}</Text>
+                  <Text style={[lst.td, LCOL.group]}>{clip(r.groupName, 26)}</Text>
+                </View>
+              ))}
+              {!rows.length ? (
+                <View style={lst.row}><Text style={[lst.td, { flex: 1, textAlign: 'center', color: GREY }]}>इस अवधि में इस सदस्य पर लागू कोई क्लोजिंग नहीं</Text></View>
+              ) : null}
+            </View>
+            <View style={st.footer}>
+              <Text style={st.footerText}>Generated : {dayjs().format('DD-MM-YYYY hh:mm A')}</Text>
+              <Text style={st.footerText}>Page {pi + 1} of {pages.length}</Text>
+              <Text style={st.footerText}>SSGMS Web Panel</Text>
+            </View>
+          </View>
+        </Page>
+      ))}
+    </Document>
+  );
+};
+
+/** Build + download the simple list. Returns { all, applies }. */
+export async function downloadMemberClosingList(member, programList = []) {
+  const data = await buildMemberClosingStatement(member, programList);
+  const { pdf } = await import('@react-pdf/renderer');
+  const blob = await pdf(<MemberClosingListPdf data={data} />).toBlob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `Closing_List_${String(member.registrationNumber || member.id).replace(/[^a-zA-Z0-9_-]/g, '_')}_${dayjs().format('DD-MM-YYYY')}.pdf`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  return { all: data.rows.filter((r) => r.reason !== 'खुद की क्लोजिंग').length, applies: data.rows.filter((r) => r.eligible).length };
 }
