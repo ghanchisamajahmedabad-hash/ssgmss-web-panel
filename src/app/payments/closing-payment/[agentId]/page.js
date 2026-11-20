@@ -28,6 +28,7 @@ import TransactionDetailDrawer from '../../join-fees/components/TransactionDetai
 import ClosingPaymentConfirmationDrawer from '../components/PaymentConfirmationDrawer';
 import ClosingPaymentHistoryDrawer from '../components/PaymentHistoryDrawer';
 import RasidGroupClosingDrawer from '../components/RasidComponent/RasidGroupClosingDrawer';
+import { downloadAgentMemberReportPdf } from '../../components/AgentMemberReportPdf';
 import AgentAdvancePanel from '../../join-fees/components/AgentAdvancePanel';
 import MemberAdvanceDrawer from '../components/MemberAdvanceDrawer';
 import { uploadFile } from '@/utils/uploadUtils/common';
@@ -139,6 +140,28 @@ const ClosingMemberPaymentPage = () => {
   const agentId      = params?.agentId;
   const programId    = searchParams.get('programId');
   const currentAgent = agentList.find(a => a.uid === agentId);
+
+  // Agent report PDF — every member of this agent (yojna filter applied) with
+  // closed / paid / pending members and the paid / pending amounts.
+  const [reportBusy, setReportBusy] = useState(false);
+  const handleAgentReportPdf = async () => {
+    setReportBusy(true);
+    try {
+      const list = (members || []).filter(m => selectedProgram === 'all'
+        || m.programId === selectedProgram || (m.programIds || []).includes(selectedProgram));
+      const progName = selectedProgram === 'all' ? '' : ((programList || []).find(p => p.id === selectedProgram)?.name || '');
+      await downloadAgentMemberReportPdf({
+        fileName: `agent_report_${(currentAgent?.agentCode || currentAgent?.name || agentId).toString().replace(/[^a-zA-Z0-9_-]/g, '_')}_${dayjs().format('YYYY-MM-DD')}.pdf`,
+        filterText: progName ? `Yojna: ${progName}` : '',
+        agents: [{ agent: currentAgent || { name: agentId }, members: list }],
+      });
+    } catch (e) {
+      console.error('Agent report PDF failed:', e);
+      message.error(`PDF nahi bana: ${e.message || e}`);
+    } finally {
+      setReportBusy(false);
+    }
+  };
 
   // ── State ────────────────────────────────────────────────────────────────
   const [members,              setMembers]              = useState([]);
@@ -936,6 +959,15 @@ const ClosingMemberPaymentPage = () => {
       />
     </div>
 
+    <Button
+      icon={<FilePdfOutlined />}
+      onClick={handleAgentReportPdf}
+      loading={reportBusy}
+      disabled={loading || !members.length}
+      style={{ borderRadius: 10, fontWeight: 600, fontSize: 12, height: 36, borderColor: C.primary, color: C.primary }}
+    >
+      Agent Report PDF
+    </Button>
     <Button
       icon={<FilePdfOutlined />}
       onClick={handleDownloadPDF}

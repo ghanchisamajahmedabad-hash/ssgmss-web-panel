@@ -2,6 +2,7 @@ import {
   collection, query, where, orderBy, limit, startAfter, getDocs, getCountFromServer
 } from 'firebase/firestore'
 import { db } from '../../../../../lib/firbase-client'
+import { normalizeSearchTerm } from '@/utils/searchIndex'
 import dayjs from 'dayjs'
 
 // member_closed_date is stored as an ISO-8601 UTC string (e.g. ...T18:30:00.000Z).
@@ -16,7 +17,8 @@ const isoBound = (day, subtractOne = false) => {
   return `${base.format('YYYY-MM-DD')}T18:30:00.000Z`
 }
 
-const normalizeSearch = (s) => (s || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '')
+// Hindi names too — see utils/searchIndex.js
+const normalizeSearch = (s) => normalizeSearchTerm(s)
 
 /* Build the where-clauses for a CLOSED-members query (server-side filters).
    filters: {
@@ -62,12 +64,46 @@ export const buildClosedConditions = (filters = {}) => {
 }
 
 /* stable ordering + cursor support for the closed table.
+   Date-wise by each member's closing date (closed_date):
+     sortDir 'asc'  → earliest closing first (default)
+     sortDir 'desc' → latest closing first
+     sortDir 'created' → the old order (when the record was made, newest first)
    With a date-range active Firestore requires the range field to lead the
-   ordering; otherwise we order by creation time (matches the members page). */
+   ordering, so 'created' falls back to closing date ascending there. */
 const buildClosedOrderClauses = (filters = {}) => {
   const hasDateRange = !!(filters.fromDate || filters.toDate)
-  if (hasDateRange) return [orderBy('closed_date', 'asc'), orderBy('createdAt', 'asc')]
-  return [orderBy('createdAt', 'desc')]
+  const dir = filters.sortDir === 'desc' ? 'desc' : 'asc'
+  if (filters.sortDir === 'created' && !hasDateRange) return [orderBy('createdAt', 'desc')]
+  if (filters.sortDir === 'created') return [orderBy('closed_date', 'asc'), orderBy('createdAt', 'asc')]
+  return [orderBy('closed_date', dir), orderBy('createdAt', dir)]
+}
+
+/* Ordering by closed_date needs a Firestore composite index for each filter
+   combination (firestore.indexes.json → `firebase deploy --only firestore:indexes`).
+   Until an index is built the query is refused with failed-precondition — then
+   the page falls back to the old order and sorts what it got by closing date, so
+   the screen keeps working. The console shows the link that creates the index. */
+const isIndexMissing = (e) => e?.code === 'failed-precondition' || /requires an index/i.test(e?.message || '')
+const closedDateKey = (m) => {
+  const v = m?.closed_date
+  if (!v) return '9999'
+  if (typeof v === 'string') {
+    const d = /^(\d{1,2})-(\d{1,2})-(\d{4})$/.exec(v.trim())
+    return d ? `${d[3]}-${d[2].padStart(2, '0')}-${d[1].padStart(2, '0')}` : v
+  }
+  const t = v?.toDate ? v.toDate() : new Date(v)
+  return isNaN(t) ? '9999' : t.toISOString()
+}
+export const sortByClosedDate = (rows, sortDir = 'asc') => {
+  if (sortDir === 'created') return rows
+  const out = [...rows].sort((a, b) => closedDateKey(a).localeCompare(closedDateKey(b)))
+  return sortDir === 'desc' ? out.reverse() : out
+}
+let warnedIndex = false
+const warnIndex = (e) => {
+  if (warnedIndex) return
+  warnedIndex = true
+  console.warn('[closing-forms] Closing-date order needs a Firestore index — showing the old order sorted per page.', e?.message)
 }
 
 const toRow = (doc) => ({ id: doc.id, key: doc.id, ...doc.data() })
@@ -77,17 +113,30 @@ export const fetchClosedPage = async (filters = {}, lastDoc = null, pageSize = 1
   const conditions   = buildClosedConditions(filters)
   const orderClauses = buildClosedOrderClauses(filters)
 
-  const constraints = [...conditions, ...orderClauses, limit(pageSize + 1)]
-  if (lastDoc) constraints.push(startAfter(lastDoc))
+  const run = (order) => {
+    const constraints = [...conditions, ...order, limit(pageSize + 1)]
+    if (lastDoc) constraints.push(startAfter(lastDoc))
+    return getDocs(query(collection(db, 'members'), ...constraints))
+  }
 
-  const snap = await getDocs(query(collection(db, 'members'), ...constraints))
+  let snap, fallback = false
+  try {
+    snap = await run(orderClauses)
+  } catch (e) {
+    if (!isIndexMissing(e) || filters.sortDir === 'created') throw e
+    warnIndex(e)
+    fallback = true
+    snap = await run(buildClosedOrderClauses({ ...filters, sortDir: 'created' }))
+  }
 
   let docs = snap.docs
   const hasNextPage = docs.length > pageSize
   if (hasNextPage) docs = docs.slice(0, pageSize)
 
+  const rows = docs.map(toRow)
   return {
-    rows: docs.map(toRow),
+    rows: fallback ? sortByClosedDate(rows, filters.sortDir) : rows,
+    indexMissing: fallback,
     lastDoc: docs[docs.length - 1] || null,
     hasNextPage,
     total: withTotal
@@ -137,9 +186,18 @@ export const fetchAllClosedForExport = async (filters = {}) => {
 
   const PAGE = 300
   while (!done) {
-    const constraints = [...conditions, ...orderClauses, limit(PAGE)]
-    if (lastDoc) constraints.push(startAfter(lastDoc))
-    const snap = await getDocs(query(collection(db, 'members'), ...constraints))
+    let snap
+    try {
+      const constraints = [...conditions, ...orderClauses, limit(PAGE)]
+      if (lastDoc) constraints.push(startAfter(lastDoc))
+      snap = await getDocs(query(collection(db, 'members'), ...constraints))
+    } catch (e) {
+      if (!isIndexMissing(e) || filters.sortDir === 'created') throw e
+      warnIndex(e)
+      // no index yet: read in the old order, sort everything at the end
+      return fetchAllClosedForExport({ ...filters, sortDir: 'created' })
+        .then((rows) => sortByClosedDate(rows, filters.sortDir))
+    }
     snap.forEach(d => all.push(toRow(d)))
     if (snap.size < PAGE) done = true
     else lastDoc = snap.docs[snap.docs.length - 1]

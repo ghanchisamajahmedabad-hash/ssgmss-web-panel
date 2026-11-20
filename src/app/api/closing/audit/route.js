@@ -45,6 +45,7 @@ import { NextResponse } from 'next/server';
 import admin from '../../db/firebaseAdmin';
 import { checkRole, verifyToken } from '../../../../../middleware/authMiddleware';
 import { paidClosingsInDoc } from '../../../../utils/closingCounts';
+import { addKistLog } from '../../db/kistLog';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -92,6 +93,10 @@ export async function POST(req) {
       return NextResponse.json({ success: false, message: authResult.error }, { status: authResult.status });
     if (!checkRole(['superadmin'], authResult.user.role))
       return NextResponse.json({ success: false, message: 'Only superadmin can audit closing data' }, { status: 403 });
+    const auditBy = {
+      uid: authResult.user.uid || '',
+      name: authResult.user.name || authResult.user.displayName || authResult.user.email || '',
+    };
 
     const {
       programId = 'all',
@@ -189,18 +194,18 @@ export async function POST(req) {
 
           if (seen.has(key)) {
             issues.add('DUP_EVENT');
-            dropped.push({ reason: 'DUP_EVENT', name: ev?.closed_memberName || '', date: dayStr(evDate) });
+            dropped.push({ reason: 'DUP_EVENT', name: ev?.closed_memberName || '', date: dayStr(evDate), id: ev?.closed_memberId || '', reg: ev?.closing_registrationNumber || ev?.closed_registrationNumber || '' });
             continue;
           }
           if (closedOn && evDate && evDate > closedOn) {
             issues.add('AFTER_CLOSED');
-            dropped.push({ reason: 'AFTER_CLOSED', name: ev?.closed_memberName || '', date: dayStr(evDate) });
+            dropped.push({ reason: 'AFTER_CLOSED', name: ev?.closed_memberName || '', date: dayStr(evDate), id: ev?.closed_memberId || '', reg: ev?.closing_registrationNumber || ev?.closed_registrationNumber || '' });
             seen.add(key);
             continue;
           }
           if (joinedOn && evDate && evDate < joinedOn) {
             issues.add('BEFORE_JOIN');
-            dropped.push({ reason: 'BEFORE_JOIN', name: ev?.closed_memberName || '', date: dayStr(evDate) });
+            dropped.push({ reason: 'BEFORE_JOIN', name: ev?.closed_memberName || '', date: dayStr(evDate), id: ev?.closed_memberId || '', reg: ev?.closing_registrationNumber || ev?.closed_registrationNumber || '' });
             seen.add(key);
             continue;
           }
@@ -258,6 +263,7 @@ export async function POST(req) {
         if (docChanged) {
           docPlans.push({
             ref: d.ref,
+            payAmount,
             closingGroupId: cp.closingGroupId || '',
             groupName: cp.closingGroupName || '',
             before: { count: storedCount, total: storedTotal, paid: storedPaid, pending: storedPending, status: cp.status || '' },
@@ -337,6 +343,21 @@ export async function POST(req) {
       if (!dryRun) {
         const batch = db.batch();
         for (const p of docPlans) batch.update(p.ref, p.update);
+        // Kist removal history: whose kist, from which closing group, which closing, why
+        if (removeInvalidEvents) {
+          for (const p of docPlans) {
+            for (const ev of p.dropped || []) {
+              addKistLog(batch, {
+                memberId, memberName: m.displayName || '', memberRegNo: m.registrationNumber || '',
+                agentId: m.agentId || '', programId: m.programId || '',
+                closingGroupId: p.closingGroupId, closingGroupName: p.groupName,
+                closedMemberId: ev.id, closedMemberName: ev.name, closedMemberRegNo: ev.reg, closedDate: ev.date,
+                amount: p.payAmount || 0, reason: ev.reason, source: 'audit',
+                removedBy: auditBy.uid, removedByName: auditBy.name,
+              });
+            }
+          }
+        }
         batch.update(docSnap.ref, memberUpdate);
         await batch.commit();
         fixed++;

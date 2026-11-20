@@ -30,6 +30,7 @@ import admin from '../db/firebaseAdmin';
 import ClosingRasidPdf from '@/app/members/components/ClosingRasidPdf';
 import LogoImg from '@/app/api/helper/Images/LogoImg';
 import RigthImg from '@/app/api/helper/Images/rigthImg';
+import { memberJoinDate, memberOldNo } from '@/lib/rasid/ssgmsDesign';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -195,6 +196,9 @@ export async function POST(req) {
         name: [m.displayName, m.fatherName ? '/ ' + m.fatherName : ''].filter(Boolean).join(' '),
         phone: m.phone || '',
         address: [m.village, m.city, m.state].filter(Boolean).join(', '),
+        regNo: m.registrationNumber || '',
+        oldNo: memberOldNo(m),
+        joinDate: memberJoinDate(m),
         yojana: yojanaOf(m),
         ageGroup: ageGroupOf(m),
         sahyogRashi: Number(m.payAmount || 0),

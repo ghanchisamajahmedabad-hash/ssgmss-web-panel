@@ -14,7 +14,7 @@ import {
   RollbackOutlined, ExclamationCircleOutlined,
   HeartFilled, ClockCircleOutlined, CheckCircleOutlined,
   InfoCircleOutlined, WarningOutlined, EditOutlined,
-  DownloadOutlined, SyncOutlined
+  DownloadOutlined, SyncOutlined, UndoOutlined
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import relativeTime from 'dayjs/plugin/relativeTime'
@@ -30,6 +30,7 @@ import MemberDetailDrawer from '@/app/members/components/MemberDetailsView'
 import MarriageClosingDrawer from './components/MarriageClosingDrawer'
 import ClosingRasidGenerator from './components/ClosingRasidGenerator'
 import ClosingFormDrawer from './components/ClosingFormDrawer'
+import RevertClosedMemberModal from './components/RevertClosedMemberModal'
 import {
   fetchClosedPage, getClosedStats, fetchAllClosedForExport
 } from './components/closingFirestore'
@@ -232,6 +233,8 @@ const ClosingMembersPage = () => {
   const [agentFilter,          setAgentFilter]          = useState('all')
   const [groupFilter,          setGroupFilter]          = useState('all')
   const [dateRange,            setDateRange]            = useState(null)
+  // closed members date-wise by their closing date ('asc' earliest first, 'desc' latest first, 'created' old order)
+  const [sortDir,              setSortDir]              = useState('asc')
   const [pdfMeta,              setPdfMeta]              = useState(null)
 
   // ── Closed-members table (server-side pagination, 100 / page) ─────────────
@@ -259,6 +262,7 @@ const ClosingMembersPage = () => {
     fromDate:       dateRange?.[0] || null,
     toDate:         dateRange?.[1] || null,
     search:         searchText,
+    sortDir,
   }
 
   const filtersKey = JSON.stringify({
@@ -266,6 +270,7 @@ const ClosingMembersPage = () => {
     f: dateRange?.[0]?.format('YYYY-MM-DD') || '',
     t: dateRange?.[1]?.format('YYYY-MM-DD') || '',
     s: searchText.trim().toLowerCase(),
+    o: sortDir,
   })
 
   const loadClosedStats = async () => {
@@ -417,7 +422,7 @@ const ClosingMembersPage = () => {
     }, 450)
     return () => clearTimeout(t)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [programFilter, agentFilter, groupFilter, dateRange, searchText])
+  }, [programFilter, agentFilter, groupFilter, dateRange, searchText, sortDir])
   useEffect(() => { if (activeTab === 'history') fetchClosingGroups() }, [activeTab])
 
   // ── Derived lists ──────────────────────────────────────────────────────────
@@ -533,6 +538,9 @@ const ClosingMembersPage = () => {
   }
 
   // ── Mark already-closed member active again (status only, no payment) ──────
+  // Full revert of ONE closed member (status + their kist from the whole group)
+  const [revertMember, setRevertMember] = useState(null)
+
   const handleMarkActive = (member) => {
     confirm({
       title: 'Mark member active?',
@@ -777,7 +785,7 @@ const ClosingMembersPage = () => {
       },
     },
     {
-      title: 'Action', key: 'action', width: 150,
+      title: 'Action', key: 'action', width: 190,
       render: (_, r) => (
         <Space size={0}>
           <Tooltip title="View"><Button type="text" icon={<EyeOutlined />} onClick={() => handleViewMember(r)} /></Tooltip>
@@ -789,7 +797,8 @@ const ClosingMembersPage = () => {
             />
           </Tooltip>
           <Tooltip title="Edit Closing Date"><Button type="text" icon={<EditOutlined />} onClick={() => openEditDate(r)} /></Tooltip>
-          <Tooltip title="Mark Active"><Button type="text" danger icon={<RollbackOutlined />} loading={markingActiveId === r.id} onClick={() => handleMarkActive(r)} /></Tooltip>
+          <Tooltip title="Mark Active (sirf status)"><Button type="text" icon={<RollbackOutlined />} loading={markingActiveId === r.id} onClick={() => handleMarkActive(r)} /></Tooltip>
+          <Tooltip title="Revert — is sadasya ki closing aur uski kist sab sadasyon se hatayein"><Button type="text" danger icon={<UndoOutlined />} onClick={() => setRevertMember(r)} /></Tooltip>
         </Space>
       )
     },
@@ -886,6 +895,12 @@ const ClosingMembersPage = () => {
             </Select>
             <DatePicker.RangePicker value={dateRange} onChange={setDateRange}
               style={{ width: 270 }} placeholder={['Closing from', 'Closing to']} allowClear />
+            <Select value={sortDir} onChange={setSortDir} style={{ width: 200 }}
+              options={[
+                { value: 'asc',     label: 'Closing date ↑ (purani pehle)' },
+                { value: 'desc',    label: 'Closing date ↓ (nayi pehle)' },
+                { value: 'created', label: 'Add hone ka order' },
+              ]} />
             {(programFilter !== 'all' || agentFilter !== 'all' || groupFilter !== 'all' || dateRange || searchText) && (
               <Button size="small" icon={<CloseCircleOutlined />} onClick={() => { setProgramFilter('all'); setAgentFilter('all'); setGroupFilter('all'); setDateRange(null); setSearchText('') }}>Clear</Button>
             )}
@@ -1012,6 +1027,12 @@ const ClosingMembersPage = () => {
         programList={programList} currentUser={currentUser}
         closingGroups={closingGroups}
         onSuccess={async () => { setClosingFormVisible(false); await handleClosingComplete() }}
+      />
+
+      <RevertClosedMemberModal
+        member={revertMember}
+        onClose={() => setRevertMember(null)}
+        onDone={() => handleClosingComplete()}
       />
 
       <ClosingRasidGenerator

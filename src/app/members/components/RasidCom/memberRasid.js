@@ -28,6 +28,7 @@ import {
 import dayjs from 'dayjs'
 import { db } from '../../../../../lib/firbase-client'
 import ClosingRasidPdf from '../ClosingRasidPdf'
+import { memberJoinDate, memberOldNo } from '@/lib/rasid/ssgmsDesign'
 
 const HINDI_MONTHS = ['जनवरी', 'फरवरी', 'मार्च', 'अप्रैल', 'मई', 'जून',
   'जुलाई', 'अगस्त', 'सितंबर', 'अक्टूबर', 'नवंबर', 'दिसंबर']
@@ -161,6 +162,10 @@ export const buildMemberRasidList = async ({ member, entries, date, note: noteOv
       name: [member.displayName, member.fatherName ? '/ ' + member.fatherName : ''].filter(Boolean).join(' '),
       phone: member.phone || '',
       address: [member.village, member.city, member.state].filter(Boolean).join(', '),
+      // the member's own Reg. No, old application no. and join date (top of the rasid)
+      regNo: member.registrationNumber || '',
+      oldNo: memberOldNo(member),
+      joinDate: memberJoinDate(member),
       yojana,
       ageGroup,
       sahyogRashi: Number(entry.payAmount ?? member.payAmount ?? 0),

@@ -1,8 +1,9 @@
-import NotoSansDevanagari from '@/app/api/helper/static/font/NotoSansDevanagari';
-import NotoSansDevanagariBold from '@/app/api/helper/static/font/NotoSansDevanagariBold';
+import NotoSansDevanagari from '../../api/helper/static/font/NotoSansDevanagari';
+import NotoSansDevanagariBold from '../../api/helper/static/font/NotoSansDevanagariBold';
 import { Document, Font, Image, Page, StyleSheet, Text, View } from '@react-pdf/renderer';
 import React from 'react';
 import dayjs from 'dayjs';
+import { DEFAULT_RASID_DESIGN, normalizeRasidDesign } from '../../../lib/rasid/ssgmsDesign.js';
 
 Font.register({
   family: 'NotoSansDevanagari',
@@ -24,6 +25,8 @@ const GREEN  = '#16a34a';   // paid receipts
 // join-fees rasid does — short lists get blank ruled rows rather than a
 // half-empty page.
 const TOTAL_ROWS = 20;
+// Rows per page a rasid run may choose (Closing Forms → Rasid): 10, 15 or 20 (default).
+const rowsOf = (n) => ([10, 15, 20].includes(Number(n)) ? Number(n) : TOTAL_ROWS);
 
 // ─── Styles — mirrored from RasidPdfCom so both receipts are identical ────────
 // Height set aside at the bottom of every page for the footer, which is pinned
@@ -31,7 +34,8 @@ const TOTAL_ROWS = 20;
 // lines with their leading, rounded up so a slightly taller line still fits.
 const FOOTER_SPACE = 44;
 
-const styles = StyleSheet.create({
+// Main / accent colours come from the rasid design (Settings → Rasid); defaults are BLUE / RED.
+const makeStyles = (BLUE, RED) => StyleSheet.create({
 
   page: {
     backgroundColor: '#ffffff',
@@ -142,6 +146,14 @@ const styles = StyleSheet.create({
   infoRight: { width: 150, alignItems: 'flex-end' },
   infoLabel: { fontSize: 11, fontWeight: 'bold', color: RED },
   infoValue: { fontSize: 11, color: BLACK, fontWeight: 'normal' },
+
+  // ════════ QR (rasid run: verify / UPI) ════════
+  infoWithQr: { flexDirection: 'row', alignItems: 'flex-start' },
+  infoCol:    { flex: 1 },
+  qrBox:      { width: 78, alignItems: 'center', marginLeft: 8, borderWidth: 0.75, borderColor: BORDER, borderRadius: 3, paddingVertical: 3 },
+  qrImg:      { width: 62, height: 62 },
+  qrLabel:    { fontSize: 6.5, fontWeight: 'bold', color: BLUE, textAlign: 'center', marginTop: 1 },
+  qrCode:     { fontSize: 6, color: '#555', textAlign: 'center' },
 
   // ════════ TABLE ════════
   table: {
@@ -263,6 +275,12 @@ const styles = StyleSheet.create({
   footerSub:     { fontSize: 9, fontWeight: 'bold', color: BLUE, textAlign: 'center' },
   footerEoe:     { fontSize: 10, fontWeight: 'bold', color: BLACK, width: 50, textAlign: 'right' },
 });
+const styleCache = new Map();
+const stylesFor = (main, accent) => {
+  const k = `${main}|${accent}`;
+  if (!styleCache.has(k)) styleCache.set(k, makeStyles(main, accent));
+  return styleCache.get(k);
+};
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 // Closing dates reach us in three shapes and each needs different handling:
@@ -364,12 +382,25 @@ const clip = (value, max) => {
 // has no /public to fetch from, so it passes the base64 versions instead.
 const DEFAULT_IMAGES = { logo: '/Images/logoT.png', right: '/Images/sanidevImg.jpeg' };
 
-const ClosingPage = ({ data, images = DEFAULT_IMAGES }) => {
+const ClosingPage = ({ data, images = DEFAULT_IMAGES, rows = TOTAL_ROWS, design = DEFAULT_RASID_DESIGN }) => {
+  const D = design;
+  const show = D.show;
+  const styles = stylesFor(D.colorMain, D.colorAccent);
+  const sep = (label) => (label ? `${label} : ` : '');
   const entries = data.entries || [];
   const filledEntries = [
     ...entries,
-    ...Array(Math.max(0, TOTAL_ROWS - entries.length)).fill(null),
+    ...Array(Math.max(0, rows - entries.length)).fill(null),
   ];
+  // 20 lines: the original fixed 20pt rows. 10 / 15 lines: rows share the table's height
+  // equally (taller, easier to read / write on) and a long name may take two lines.
+  const fewRows = rows < TOTAL_ROWS;
+  const rowStyle = fewRows ? [styles.tableRow, { height: undefined, flex: 1 }] : styles.tableRow;
+  const nameLines = fewRows ? 2 : 1;
+  const qr = data.qr && data.qr.img ? data.qr : null;
+  const joinOn = show.joinDate && !!data.joinDate;
+  const nameCell = show.colDate || show.colMobile ? styles.cellName : [styles.cellName, { borderRightWidth: 0 }];
+  const dateCell = show.colMobile ? styles.cellDate : [styles.cellDate, { borderRightWidth: 0 }];
 
   const total = Number(data.totalAmount || 0);
   // Page-wise figures (see ClosingRasidPdf below). On a one-page receipt the
@@ -389,14 +420,14 @@ const ClosingPage = ({ data, images = DEFAULT_IMAGES }) => {
       <View style={styles.outerView}>
 
         {/* Watermark */}
-        <Image src={images.logo} style={styles.watermark} />
+        {D.watermark ? <Image src={images.logo} style={styles.watermark} /> : null}
 
         {/* ══ Blessing Row ══ */}
-        <View style={styles.topText}>
-          <Text style={styles.smallText}>॥ श्री गणेशाय नमः ॥</Text>
-          <Text style={styles.smallText}>॥ श्री शनिदेवाय नमः ॥</Text>
-          <Text style={styles.smallText}>॥ श्री सांवलाजी महाराज नमः ॥</Text>
-        </View>
+        {D.blessings.some(Boolean) ? (
+          <View style={styles.topText}>
+            {D.blessings.map((b, i) => <Text key={i} style={styles.smallText}>{b}</Text>)}
+          </View>
+        ) : null}
 
         {/* ══ Header ══ */}
         <View style={styles.headerSection}>
@@ -405,26 +436,29 @@ const ClosingPage = ({ data, images = DEFAULT_IMAGES }) => {
           </View>
 
           <View style={styles.centerContent}>
-            <Text style={styles.mainTitle}>श्री क्षत्रिय घाँची मोदी समाज सेवा संस्थान ट्रस्ट</Text>
-            <Text style={styles.subTitle}>अहमदाबाद, गुजरात</Text>
+            <Text style={styles.mainTitle}>{D.trustName}</Text>
+            {D.cityState ? <Text style={styles.subTitle}>{D.cityState}</Text> : null}
 
-            <View style={styles.addressRow}>
-              <Text style={styles.addressLabel}>हेड ऑफिस : </Text>
-              <Text style={styles.addressValue}>
-                68, वृंदावन शॉपिंग सेंटर, गुजरात हाउसिंग बोर्ड बी. एस. स्कूल के पास,
-                चांदखेडा, साबरमती, अहमदाबाद 382424 (O) 9898535345
-              </Text>
-            </View>
+            {D.officeAddress ? (
+              <View style={styles.addressRow}>
+                <Text style={styles.addressLabel}>{sep(D.officeLabel)}</Text>
+                <Text style={styles.addressValue}>{D.officeAddress}</Text>
+              </View>
+            ) : null}
 
-            <View style={styles.contactRow}>
-              <Text style={styles.contactLabel}>संपर्क सूत्र : </Text>
-              <Text style={styles.contactValue}>अध्यक्ष श्री वोरारामजी टी. बोराणा</Text>
-            </View>
-            <View style={styles.contactRow}>
-              <Text style={styles.contactValue}>9374934004</Text>
-              <Text style={styles.contactLabel}>  ऑफिस : </Text>
-              <Text style={styles.contactValue}> 9898535345</Text>
-            </View>
+            {D.contactName ? (
+              <View style={styles.contactRow}>
+                <Text style={styles.contactLabel}>{sep(D.contactLabel)}</Text>
+                <Text style={styles.contactValue}>{D.contactName}</Text>
+              </View>
+            ) : null}
+            {D.contactPhone || D.officePhone ? (
+              <View style={styles.contactRow}>
+                <Text style={styles.contactValue}>{D.contactPhone}</Text>
+                {D.officePhone ? <Text style={styles.contactLabel}>{`  ${sep(D.officePhoneLabel)}`}</Text> : null}
+                {D.officePhone ? <Text style={styles.contactValue}> {D.officePhone}</Text> : null}
+              </View>
+            ) : null}
           </View>
 
           <View style={styles.imageBox}>
@@ -434,24 +468,26 @@ const ClosingPage = ({ data, images = DEFAULT_IMAGES }) => {
 
         {/* ══ Since / Reg row ══ */}
         <View style={styles.sinceRegRow}>
-          <Text style={styles.sinceText}>SINCE : 2024</Text>
-          <Text style={styles.regText}>Reg. No: A/5231</Text>
+          <Text style={styles.sinceText}>{D.since ? `SINCE : ${D.since}` : ''}</Text>
+          <Text style={styles.regText}>{D.regNo ? `Reg. No: ${D.regNo}` : ''}</Text>
         </View>
 
         {/* ══ Badge — green when this receipt is fully paid ══ */}
         <View style={styles.badgeWrap}>
           <View style={[styles.badge, isPaid && styles.badgePaid]}>
             <Text style={[styles.badgeText, isPaid && styles.badgeTextPaid]}>
-              सहयोग राशि रसीद
+              {D.title}
             </Text>
           </View>
-          {isPaid && (
+          {isPaid && D.paidStamp ? (
             <View style={styles.paidStamp}>
-              <Text style={styles.paidStampText}>भुगतान प्राप्त — PAID</Text>
+              <Text style={styles.paidStampText}>{D.paidStamp}</Text>
             </View>
-          )}
+          ) : null}
         </View>
 
+        <View style={qr ? styles.infoWithQr : undefined}>
+        <View style={qr ? styles.infoCol : undefined}>
         {/* ══ Serial No + Date ══ */}
         <View style={styles.infoRow}>
           <View style={styles.infoLeft}>
@@ -471,6 +507,36 @@ const ClosingPage = ({ data, images = DEFAULT_IMAGES }) => {
           </View>
         </View>
 
+        {/* ══ Member: reg. no · join date · old application no. ══ */}
+        {(show.regNo && data.regNo) || joinOn || (show.oldNo && data.oldNo) ? (
+          <View style={styles.infoRow}>
+            <View style={styles.infoLeft}>
+              {show.regNo && data.regNo ? (
+                <Text>
+                  <Text style={styles.infoLabel}>{sep(D.regNoLabel)}</Text>
+                  <Text style={[styles.infoValue, { fontWeight: 'bold' }]}>{data.regNo}</Text>
+                </Text>
+              ) : null}
+            </View>
+            {joinOn ? (
+              <View style={{ flex: 1, alignItems: show.oldNo && data.oldNo ? 'center' : 'flex-end' }}>
+                <Text>
+                  <Text style={styles.infoLabel}>{sep(D.joinDateLabel)}</Text>
+                  <Text style={[styles.infoValue, { fontWeight: 'bold' }]}>{fmtDate(data.joinDate)}</Text>
+                </Text>
+              </View>
+            ) : null}
+            {show.oldNo && data.oldNo ? (
+              <View style={[styles.infoRight, { width: 190 }]}>
+                <Text>
+                  <Text style={styles.infoLabel}>{sep(D.oldNoLabel)}</Text>
+                  <Text style={[styles.infoValue, { fontWeight: 'bold' }]}>{data.oldNo}</Text>
+                </Text>
+              </View>
+            ) : null}
+          </View>
+        ) : null}
+
         {/* ══ Name + Phone ══ */}
         <View style={styles.infoRow}>
           <View style={styles.infoLeft}>
@@ -479,78 +545,108 @@ const ClosingPage = ({ data, images = DEFAULT_IMAGES }) => {
               <Text style={styles.infoValue}>{data.name || ''}</Text>
             </Text>
           </View>
-          <View style={styles.infoRight}>
-            <Text>
-              <Text style={styles.infoLabel}>फोन नं. : </Text>
-              <Text style={styles.infoValue}>{data.phone || ''}</Text>
-            </Text>
-          </View>
+          {show.phone ? (
+            <View style={styles.infoRight}>
+              <Text>
+                <Text style={styles.infoLabel}>फोन नं. : </Text>
+                <Text style={styles.infoValue}>{data.phone || ''}</Text>
+              </Text>
+            </View>
+          ) : null}
         </View>
 
         {/* ══ Address ══ */}
-        <View style={styles.infoRow}>
-          <Text>
-            <Text style={styles.infoLabel}>पता : </Text>
-            <Text style={styles.infoValue}>{data.address || ''}</Text>
-          </Text>
-        </View>
+        {show.address ? (
+          <View style={styles.infoRow}>
+            <View style={styles.infoLeft}>
+              {show.address ? (
+                <Text>
+                  <Text style={styles.infoLabel}>पता : </Text>
+                  <Text style={styles.infoValue}>{data.address || ''}</Text>
+                </Text>
+              ) : null}
+            </View>
+          </View>
+        ) : null}
 
         {/* ══ Yojana + Sahyog Rashi ══ */}
-        <View style={styles.infoRow}>
-          <View style={styles.infoLeft}>
-            <Text>
-              <Text style={styles.infoLabel}>योजना : </Text>
-              <Text style={styles.infoValue}>
-                {data.yojana || ''}{data.ageGroup ? ` Group : ${data.ageGroup}` : ''}
-              </Text>
-            </Text>
+        {show.yojana || show.ageGroup || show.sahyogRashi ? (
+          <View style={styles.infoRow}>
+            <View style={styles.infoLeft}>
+              {show.yojana || (show.ageGroup && data.ageGroup) ? (
+                <Text>
+                  <Text style={styles.infoLabel}>{show.yojana ? 'योजना : ' : 'Group : '}</Text>
+                  <Text style={styles.infoValue}>
+                    {show.yojana ? data.yojana || '' : ''}
+                    {show.ageGroup && data.ageGroup ? (show.yojana ? ` Group : ${data.ageGroup}` : data.ageGroup) : ''}
+                  </Text>
+                </Text>
+              ) : null}
+            </View>
+            {show.sahyogRashi ? (
+              <View style={styles.infoRight}>
+                <Text>
+                  <Text style={styles.infoLabel}>सहयोग राशि : </Text>
+                  <Text style={styles.infoValue}>{data.sahyogRashi ?? ''}</Text>
+                </Text>
+              </View>
+            ) : null}
           </View>
-          <View style={styles.infoRight}>
-            <Text>
-              <Text style={styles.infoLabel}>सहयोग राशि : </Text>
-              <Text style={styles.infoValue}>{data.sahyogRashi ?? ''}</Text>
-            </Text>
+        ) : null}
+        </View>
+        {qr ? (
+          <View style={styles.qrBox}>
+            <Image src={qr.img} style={styles.qrImg} />
+            <Text style={styles.qrLabel}>{qr.label || ''}</Text>
+            {qr.code ? <Text style={styles.qrCode}>{qr.code}</Text> : null}
           </View>
+        ) : null}
         </View>
 
-        {/* ══ Table ══ */}
+        {/* ══ Table ══ (columns can be switched off in Settings → Rasid; the last one has no right line) */}
         <View style={styles.table}>
           <View style={styles.tableHeaderRow}>
             <View style={styles.cellNo}><Text style={styles.headerCellText}>#</Text></View>
-            <View style={styles.cellCode}><Text style={styles.headerCellText}>कोड</Text></View>
-            <View style={styles.cellName}>
+            {show.colCode ? <View style={styles.cellCode}><Text style={styles.headerCellText}>कोड</Text></View> : null}
+            <View style={nameCell}>
               <Text style={[styles.headerCellText, { textAlign: 'center' }]}>नाम</Text>
             </View>
-            <View style={styles.cellDate}><Text style={styles.headerCellText}>दिनांक</Text></View>
-            <View style={styles.cellMobile}><Text style={styles.headerCellText}>मोबाइल न.</Text></View>
+            {show.colDate ? <View style={dateCell}><Text style={styles.headerCellText}>दिनांक</Text></View> : null}
+            {show.colMobile ? <View style={styles.cellMobile}><Text style={styles.headerCellText}>मोबाइल न.</Text></View> : null}
           </View>
 
           {filledEntries.map((entry, idx) => (
-            <View key={idx} style={styles.tableRow}>
+            <View key={idx} style={rowStyle}>
               <View style={styles.cellNo}>
                 <Text style={styles.cellTextCenter}>
                   {entry ? (data.startIndex || 0) + idx + 1 : ''}
                 </Text>
               </View>
-              <View style={styles.cellCode}>
-                <Text style={styles.cellTextCenter} maxLines={1} ellipsizeMode="tail">{entry ? clip(entry.code, 15) : ''}</Text>
-              </View>
-              <View style={styles.cellName}>
+              {show.colCode ? (
+                <View style={styles.cellCode}>
+                  <Text style={styles.cellTextCenter} maxLines={1} ellipsizeMode="tail">{entry ? clip(entry.code, 15) : ''}</Text>
+                </View>
+              ) : null}
+              <View style={nameCell}>
                 {/* Village appended to the name — no separate column */}
                 {/* One line, cut at the column's REAL width (maxLines + ellipsis),
                     not at a guessed character count — the old 46-char clip
                     put "…" on names that still had plenty of room. The 120
                     clip only guards against absurdly long values. */}
-                <Text style={[styles.cellTextLeft, { textOverflow: 'ellipsis' }]} maxLines={1}>
-                  {entry ? clip([entry.name, entry.village].filter(Boolean).join('  '), 120) : ''}
+                <Text style={[styles.cellTextLeft, { textOverflow: 'ellipsis' }]} maxLines={nameLines}>
+                  {entry ? clip([entry.name, show.colVillage ? entry.village : ''].filter(Boolean).join('  '), 120) : ''}
                 </Text>
               </View>
-              <View style={styles.cellDate}>
-                <Text style={styles.cellTextCenter} maxLines={1}>{entry ? fmtDate(entry.date) : ''}</Text>
-              </View>
-              <View style={styles.cellMobile}>
-                <Text style={styles.cellTextCenter} maxLines={1} ellipsizeMode="tail">{entry ? clip(entry.mobile, 13) : ''}</Text>
-              </View>
+              {show.colDate ? (
+                <View style={dateCell}>
+                  <Text style={styles.cellTextCenter} maxLines={1}>{entry ? fmtDate(entry.date) : ''}</Text>
+                </View>
+              ) : null}
+              {show.colMobile ? (
+                <View style={styles.cellMobile}>
+                  <Text style={styles.cellTextCenter} maxLines={1} ellipsizeMode="tail">{entry ? clip(entry.mobile, 13) : ''}</Text>
+                </View>
+              ) : null}
             </View>
           ))}
         </View>
@@ -565,16 +661,16 @@ const ClosingPage = ({ data, images = DEFAULT_IMAGES }) => {
               <Text style={styles.totalLabel}>इस पेज का योग रु.: </Text>
               <Text style={styles.totalAmount}>{pageAmount.toLocaleString('en-IN')}</Text>
               {data.pageCalc ? <Text style={styles.pageTotalCalc}>({data.pageCalc})</Text> : null}
-              <Text style={styles.totalWordsValue}>{numberToHindiWords(pageAmount)}</Text>
+              {show.amountWords ? <Text style={styles.totalWordsValue}>{numberToHindiWords(pageAmount)}</Text> : null}
             </View>
             {isLast ? (
               <View style={styles.grandTotalRow}>
                 <Text style={styles.totalLabel}>कुल राशि रु. (सभी {pageCount} पेज): </Text>
                 <Text style={styles.totalAmount}>{total.toLocaleString('en-IN')}</Text>
-                <Text style={styles.totalWordsLabel}>शब्दों में रूपये : </Text>
-                <Text style={styles.totalWordsValue}>
+                {show.amountWords ? <Text style={styles.totalWordsLabel}>शब्दों में रूपये : </Text> : null}
+                {show.amountWords ? <Text style={styles.totalWordsValue}>
                   {data.totalInWords || numberToHindiWords(total)}
-                </Text>
+                </Text> : null}
               </View>
             ) : (
               <Text style={[styles.pageTotalCalc, { paddingHorizontal: 2 }]}>
@@ -586,39 +682,39 @@ const ClosingPage = ({ data, images = DEFAULT_IMAGES }) => {
           <View style={styles.totalRow}>
             <Text style={styles.totalLabel}>कुल राशि रु.: </Text>
             <Text style={styles.totalAmount}>{total.toLocaleString('en-IN')}</Text>
-            <Text style={styles.totalWordsLabel}>शब्दों में रूपये : </Text>
-            <Text style={styles.totalWordsValue}>
+            {show.amountWords ? <Text style={styles.totalWordsLabel}>शब्दों में रूपये : </Text> : null}
+            {show.amountWords ? <Text style={styles.totalWordsValue}>
               {data.totalInWords || numberToHindiWords(total)}
-            </Text>
+            </Text> : null}
           </View>
         )}
 
         {/* ══ Worker + Signature ══ */}
         <View style={styles.workerRow}>
           <Text>
-            <Text style={styles.workerLabel}>कार्यकर्ता : </Text>
-            <Text style={styles.workerValue}>{data.worker || ''}</Text>
+            {show.worker ? <Text style={styles.workerLabel}>{sep(D.workerLabel)}</Text> : null}
+            {show.worker ? <Text style={styles.workerValue}>{data.worker || ''}</Text> : null}
           </Text>
-          <Text style={styles.signatureText}>संस्थापक हस्ताक्षर</Text>
+          <Text style={styles.signatureText}>{D.signLabel}</Text>
         </View>
 
         {/* ══ Note ══ */}
-        <Text style={styles.noteText}>Note : {data.note || ''}</Text>
+        {show.note ? <Text style={styles.noteText}>Note : {data.note || ''}</Text> : null}
 
       </View>
 
       {/* ══ Footer — anchored to the page, never breaks to a second page ══ */}
       <View style={styles.footer} fixed>
-        <Text style={{ width: 50, fontSize: 9, fontWeight: 'bold', color: BLUE }}>पेज {pageNo}/{pageCount}</Text>
+        <Text style={{ width: 50, fontSize: 9, fontWeight: 'bold', color: D.colorMain }}>पेज {pageNo}/{pageCount}</Text>
         <View style={styles.footerCenter}>
-          <Text style={styles.footerContact}>
-            संपर्क सूत्र : 9374934004, 9825289998, 9426517804, 9824017977
-          </Text>
-          <Text style={styles.footerSub}>
-            Exclusive jurisdiction Ahmedabad, Gujarat
-          </Text>
+          {D.footerContacts ? (
+            <Text style={styles.footerContact}>
+              {sep(D.contactLabel)}{D.footerContacts}
+            </Text>
+          ) : null}
+          {D.jurisdiction ? <Text style={styles.footerSub}>{D.jurisdiction}</Text> : null}
         </View>
-        <Text style={styles.footerEoe}>E. &amp; O.E.</Text>
+        <Text style={styles.footerEoe}>{D.eoe}</Text>
       </View>
     </Page>
   );
@@ -627,15 +723,22 @@ const ClosingPage = ({ data, images = DEFAULT_IMAGES }) => {
 // ─── Main component ──────────────────────────────────────────────────────────
 // Accepts the same shape as before. Lists longer than TOTAL_ROWS are split
 // across pages so the layout stays fixed instead of overflowing.
-const ClosingRasidPdf = ({ entries = [], images = DEFAULT_IMAGES }) => {
+// design: Settings → Rasid design (lib/rasid/ssgmsDesign.js); missing → the original rasid.
+const ClosingRasidPdf = ({ entries = [], images = DEFAULT_IMAGES, rowsPerPage = TOTAL_ROWS, design }) => {
   const pages = [];
+  const ROWS = rowsOf(rowsPerPage);
+  const D = design ? normalizeRasidDesign(design) : DEFAULT_RASID_DESIGN;
+  // an uploaded logo replaces the default one (the server sends it as a data URI)
+  const imgs = { logo: D.logo || images.logo, right: D.rightLogo || images.right };
 
   entries.forEach((receipt, rIdx) => {
     const list = receipt.entries || [];
-    const chunks = list.length > TOTAL_ROWS
-      ? Array.from({ length: Math.ceil(list.length / TOTAL_ROWS) },
-          (_, i) => list.slice(i * TOTAL_ROWS, (i + 1) * TOTAL_ROWS))
+    const chunks = list.length > ROWS
+      ? Array.from({ length: Math.ceil(list.length / ROWS) },
+          (_, i) => list.slice(i * ROWS, (i + 1) * ROWS))
       : [list];
+    // rasid runs give every line its own amount (a part-paid closing has a smaller baki)
+    const lineAmounts = list.length > 0 && list.every((e) => typeof e?.amount === 'number');
 
     // Page total = closings on the page × the member's instalment
     // (sahyogRashi). If no instalment was passed, share the receipt total out
@@ -643,7 +746,11 @@ const ClosingRasidPdf = ({ entries = [], images = DEFAULT_IMAGES }) => {
     const perRow = Number(receipt.sahyogRashi) || 0;
     const total  = Number(receipt.totalAmount || 0);
     chunks.forEach((chunk, cIdx) => {
-      const pageAmount = perRow > 0
+      const chunkSum = lineAmounts ? chunk.reduce((a, e) => a + e.amount, 0) : 0;
+      const sameEach = lineAmounts && chunk.every((e) => e.amount === chunk[0].amount);
+      const pageAmount = lineAmounts
+        ? Math.round(chunkSum)
+        : perRow > 0
         ? chunk.length * perRow
         : (list.length ? Math.round(total * chunk.length / list.length) : 0);
       pages.push(
@@ -652,13 +759,17 @@ const ClosingRasidPdf = ({ entries = [], images = DEFAULT_IMAGES }) => {
           data={{
             ...receipt,
             entries: chunk,
-            startIndex: cIdx * TOTAL_ROWS,
+            startIndex: cIdx * ROWS,
             pageNo: cIdx + 1,
             pageCount: chunks.length,
             pageAmount,
-            pageCalc: perRow > 0 ? `${chunk.length} × ${perRow.toLocaleString('en-IN')}` : '',
+            pageCalc: lineAmounts
+              ? (sameEach ? `${chunk.length} × ${Math.round(chunk[0].amount).toLocaleString('en-IN')}` : '')
+              : perRow > 0 ? `${chunk.length} × ${perRow.toLocaleString('en-IN')}` : '',
           }}
-          images={images}
+          images={imgs}
+          rows={ROWS}
+          design={D}
         />
       );
     });

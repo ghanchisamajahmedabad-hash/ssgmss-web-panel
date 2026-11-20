@@ -48,6 +48,8 @@ import { useRouter } from 'next/navigation';
 // Import constants and helpers
 import { processAgentStats } from '@/utils/agentUtils';
 import { downloadAgentPaymentsPdf } from '../components/AgentPaymentsPdf';
+import { downloadAgentMemberReportPdf } from '../components/AgentMemberReportPdf';
+import { fetchMembersByAgent } from '@/app/members/components/firebase-helpers';
 import dayjs from 'dayjs';
 import SummaryCards from '../join-fees/components/SummaryCards';
 import ClosingPaymentHistoryDrawerAgent from './components/PaymentHistoryDrawerAgent';
@@ -224,6 +226,39 @@ const ClosingPayment = () => {
       antMessage.error(`Sync failed: ${err.message}`);
     } finally {
       setSyncing(false);
+    }
+  };
+
+  // ── Agent-wise member report (PDF) ─────────────────────────────────────
+  // One agent (row button) or every agent on screen (header button): each agent
+  // with its members — closed / paid / pending members, paid & pending amounts.
+  const [reportAgentId, setReportAgentId] = useState(null);
+  const handleAgentReport = async (agentsToPrint) => {
+    const list = (agentsToPrint || []).filter(Boolean);
+    if (!list.length) { antMessage.warning('Koi agent nahi'); return; }
+    setReportAgentId(list.length === 1 ? (list[0].uid || list[0].id) : 'all');
+    try {
+      const inYojna = (m) => programFilter === 'all'
+        || m.programId === programFilter || (m.programIds || []).includes(programFilter);
+      const blocks = [];
+      for (const a of list) {
+        const members = await fetchMembersByAgent(a.uid || a.id);
+        blocks.push({ agent: a, members: members.filter(inYojna) });
+      }
+      const programLabel = programFilterOptions.find(o => o.value === programFilter)?.label;
+      const one = list.length === 1 ? list[0] : null;
+      await downloadAgentMemberReportPdf({
+        fileName: one
+          ? `agent_report_${String(one.agentCode || one.name || 'agent').replace(/[^a-zA-Z0-9_-]/g, '_')}_${dayjs().format('YYYY-MM-DD')}.pdf`
+          : `agent_reports_${list.length}_${dayjs().format('YYYY-MM-DD')}.pdf`,
+        filterText: programFilter !== 'all' && programLabel ? `Yojna: ${programLabel}` : '',
+        agents: blocks,
+      });
+    } catch (err) {
+      console.error('Agent report PDF failed:', err);
+      antMessage.error(`PDF nahi bana: ${err.message || err}`);
+    } finally {
+      setReportAgentId(null);
     }
   };
 
@@ -508,7 +543,7 @@ const ClosingPayment = () => {
     {
       title: 'Actions',
       key: 'actions',
-      width: 200,
+      width: 230,
       fixed: 'right',
       align: 'center',
       render: (_, record) => (
@@ -519,6 +554,16 @@ const ClosingPayment = () => {
               icon={<HistoryOutlined />}
               onClick={() => showPaymentHistory(record)}
               style={{ borderColor: colors.info, color: colors.info, borderRadius: 6 }}
+            />
+          </Tooltip>
+          <Tooltip title="Agent report PDF — sadasya, jama / baki">
+            <Button
+              size="small"
+              icon={<FilePdfOutlined />}
+              loading={reportAgentId === (record.uid || record.id)}
+              disabled={!!reportAgentId && reportAgentId !== (record.uid || record.id)}
+              onClick={() => handleAgentReport([record])}
+              style={{ borderColor: colors.historyBtnBg, color: colors.historyBtnBg, borderRadius: 6 }}
             />
           </Tooltip>
           <Tooltip title="View Details">
@@ -609,6 +654,17 @@ const ClosingPayment = () => {
           >
             Export PDF
           </Button>
+          <Tooltip title={`Screen ke ${filteredAgents.length} agent — har agent ke sadasya, jama / baki (har agent naye page se)`}>
+            <Button
+              icon={<FilePdfOutlined />}
+              loading={reportAgentId === 'all'}
+              disabled={filteredAgents.length === 0 || !!reportAgentId}
+              onClick={() => handleAgentReport(filteredAgents)}
+              style={{ borderColor: colors.primary, color: colors.primary, borderRadius: 8, fontWeight: 600, fontSize: 12, height: 36 }}
+            >
+              Agent-wise Report
+            </Button>
+          </Tooltip>
           <Button
             icon={<HistoryOutlined />}
             onClick={() => router.push('/payments/history')}

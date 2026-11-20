@@ -1,5 +1,6 @@
 // lib/firebase-helpers.js
 
+import { normalizeSearchTerm } from "@/utils/searchIndex";
 import {
   collection,
   query,
@@ -159,7 +160,7 @@ export const buildMembersConstraints = (filters = {}) => {
 
   // ── Search ────────────────────────────────────────────────────────────────
   if (search && search.trim()) {
-    const normalized = search.trim().toLowerCase().replace(/[^a-z0-9]/g, "");
+    const normalized = normalizeSearchTerm(search);
     conditions.push(where("search_keywords", "array-contains", normalized));
   }
 
@@ -283,7 +284,7 @@ export const getTotalMembersCount = async (filters = {}) => {
   if (toDate)   conditions.push(where("joinDateTs", "<=", Timestamp.fromDate(new Date(toDate))));
 
   if (search && search.trim()) {
-    const normalized = search.trim().toLowerCase().replace(/[^a-z0-9]/g, "");
+    const normalized = normalizeSearchTerm(search);
     conditions.push(where("search_keywords", "array-contains", normalized));
   }
 
@@ -343,7 +344,8 @@ export const fetchAllMembersForSearch = async (searchTerm, agentId = null) => {
     if (agentId && agentId !== "all")
       conditions.push(where("agentId", "==", agentId));
 
-    const normalized = searchTerm.trim().toLowerCase().replace(/[^a-z0-9]/g, "");
+    // first word on the server; the other words are checked below
+    const normalized = normalizeSearchTerm(searchTerm).split(" ")[0];
     conditions.push(where("search_keywords", "array-contains", normalized));
 
     const q             = query(membersRef, ...conditions, orderBy("createdAt", "desc"), limit(100));

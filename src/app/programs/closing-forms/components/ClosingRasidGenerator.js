@@ -5,6 +5,7 @@ import { FileTextOutlined, TeamOutlined, UserOutlined } from '@ant-design/icons'
 import { collection, query, where, documentId, getDocs } from 'firebase/firestore'
 import { db } from '../../../../../lib/firbase-client'
 import dayjs from 'dayjs'
+import { memberJoinDate } from '@/lib/rasid/ssgmsDesign'
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 const chunkArr = (arr, n) =>
@@ -199,6 +200,8 @@ const ClosingRasidGenerator = ({ open, onClose, group, programList }) => {
   }, [open, fetchGroupMembers, fetchPerMemberAmounts])
 
   // ── Resolve each member's closed_date from their closedStatus for THIS group
+  // date-wise: the earliest closing first (then by reg. no.)
+  const dmyKey = (s) => { const x = /^(\d{2})-(\d{2})-(\d{4})$/.exec(s || ''); return x ? `${x[3]}${x[2]}${x[1]}` : '99999999' }
   const memberRows = members.map(m => {
     const entry = (m.closedStatus || []).find(
       cs => cs.closingGroupId === group?.id && cs.programId === group?.programId
@@ -213,8 +216,10 @@ const ClosingRasidGenerator = ({ open, onClose, group, programList }) => {
       // looking plausible.
       ownAmount:  Number(tally?.amount || 0),
       payerCount: Number(tally?.payers || 0),
+      joinDate:   memberJoinDate(m),
     }
-  })
+  }).sort((a, b) => dmyKey(a.closedDate).localeCompare(dmyKey(b.closedDate))
+    || String(a.registrationNumber || '').localeCompare(String(b.registrationNumber || '')))
 
   const memberCount = group?.memberCount || group?.closedMemberIds?.length || memberRows.length || 1
   const totalAmount = Number(group?.totalAmount || 0)
@@ -232,7 +237,7 @@ const ClosingRasidGenerator = ({ open, onClose, group, programList }) => {
     const rows = (memberRows.length ? memberRows : []).filter(Boolean).map((m, i) => `
       <tr>
         <td class="c">${i + 1}</td>
-        <td class="c">${m.registrationNumber || '—'}</td>
+        <td class="c">${m.registrationNumber || '—'}${m.joinDate ? `<div style="font-size:8px;color:#888">जुड़े: ${m.joinDate}</div>` : ''}</td>
         <td class="l">[${m.displayName || ''}${m.fatherName ? ' / ' + m.fatherName : ''}]</td>
         <td class="c">${m.caste || m.casteName || '—'}</td>
         <td class="l">${m.village || '—'}</td>
@@ -314,6 +319,9 @@ const ClosingRasidGenerator = ({ open, onClose, group, programList }) => {
           <div class="info-row">
             <div class="info-item"><span class="lbl">पिता का नाम</span><span class="sep"> : </span><span class="val">${m.fatherName || '—'}</span></div>
             <div class="info-item right"><span class="lbl">रजि. नं.</span><span class="sep"> : </span><span class="val">${m.registrationNumber || '—'}</span></div>
+          </div>
+          <div class="info-row">
+            <div class="info-item"><span class="lbl">सदस्यता तिथि</span><span class="sep"> : </span><span class="val">${m.joinDate || '—'}</span></div>
           </div>
           <div class="info-row">
             <div class="info-item"><span class="lbl">जाति</span><span class="sep"> : </span><span class="val">${m.caste || m.casteName || '—'}</span></div>

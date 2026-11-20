@@ -1,7 +1,10 @@
 "use client"
 import React, { useState } from 'react'
 import { paidClosingsInDoc } from '@/utils/closingCounts'
-import { Card, Tag, Button, Space, Spin, Table, Text, Progress, Empty, Alert, message } from 'antd'
+import { Card, Tag, Button, Space, Spin, Table, Text, Progress, Empty, Alert, message, Modal } from 'antd'
+import KistHistoryTable from '@/components/KistHistory/KistHistoryTable'
+import { useSelector } from 'react-redux'
+import { downloadMemberClosingStatement } from './MemberClosingStatementPdf'
 import {
   MoneyCollectOutlined, FilePdfOutlined, HistoryOutlined,
   CalendarOutlined, ClockCircleOutlined, CheckCircleOutlined
@@ -78,6 +81,23 @@ const ClosingEntriesList = ({
   )
 
   const [rechecking, setRechecking] = useState(false)
+  // removed kists of this member: whose closing, from which group, why (Settings → Kist History)
+  const [kistOpen, setKistOpen] = useState(false)
+  // join date → today: every closing, eligible or not, charged / paid / pending (PDF)
+  const programList = useSelector((s) => s.data?.programList || [])
+  const [hisaabBusy, setHisaabBusy] = useState(false)
+  const downloadHisaab = async () => {
+    setHisaabBusy(true)
+    try {
+      const n = await downloadMemberClosingStatement(member, programList)
+      message.success(`Closing hisaab PDF bana — ${n} closing`)
+    } catch (e) {
+      console.error('Closing hisaab PDF failed:', e)
+      message.error('PDF nahi bana: ' + (e.message || e))
+    } finally {
+      setHisaabBusy(false)
+    }
+  }
 
   const recheck = async () => {
     setRechecking(true)
@@ -261,6 +281,16 @@ const ClosingEntriesList = ({
             </RasidDownloadButton>
           </Space>
         )}
+        <Button size="small" icon={<FilePdfOutlined />} loading={hisaabBusy} onClick={downloadHisaab}
+          title="Join date se aaj tak ki har closing — kist banti hai ya nahi, lagi ya nahi, jama / baki"
+          style={{ borderRadius: 6, borderColor: '#1B385A', color: '#1B385A', fontWeight: 500 }}>
+          Closing Hisaab PDF
+        </Button>
+        <Button size="small" onClick={() => setKistOpen(true)} style={{ borderRadius: 6 }}>Kist History</Button>
+        <Modal open={kistOpen} onCancel={() => setKistOpen(false)} footer={null} width={900} destroyOnClose
+          title={`Kist History — ${member?.displayName || ''} (${member?.registrationNumber || '—'})`}>
+          <KistHistoryTable filter={{ memberId: member?.id }} compact pageSize={10} />
+        </Modal>
       </div>
 
       {/* Closing entries */}

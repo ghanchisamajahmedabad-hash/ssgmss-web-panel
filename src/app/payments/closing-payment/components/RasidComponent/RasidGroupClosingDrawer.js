@@ -17,6 +17,7 @@ import { fetchMembersByAgent } from '@/app/members/components/firebase-helpers';
 // Old system's application number. The field name varies across the migrated
 // data, so use the shared resolver instead of guessing one key here.
 import { getOldRegNo } from '@/app/members/components/MemberPdf/MemberListPdf';
+import { memberJoinDate } from '@/lib/rasid/ssgmsDesign';
 import dayjs from 'dayjs';
 
 const { Text, Title } = Typography;
@@ -262,6 +263,11 @@ function openPrintWindow(rasidList) {
           <span class="val">${d.regNo || '—'}</span>
           ${d.oldRegNo ? `&nbsp;&nbsp;<span class="lbl">पुराना नं.</span><span class="sep"> : </span><span class="val">${d.oldRegNo}</span>` : ''}
         </div>
+        ${d.joinDate ? `<div class="info-item right">
+          <span class="lbl">सदस्यता तिथि</span>
+          <span class="sep"> : </span>
+          <span class="val">${d.joinDate}</span>
+        </div>` : ''}
       </div>
 
       <div class="info-row">
@@ -904,7 +910,7 @@ const RasidGroupClosingDrawer = ({ open, setOpen, agentId, preselectedGroupId, a
             (getOldRegNo(am) || r.oldRegNo)
               ? `<div class="oldreg">पुराना: ${getOldRegNo(am) || r.oldRegNo}</div>`
               : ''
-          }</td>
+          }${(memberJoinDate(am) || r.joinDate) ? `<div class="oldreg">जुड़े: ${memberJoinDate(am) || r.joinDate}</div>` : ''}</td>
           <td class="l">${am.village || r.village || '—'}</td>
           <td class="c">${r.phone || '—'}</td>
           <td class="c">${r.entries?.length || 0}</td>
@@ -1197,6 +1203,9 @@ const RasidGroupClosingDrawer = ({ open, setOpen, agentId, preselectedGroupId, a
           memberId:     am.id,
           registrationNumber: am.registrationNumber || '',
           oldRegNo:     getOldRegNo(am) || '',
+          // each paying member's OWN join date — receipts made together for many
+          // members (any age group) each carry their own
+          joinDate:     memberJoinDate(am),
           displayName:  am.displayName || '',
           fatherName:   am.fatherName || '',
           memberPending: Number(am.closing_pendingAmount || 0),
